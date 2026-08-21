@@ -65,6 +65,7 @@ export function useLineaOreClientRuntime({
     formattedLineaBalance: gameData.formattedLineaBalance,
     embeddedTokenBalance: gameData.tokenBalance,
     embeddedTokenPending: gameData.tokenBalancePending,
+    embeddedTokenStatus: gameData.tokenBalanceStatus,
     refetchEmbeddedTokenBalance: gameData.refetchTokenBalance,
     isPageVisible: shell.isPageVisible,
     embeddedWalletAddress: wallet.embeddedWalletAddress,

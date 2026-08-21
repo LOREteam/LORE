@@ -5,6 +5,7 @@ import { useBalance } from "wagmi";
 import { getAddress } from "viem";
 import { formatBalanceFixed, formatDecimalTextFixed, type WagmiBalanceLike } from "../lib/balanceFormatting";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
+import { toWalletBalanceDataStatus, type WalletBalanceDataStatus } from "../lib/walletBalanceDataStatus";
 
 type CachedPrivyBalances = {
   token: string | null;
@@ -59,6 +60,7 @@ interface UsePageWalletOverviewOptions {
   formattedLineaBalance?: string | null;
   embeddedTokenBalance: WagmiBalanceLike;
   embeddedTokenPending: boolean;
+  embeddedTokenStatus: WalletBalanceDataStatus;
   refetchEmbeddedTokenBalance: () => Promise<unknown> | unknown;
   isPageVisible: boolean;
 }
@@ -69,6 +71,7 @@ export function usePageWalletOverview({
   formattedLineaBalance,
   embeddedTokenBalance,
   embeddedTokenPending,
+  embeddedTokenStatus,
   refetchEmbeddedTokenBalance,
   isPageVisible,
 }: UsePageWalletOverviewOptions) {
@@ -107,12 +110,21 @@ export function usePageWalletOverview({
     }
   }, [balanceCacheKey]);
 
-  const { data: embeddedEthBalanceRaw, isPending: embeddedEthPending, refetch: refetchEmbeddedEthBalance } = useBalance({
+  const {
+    data: embeddedEthBalanceRaw,
+    dataUpdatedAt: embeddedEthUpdatedAt,
+    isError: embeddedEthError,
+    isFetching: embeddedEthFetching,
+    isPending: embeddedEthPending,
+    isStale: embeddedEthStale,
+    refetch: refetchEmbeddedEthBalance,
+  } = useBalance({
     address: normalizedEmbeddedAddress,
     chainId: APP_CHAIN_ID,
     query: {
       enabled: Boolean(normalizedEmbeddedAddress),
       refetchInterval: isPageVisible ? 12_000 : 45_000,
+      staleTime: isPageVisible ? 30_000 : 90_000,
     },
   });
   const embeddedEthBalance = embeddedEthBalanceRaw as WagmiBalanceLike;
@@ -153,6 +165,16 @@ export function usePageWalletOverview({
     [cachedBalances.eth, embeddedEthBalance],
   );
 
+  const headerEthBalanceStatus = useMemo(
+    () => toWalletBalanceDataStatus({
+      dataUpdatedAt: embeddedEthUpdatedAt,
+      isError: embeddedEthError,
+      isFetching: embeddedEthFetching,
+      isStale: embeddedEthStale,
+    }),
+    [embeddedEthError, embeddedEthFetching, embeddedEthStale, embeddedEthUpdatedAt],
+  );
+
   const normalizedActiveAddress = normalizePageWalletAddress(address);
   const normalizedEmbeddedWalletAddress = normalizePageWalletAddress(normalizedEmbeddedAddress);
   const isEmbeddedActive = Boolean(
@@ -165,6 +187,7 @@ export function usePageWalletOverview({
     (isEmbeddedActive && formattedLineaBalance != null ? formattedLineaBalance : formattedPrivyBalance) ?? "—";
 
   const headerLineaLoading = isHeaderLineaBalanceLoading(embeddedTokenPending);
+  const headerLineaBalanceStatus = embeddedTokenStatus;
 
   return useMemo(
     () => ({
@@ -179,6 +202,8 @@ export function usePageWalletOverview({
       isEmbeddedActive,
       headerLineaBalance,
       headerLineaLoading,
+      headerEthBalanceStatus,
+      headerLineaBalanceStatus,
       headerEthLoading: embeddedEthPending,
     }),
     [
@@ -193,6 +218,8 @@ export function usePageWalletOverview({
       isEmbeddedActive,
       headerLineaBalance,
       headerLineaLoading,
+      headerEthBalanceStatus,
+      headerLineaBalanceStatus,
     ],
   );
 }

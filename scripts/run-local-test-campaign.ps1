@@ -43,9 +43,10 @@ function Get-CampaignSourceSha {
 
 function Get-CampaignSourceIntegrityFailure(
   [string]$ExpectedSourceSha,
-  [AllowEmptyString()][string]$ExpectedTrackedMetadata
+  [AllowEmptyString()][string]$ExpectedTrackedMetadata,
+  [string]$SourceRoot = $repoRoot
 ) {
-  $headLines = @(& git -C $repoRoot rev-parse --verify 'HEAD^{commit}' 2>$null)
+  $headLines = @(& git -C $SourceRoot rev-parse --verify 'HEAD^{commit}' 2>$null)
   $headExitCode = $LASTEXITCODE
   if ($headExitCode -ne 0 -or $headLines.Count -ne 1) {
     return 'source-drift'
@@ -55,13 +56,13 @@ function Get-CampaignSourceIntegrityFailure(
     return 'source-drift'
   }
 
-  $trackedChanges = @(& git -C $repoRoot status --porcelain=v1 --untracked-files=no 2>$null)
+  $trackedChanges = @(& git -C $SourceRoot status --porcelain=v1 --untracked-files=no 2>$null)
   $statusExitCode = $LASTEXITCODE
   if ($statusExitCode -ne 0 -or $trackedChanges.Count -ne 0) {
     return 'tracked-tree-dirty'
   }
   if ($PSBoundParameters.ContainsKey('ExpectedTrackedMetadata')) {
-    $actualTrackedMetadata = Get-CampaignTrackedMetadata
+    $actualTrackedMetadata = Get-CampaignTrackedMetadata $SourceRoot
     if ($null -eq $actualTrackedMetadata -or -not [string]::Equals($actualTrackedMetadata, $ExpectedTrackedMetadata, [StringComparison]::Ordinal)) {
       return 'tracked-tree-dirty'
     }
@@ -69,8 +70,8 @@ function Get-CampaignSourceIntegrityFailure(
   return $null
 }
 
-function Get-CampaignTrackedMetadata {
-  $trackedPaths = @(& git -C $repoRoot ls-files --full-name 2>$null)
+function Get-CampaignTrackedMetadata([string]$SourceRoot = $repoRoot) {
+  $trackedPaths = @(& git -C $SourceRoot ls-files --full-name 2>$null)
   $trackedPathsExitCode = $LASTEXITCODE
   if ($trackedPathsExitCode -ne 0) {
     return $null
@@ -78,7 +79,7 @@ function Get-CampaignTrackedMetadata {
   $metadata = [Collections.Generic.List[string]]::new()
   foreach ($relativePath in $trackedPaths) {
     try {
-      $item = Get-Item -LiteralPath (Join-Path $repoRoot $relativePath) -Force -ErrorAction Stop
+      $item = Get-Item -LiteralPath (Join-Path $SourceRoot $relativePath) -Force -ErrorAction Stop
       if ($item.PSIsContainer) {
         return $null
       }
@@ -91,6 +92,64 @@ function Get-CampaignTrackedMetadata {
 }
 
 $sourceSha = Get-CampaignSourceSha
+$snapshotParent = Join-Path ([IO.Path]::GetTempPath()) 'lore-local-test-campaign-source-snapshots'
+$snapshotDirectory = Join-Path $snapshotParent ("{0}-{1}" -f $CampaignId, $sourceSha)
+$snapshotNodeModules = Join-Path $snapshotDirectory 'node_modules'
+$snapshotCreated = $false
+$snapshotNodeModulesLinked = $false
+
+function Assert-CampaignSnapshotPath {
+  $snapshotParentFull = [IO.Path]::GetFullPath($snapshotParent)
+  $snapshotFull = [IO.Path]::GetFullPath($snapshotDirectory)
+  if (-not $snapshotFull.StartsWith($snapshotParentFull + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Local test campaign snapshot path is outside its temporary root.'
+  }
+}
+
+function New-CampaignSourceSnapshot {
+  Assert-CampaignSnapshotPath
+  if (Test-Path -LiteralPath $snapshotDirectory) {
+    throw 'Local test campaign requires a new isolated source snapshot.'
+  }
+  New-Item -ItemType Directory -Force -Path $snapshotParent -ErrorAction Stop | Out-Null
+  & git -C $repoRoot worktree add --detach $snapshotDirectory $sourceSha 2>$null
+  if ($LASTEXITCODE -ne 0) {
+    throw 'Local test campaign could not create an isolated source snapshot.'
+  }
+  $script:snapshotCreated = $true
+  $snapshotIntegrityFailure = Get-CampaignSourceIntegrityFailure -ExpectedSourceSha $sourceSha -SourceRoot $snapshotDirectory
+  if ($null -ne $snapshotIntegrityFailure) {
+    throw 'Local test campaign isolated source snapshot did not match the requested commit.'
+  }
+  $sourceNodeModules = Join-Path $repoRoot 'node_modules'
+  if (-not (Test-Path -LiteralPath $sourceNodeModules -PathType Container)) {
+    throw 'Local test campaign requires installed dependencies for the isolated source snapshot.'
+  }
+  if (-not (Test-Path -LiteralPath $snapshotNodeModules -PathType Container)) {
+    New-Item -ItemType Junction -Path $snapshotNodeModules -Target $sourceNodeModules -ErrorAction Stop | Out-Null
+    $script:snapshotNodeModulesLinked = $true
+  }
+}
+
+function Remove-CampaignSourceSnapshot {
+  if (-not $snapshotCreated) { return }
+  Assert-CampaignSnapshotPath
+  if ($snapshotNodeModulesLinked -and (Test-Path -LiteralPath $snapshotNodeModules)) {
+    $nodeModulesItem = Get-Item -LiteralPath $snapshotNodeModules -Force -ErrorAction Stop
+    $expectedTarget = [IO.Path]::GetFullPath((Join-Path $repoRoot 'node_modules')).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $actualTargets = @($nodeModulesItem.Target | ForEach-Object { [IO.Path]::GetFullPath([string]$_).TrimEnd([IO.Path]::DirectorySeparatorChar) })
+    if (-not $nodeModulesItem.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -or $actualTargets.Count -ne 1 -or -not [string]::Equals($actualTargets[0], $expectedTarget, [StringComparison]::OrdinalIgnoreCase)) {
+      throw 'Local test campaign isolated source snapshot dependency link is unsafe to remove.'
+    }
+    Remove-Item -LiteralPath $snapshotNodeModules -Force -ErrorAction Stop
+  }
+  & git -C $repoRoot worktree remove --force $snapshotDirectory 2>$null
+  if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $snapshotDirectory)) {
+    throw 'Local test campaign could not clean up its isolated source snapshot.'
+  }
+  $script:snapshotCreated = $false
+  $script:snapshotNodeModulesLinked = $false
+}
 
 if (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) {
   throw "Private Node runtime is unavailable: $runtime"
@@ -100,6 +159,12 @@ try {
   New-Item -ItemType Directory -Path $campaignDirectory -ErrorAction Stop | Out-Null
 } catch {
   throw 'Local test campaign requires a new campaign directory.'
+}
+try {
+  New-CampaignSourceSnapshot
+} catch {
+  try { Remove-CampaignSourceSnapshot } catch {}
+  throw $_
 }
 
 function Write-CampaignEvent([hashtable]$Event) {
@@ -164,7 +229,9 @@ $commands = @(
 
 $deadline = [DateTime]::UtcNow.AddHours($Hours)
 $iteration = 0
-Write-CampaignEvent @{ status = 'started'; campaignId = $CampaignId; hours = $Hours; intervalMinutes = $IntervalMinutes; deadlineUtc = $deadline.ToString('o') }
+$campaignSucceeded = $false
+try {
+Write-CampaignEvent @{ status = 'started'; campaignId = $CampaignId; hours = $Hours; intervalMinutes = $IntervalMinutes; deadlineUtc = $deadline.ToString('o'); executionSource = 'detached-worktree' }
 
 while ([DateTime]::UtcNow -lt $deadline -and ($MaxIterations -eq 0 -or $iteration -lt $MaxIterations)) {
   $iteration += 1
@@ -177,6 +244,10 @@ while ([DateTime]::UtcNow -lt $deadline -and ($MaxIterations -eq 0 -or $iteratio
     if ($null -eq $trackedMetadataBefore) {
       Stop-CampaignForSourceIntegrityFailure -Iteration $iteration -Phase 'before-command' -Failure 'tracked-tree-dirty' -CommandName $command.name
     }
+    $snapshotMetadataBefore = Get-CampaignTrackedMetadata $snapshotDirectory
+    if ($null -eq $snapshotMetadataBefore) {
+      Stop-CampaignForSourceIntegrityFailure -Iteration $iteration -Phase 'before-command' -Failure 'source-snapshot-dirty' -CommandName $command.name
+    }
     $logPath = Join-Path $campaignDirectory ("local-{0:d3}-{1}.log" -f $iteration, $command.name)
     $started = [DateTime]::UtcNow
     $processEnvironment = [Environment]::GetEnvironmentVariables([EnvironmentVariableTarget]::Process)
@@ -187,7 +258,12 @@ while ([DateTime]::UtcNow -lt $deadline -and ($MaxIterations -eq 0 -or $iteratio
     $global:LASTEXITCODE = 1
     try {
       [Environment]::SetEnvironmentVariable('TSX_DISABLE_CACHE', '1', [EnvironmentVariableTarget]::Process)
-      & $runtime @($command.arguments) *> $logPath
+      Push-Location -LiteralPath $snapshotDirectory
+      try {
+        & $runtime @($command.arguments) *> $logPath
+      } finally {
+        Pop-Location
+      }
       if ($null -ne $LASTEXITCODE) { $exitCode = $LASTEXITCODE }
     } catch {
       $launchError = 'child-launch-failed'
@@ -206,6 +282,10 @@ while ([DateTime]::UtcNow -lt $deadline -and ($MaxIterations -eq 0 -or $iteratio
     $postChildIntegrityFailure = Get-CampaignSourceIntegrityFailure $sourceSha $trackedMetadataBefore
     if ($null -ne $postChildIntegrityFailure) {
       Stop-CampaignForSourceIntegrityFailure -Iteration $iteration -Phase 'after-command' -Failure $postChildIntegrityFailure -CommandName $command.name
+    }
+    $postChildSnapshotIntegrityFailure = Get-CampaignSourceIntegrityFailure $sourceSha $snapshotMetadataBefore $snapshotDirectory
+    if ($null -ne $postChildSnapshotIntegrityFailure) {
+      Stop-CampaignForSourceIntegrityFailure -Iteration $iteration -Phase 'after-command' -Failure 'source-snapshot-dirty' -CommandName $command.name
     }
     $elapsedMs = [int]([DateTime]::UtcNow - $started).TotalMilliseconds
     $event = @{
@@ -234,4 +314,14 @@ $completionIntegrityFailure = Get-CampaignSourceIntegrityFailure $sourceSha
 if ($null -ne $completionIntegrityFailure) {
   Stop-CampaignForSourceIntegrityFailure -Iteration $iteration -Phase 'before-completed' -Failure $completionIntegrityFailure -CommandName $null
 }
-Write-CampaignEvent @{ status = 'completed'; iterations = $iteration }
+$campaignSucceeded = $true
+} finally {
+  Remove-CampaignSourceSnapshot
+}
+$completionIntegrityFailure = Get-CampaignSourceIntegrityFailure $sourceSha
+if ($null -ne $completionIntegrityFailure) {
+  Stop-CampaignForSourceIntegrityFailure -Iteration $iteration -Phase 'before-completed' -Failure $completionIntegrityFailure -CommandName $null
+}
+if ($campaignSucceeded) {
+  Write-CampaignEvent @{ status = 'completed'; iterations = $iteration }
+}

@@ -104,8 +104,10 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Open local work
 
 - P1.10 behavior extraction remains partial.
-- Explicit Header `error`/`stale`/`last updated` state needs a separate small
-  data-provenance packet; do not guess offline from arbitrary RPC errors.
+- Header balance provenance now carries wagmi fetching/error/stale/updated-at metadata:
+  a known balance remains visible on refresh, stale data, or RPC error, and the card
+  exposes an explicit state plus any trusted last-updated timestamp. It does not infer
+  offline status from an arbitrary RPC error.
 - Final immutable-SHA detached install/build/prelaunch cycle is open; recent
   code commits invalidate older final-SHA/sealed claims.
 - P1.17 needs a final canonical/profile sealed pair and a real physical

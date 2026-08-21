@@ -81,9 +81,9 @@ interface CreateLineaOreClientViewPropsOptions {
   handleWithdrawEthToExternal: WalletSettingsProps["onWithdrawEthToExternal"];
   handleWithdrawToExternal: WalletSettingsProps["onWithdrawToExternal"];
   hasMyWinningBet: PageTabContentProps["hubProps"]["hasMyWinningBet"];
-  headerEthLoading: HeaderProps["privyEthBalanceLoading"];
+  headerEthBalanceStatus: HeaderProps["privyEthBalanceStatus"];
   headerLineaBalance: HeaderProps["privyTokenBalance"];
-  headerLineaLoading: HeaderProps["privyTokenBalanceLoading"];
+  headerLineaBalanceStatus: HeaderProps["privyTokenBalanceStatus"];
   historyError: PageTabContentProps["analyticsProps"]["historyError"];
   historyLoading: PageTabContentProps["analyticsProps"]["historyLoading"];
   historyRefreshing: PageTabContentProps["analyticsProps"]["historyRefreshing"];
@@ -242,9 +242,9 @@ export function createLineaOreClientViewProps({
   handleWithdrawEthToExternal,
   handleWithdrawToExternal,
   hasMyWinningBet,
-  headerEthLoading,
+  headerEthBalanceStatus,
   headerLineaBalance,
-  headerLineaLoading,
+  headerLineaBalanceStatus,
   historyError,
   historyLoading,
   historyRefreshing,
@@ -388,9 +388,9 @@ export function createLineaOreClientViewProps({
       embeddedWalletAddress,
       embeddedWalletSyncing,
       formattedPrivyEthBalance,
-      headerEthLoading,
+      headerEthBalanceStatus,
       headerLineaBalance,
-      headerLineaLoading,
+      headerLineaBalanceStatus,
       openWalletSettings,
       soundMuted,
       toggleSoundMute,

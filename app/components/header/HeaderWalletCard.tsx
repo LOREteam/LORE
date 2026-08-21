@@ -6,6 +6,10 @@ import {
   PRIVY_LOGIN_ACCESSIBLE_NAME,
   type PrivyLoginUiState,
 } from "../../hooks/usePrivyLoginAccessibility";
+import {
+  UNKNOWN_WALLET_BALANCE_DATA_STATUS,
+  type WalletBalanceDataStatus,
+} from "../../lib/walletBalanceDataStatus";
 import { UiButton } from "../ui/UiButton";
 
 interface HeaderWalletCardProps {
@@ -19,9 +23,9 @@ interface HeaderWalletCardProps {
   onLogout: () => void;
   onOpenWalletSettings: () => void;
   privyEthBalance: string;
-  privyEthBalanceLoading: boolean;
+  privyEthBalanceStatus?: WalletBalanceDataStatus;
   privyTokenBalance: string;
-  privyTokenBalanceLoading: boolean;
+  privyTokenBalanceStatus?: WalletBalanceDataStatus;
 }
 
 function HeaderWalletActions({
@@ -52,16 +56,37 @@ function HeaderWalletActions({
     </div>
   );
 }
-type HeaderWalletBalanceState = "loading" | "refreshing" | "ready" | "unavailable";
+type HeaderWalletBalanceState = "error" | "loading" | "refreshing" | "ready" | "stale" | "unavailable";
 
-export function getHeaderWalletBalancePresentation(asset: "ETH" | "LINEA", value: string, loading: boolean): {
+export function formatHeaderWalletBalanceUpdatedAt(updatedAt: number | null): string | null {
+  if (!updatedAt || !Number.isSafeInteger(updatedAt) || updatedAt <= 0) return null;
+  const date = new Date(updatedAt);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${date.toISOString().slice(11, 16)} UTC`;
+}
+
+export function getHeaderWalletBalancePresentation(
+  asset: "ETH" | "LINEA",
+  value: string,
+  status: WalletBalanceDataStatus,
+): {
   state: HeaderWalletBalanceState;
   text: string;
   suffix: string;
   label: string;
 } {
   const hasKnownValue = Boolean(value.trim() && value !== "—");
-  if (loading && hasKnownValue) {
+  if (status.error) {
+    return {
+      state: "error",
+      text: hasKnownValue ? value : "Error",
+      suffix: asset,
+      label: hasKnownValue
+        ? `${asset} balance RPC error; showing last known ${value}`
+        : `${asset} balance unavailable after RPC error`,
+    };
+  }
+  if (status.fetching && hasKnownValue) {
     return {
       state: "refreshing",
       text: value,
@@ -69,15 +94,22 @@ export function getHeaderWalletBalancePresentation(asset: "ETH" | "LINEA", value
       label: `${asset} balance refreshing; showing last known ${value}`,
     };
   }
-  if (loading) {
+  if (status.fetching) {
     return { state: "loading", text: "", suffix: asset, label: `${asset} balance loading` };
+  }
+  if (status.stale && hasKnownValue) {
+    return {
+      state: "stale",
+      text: value,
+      suffix: asset,
+      label: `${asset} balance stale; showing last known ${value}`,
+    };
   }
   if (!value.trim() || value === "—") {
     return { state: "unavailable", text: "Unavailable", suffix: asset, label: `${asset} balance unavailable` };
   }
   return { state: "ready", text: value, suffix: asset, label: `${asset} balance ${value}` };
 }
-
 export function HeaderWalletCard({
   authenticated,
   loginState,
@@ -89,23 +121,29 @@ export function HeaderWalletCard({
   onLogout,
   onOpenWalletSettings,
   privyEthBalance,
-  privyEthBalanceLoading,
+  privyEthBalanceStatus = UNKNOWN_WALLET_BALANCE_DATA_STATUS,
   privyTokenBalance,
-  privyTokenBalanceLoading,
+  privyTokenBalanceStatus = UNKNOWN_WALLET_BALANCE_DATA_STATUS,
 }: HeaderWalletCardProps) {
   const explorerAddressUrl = getExplorerAddressUrl(embeddedWalletAddress);
-  const ethBalancePresentation = getHeaderWalletBalancePresentation("ETH", privyEthBalance, privyEthBalanceLoading);
-  const tokenBalancePresentation = getHeaderWalletBalancePresentation("LINEA", privyTokenBalance, privyTokenBalanceLoading);
-  const ethBalanceClass = ethBalancePresentation.state === "unavailable"
-    ? "font-semibold text-amber-200/80"
-    : ethBalancePresentation.state === "refreshing"
-      ? "text-amber-200/90"
-      : "text-gray-400";
-  const tokenBalanceClass = tokenBalancePresentation.state === "unavailable"
-    ? "text-amber-200/85"
-    : tokenBalancePresentation.state === "refreshing"
-      ? "text-amber-100"
-      : "text-white";
+  const ethBalancePresentation = getHeaderWalletBalancePresentation("ETH", privyEthBalance, privyEthBalanceStatus);
+  const tokenBalancePresentation = getHeaderWalletBalancePresentation("LINEA", privyTokenBalance, privyTokenBalanceStatus);
+  const ethUpdatedAt = formatHeaderWalletBalanceUpdatedAt(privyEthBalanceStatus.updatedAt);
+  const tokenUpdatedAt = formatHeaderWalletBalanceUpdatedAt(privyTokenBalanceStatus.updatedAt);
+  const ethBalanceClass = ethBalancePresentation.state === "error"
+    ? "font-semibold text-red-200/90"
+    : ethBalancePresentation.state === "unavailable"
+      ? "font-semibold text-amber-200/80"
+      : ethBalancePresentation.state === "refreshing" || ethBalancePresentation.state === "stale"
+        ? "text-amber-200/90"
+        : "text-gray-400";
+  const tokenBalanceClass = tokenBalancePresentation.state === "error"
+    ? "text-red-200/90"
+    : tokenBalancePresentation.state === "unavailable"
+      ? "text-amber-200/85"
+      : tokenBalancePresentation.state === "refreshing" || tokenBalancePresentation.state === "stale"
+        ? "text-amber-100"
+        : "text-white";
   const showLoginReload = Boolean(
     loginState.error && (loginState.error.includes("still loading") || loginState.error.includes("timed out")),
   );
@@ -230,6 +268,8 @@ export function HeaderWalletCard({
               >
                 {ethBalancePresentation.state === "loading" ? <span className="inline-block h-3 w-12 animate-pulse rounded bg-white/10" /> : ethBalancePresentation.text}<span className="text-gray-500 font-medium"> {ethBalancePresentation.suffix}</span>
                 {ethBalancePresentation.state === "refreshing" && <span className="ml-1 text-[8px] font-bold uppercase tracking-[0.06em] text-amber-200/80">Refreshing</span>}
+                {ethBalancePresentation.state === "stale" && <span className="ml-1 text-[8px] font-bold uppercase tracking-[0.06em] text-amber-200/80">Stale</span>}
+                {ethBalancePresentation.state === "error" && <span className="ml-1 text-[8px] font-bold uppercase tracking-[0.06em] text-red-200/90">RPC error</span>}
               </span>
               <span
                 aria-label={tokenBalancePresentation.label}
@@ -239,8 +279,15 @@ export function HeaderWalletCard({
               >
                 {tokenBalancePresentation.state === "loading" ? <span className="inline-block h-3 w-16 animate-pulse rounded bg-white/10" /> : tokenBalancePresentation.text}<span className="text-[10px] font-medium text-gray-500"> {tokenBalancePresentation.suffix}</span>
                 {tokenBalancePresentation.state === "refreshing" && <span className="ml-1 text-[8px] font-bold uppercase tracking-[0.06em] text-amber-200/80">Refreshing</span>}
+                {tokenBalancePresentation.state === "stale" && <span className="ml-1 text-[8px] font-bold uppercase tracking-[0.06em] text-amber-200/80">Stale</span>}
+                {tokenBalancePresentation.state === "error" && <span className="ml-1 text-[8px] font-bold uppercase tracking-[0.06em] text-red-200/90">RPC error</span>}
               </span>
             </div>
+            {(ethUpdatedAt || tokenUpdatedAt) && (
+              <p className="text-[8px] font-semibold tracking-[0.04em] text-gray-500" data-balance-last-updated>
+                Last updated: {ethUpdatedAt && `ETH ${ethUpdatedAt}`}{ethUpdatedAt && tokenUpdatedAt && " · "}{tokenUpdatedAt && `LINEA ${tokenUpdatedAt}`}
+              </p>
+            )}
           </div>
         </>
       ) : embeddedWalletSyncing ? (

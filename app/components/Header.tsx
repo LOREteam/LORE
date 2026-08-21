@@ -41,9 +41,9 @@ interface HeaderProps {
   embeddedWalletAddress: string | null;
   embeddedWalletSyncing?: boolean;
   privyEthBalance: string;
-  privyEthBalanceLoading?: boolean;
+  privyEthBalanceStatus?: React.ComponentProps<typeof HeaderWalletCard>["privyEthBalanceStatus"];
   privyTokenBalance: string;
-  privyTokenBalanceLoading?: boolean;
+  privyTokenBalanceStatus?: React.ComponentProps<typeof HeaderWalletCard>["privyTokenBalanceStatus"];
   onOpenWalletSettings: () => void;
   muted: boolean;
   onToggleMute: () => void;
@@ -78,9 +78,9 @@ export const Header = React.memo(function Header({
   embeddedWalletAddress,
   embeddedWalletSyncing = false,
   privyEthBalance,
-  privyEthBalanceLoading = false,
+  privyEthBalanceStatus,
   privyTokenBalance,
-  privyTokenBalanceLoading = false,
+  privyTokenBalanceStatus,
   onOpenWalletSettings,
   muted,
   onToggleMute,
@@ -390,9 +390,9 @@ export const Header = React.memo(function Header({
         onLogout={() => { void logout(); }}
         onOpenWalletSettings={onOpenWalletSettings}
         privyEthBalance={privyEthBalance}
-        privyEthBalanceLoading={privyEthBalanceLoading}
+        privyEthBalanceStatus={privyEthBalanceStatus}
         privyTokenBalance={privyTokenBalance}
-        privyTokenBalanceLoading={privyTokenBalanceLoading}
+        privyTokenBalanceStatus={privyTokenBalanceStatus}
       />
     </header>
     </>

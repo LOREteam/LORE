@@ -69,9 +69,9 @@ type BuildHeaderPropsOptions = {
   embeddedWalletAddress: HeaderProps["embeddedWalletAddress"];
   embeddedWalletSyncing: HeaderProps["embeddedWalletSyncing"];
   formattedPrivyEthBalance: string | null;
-  headerEthLoading: HeaderProps["privyEthBalanceLoading"];
+  headerEthBalanceStatus: HeaderProps["privyEthBalanceStatus"];
   headerLineaBalance: string | null;
-  headerLineaLoading: HeaderProps["privyTokenBalanceLoading"];
+  headerLineaBalanceStatus: HeaderProps["privyTokenBalanceStatus"];
   openWalletSettings: HeaderProps["onOpenWalletSettings"];
   soundMuted: HeaderProps["muted"];
   toggleSoundMute: HeaderProps["onToggleMute"];
@@ -97,9 +97,9 @@ export function buildHeaderProps({
   embeddedWalletAddress,
   embeddedWalletSyncing,
   formattedPrivyEthBalance,
-  headerEthLoading,
+  headerEthBalanceStatus,
   headerLineaBalance,
-  headerLineaLoading,
+  headerLineaBalanceStatus,
   openWalletSettings,
   soundMuted,
   toggleSoundMute,
@@ -124,9 +124,9 @@ export function buildHeaderProps({
     embeddedWalletAddress,
     embeddedWalletSyncing,
     privyEthBalance: formattedPrivyEthBalance ?? "—",
-    privyEthBalanceLoading: headerEthLoading,
+    privyEthBalanceStatus: headerEthBalanceStatus,
     privyTokenBalance: headerLineaBalance ?? "—",
-    privyTokenBalanceLoading: headerLineaLoading,
+    privyTokenBalanceStatus: headerLineaBalanceStatus,
     onOpenWalletSettings: openWalletSettings,
     muted: soundMuted,
     onToggleMute: toggleSoundMute,

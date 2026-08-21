@@ -19,6 +19,8 @@ const headerPoolChart = headerPoolChartModule.default ?? headerPoolChartModule;
 const headerWalletCard = headerWalletCardModule.default ?? headerWalletCardModule;
 const sectionBuilders = sectionBuildersModule.default ?? sectionBuildersModule;
 
+const READY_BALANCE_STATUS = Object.freeze({ fetching: false, error: false, stale: false, updatedAt: null });
+
 function assertTransferPresentation(input, actual) {
   const expectedState = input.loading ? "pending" : input.disabled ? "unavailable" : "ready";
   assert.equal(actual.state, expectedState);
@@ -310,9 +312,9 @@ export function runWalletPresentationTests() {
     embeddedWalletAddress: null,
     embeddedWalletSyncing: false,
     formattedPrivyEthBalance: null,
-    headerEthLoading: false,
+    headerEthBalanceStatus: READY_BALANCE_STATUS,
     headerLineaBalance: null,
-    headerLineaLoading: false,
+    headerLineaBalanceStatus: READY_BALANCE_STATUS,
     openWalletSettings: () => undefined,
     soundMuted: false,
     toggleSoundMute: () => undefined,
@@ -333,16 +335,16 @@ export function runWalletPresentationTests() {
   assert.equal(verifiedZeroHeaderProps.privyTokenBalance, "0.00");
   assert.equal(verifiedZeroHeaderProps.privyEthBalance, "0.0000");
   assert.deepEqual(
-    headerWalletCard.getHeaderWalletBalancePresentation("LINEA", "—", false),
+    headerWalletCard.getHeaderWalletBalancePresentation("LINEA", "—", READY_BALANCE_STATUS),
     { state: "unavailable", text: "Unavailable", suffix: "LINEA", label: "LINEA balance unavailable" },
   );
   assert.deepEqual(
-    headerWalletCard.getHeaderWalletBalancePresentation("LINEA", "0.00", false),
+    headerWalletCard.getHeaderWalletBalancePresentation("LINEA", "0.00", READY_BALANCE_STATUS),
     { state: "ready", text: "0.00", suffix: "LINEA", label: "LINEA balance 0.00" },
   );
-  assert.equal(headerWalletCard.getHeaderWalletBalancePresentation("ETH", "—", true).state, "loading");
+  assert.equal(headerWalletCard.getHeaderWalletBalancePresentation("ETH", "—", { ...READY_BALANCE_STATUS, fetching: true }).state, "loading");
   assert.deepEqual(
-    headerWalletCard.getHeaderWalletBalancePresentation("ETH", "0.0000", true),
+    headerWalletCard.getHeaderWalletBalancePresentation("ETH", "0.0000", { ...READY_BALANCE_STATUS, fetching: true }),
     {
       state: "refreshing",
       text: "0.0000",
@@ -369,9 +371,9 @@ export function runWalletPresentationTests() {
     onLogout: () => undefined,
     onOpenWalletSettings: () => undefined,
     privyEthBalance: "—",
-    privyEthBalanceLoading: false,
+    privyEthBalanceStatus: READY_BALANCE_STATUS,
     privyTokenBalance: "—",
-    privyTokenBalanceLoading: false,
+    privyTokenBalanceStatus: READY_BALANCE_STATUS,
   }));
   assert.match(unavailableHeaderWalletHtml, /aria-label="ETH balance unavailable"[^>]*data-balance-state="unavailable"/);
   assert.match(unavailableHeaderWalletHtml, /Unavailable<span[^>]*> ETH<\/span>/);
@@ -395,14 +397,42 @@ export function runWalletPresentationTests() {
     onLogout: () => undefined,
     onOpenWalletSettings: () => undefined,
     privyEthBalance: "0.0000",
-    privyEthBalanceLoading: true,
+    privyEthBalanceStatus: { ...READY_BALANCE_STATUS, fetching: true },
     privyTokenBalance: "0.00",
-    privyTokenBalanceLoading: true,
+    privyTokenBalanceStatus: { ...READY_BALANCE_STATUS, fetching: true },
   }));
   assert.match(refreshingHeaderWalletHtml, /aria-label="ETH balance refreshing; showing last known 0\.0000"[^>]*data-balance-state="refreshing"/);
   assert.match(refreshingHeaderWalletHtml, />0\.0000<span[^>]*> ETH<\/span><span[^>]*>Refreshing<\/span>/);
   assert.match(refreshingHeaderWalletHtml, /aria-label="LINEA balance refreshing; showing last known 0\.00"[^>]*data-balance-state="refreshing"/);
   assert.match(refreshingHeaderWalletHtml, />0\.00<span[^>]*> LINEA<\/span><span[^>]*>Refreshing<\/span>/);
+  assert.equal(
+    headerWalletCard.getHeaderWalletBalancePresentation("ETH", "0.0000", { ...READY_BALANCE_STATUS, stale: true }).state,
+    "stale",
+  );
+  assert.equal(
+    headerWalletCard.getHeaderWalletBalancePresentation("LINEA", "0.00", { ...READY_BALANCE_STATUS, error: true }).state,
+    "error",
+  );
+  const staleErrorHeaderWalletHtml = renderToStaticMarkup(React.createElement(headerWalletCard.HeaderWalletCard, {
+    authenticated: true,
+    loginState: { busy: false, buttonText: "Login / Connect", disabled: false, error: null, modalOpen: false, statusAnnouncement: "Wallet connected." },
+    embeddedWalletAddress: "0x1111111111111111111111111111111111111111",
+    embeddedWalletSyncing: false,
+    embeddedAddressCopied: false,
+    onCopyEmbeddedAddress: () => undefined,
+    onLogin: () => undefined,
+    onLogout: () => undefined,
+    onOpenWalletSettings: () => undefined,
+    privyEthBalance: "0.0000",
+    privyEthBalanceStatus: { ...READY_BALANCE_STATUS, stale: true, updatedAt: 1_700_000_000_000 },
+    privyTokenBalance: "0.00",
+    privyTokenBalanceStatus: { ...READY_BALANCE_STATUS, error: true },
+  }));
+  assert.match(staleErrorHeaderWalletHtml, /data-balance-state="stale"[^>]*title="ETH balance stale; showing last known 0\.0000"/);
+  assert.match(staleErrorHeaderWalletHtml, />0\.0000<span[^>]*> ETH<\/span><span[^>]*>Stale<\/span>/);
+  assert.match(staleErrorHeaderWalletHtml, /data-balance-state="error"[^>]*title="LINEA balance RPC error; showing last known 0\.00"/);
+  assert.match(staleErrorHeaderWalletHtml, />0\.00<span[^>]*> LINEA<\/span><span[^>]*>RPC error<\/span>/);
+  assert.match(staleErrorHeaderWalletHtml, /Last updated: ETH 22:13 UTC/);
   const validReplacementHash = `0x${"a".repeat(64)}`;
   const blockedStatus = {
     latestNonce: 7,
