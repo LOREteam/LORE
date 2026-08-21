@@ -324,8 +324,13 @@ export function assertLocalCampaignSourceProvenance() {
     const sourceSha = runCampaignFixtureGit(root, ["rev-parse", "--verify", "HEAD^{commit}"]);
     const fixtureNodeModules = join(root, "node_modules");
     const tsxDirectory = join(fixtureNodeModules, "tsx", "dist");
-    mkdirSync(tsxDirectory, { recursive: true });
-    writeFileSync(join(tsxDirectory, "cli.mjs"), "process.exit(0);\n", "utf8");
+    const fixtureTsxCliPath = join(tsxDirectory, "cli.mjs");
+    const restoreFixtureTsxCli = () => {
+      mkdirSync(tsxDirectory, { recursive: true });
+      writeFileSync(fixtureTsxCliPath, "process.exit(0);\n", "utf8");
+      assert.equal(existsSync(fixtureTsxCliPath), true, "fixture tsx CLI must exist");
+    };
+    restoreFixtureTsxCli();
 
     const runtimeDirectory = join(root, ".tmp-npm-runtime-115");
     mkdirSync(runtimeDirectory, { recursive: true });
@@ -359,7 +364,10 @@ export function assertLocalCampaignSourceProvenance() {
       }
     };
     const commitFixtureCommand = (message, body) => {
-      writeFileSync(firstCommandPath, body, "utf8");
+      // Several integrity cases intentionally execute the same no-op body. Keep
+      // the case identity in the tracked command so each fixture commit has a
+      // real staged change without absorbing its untracked fault evidence.
+      writeFileSync(firstCommandPath, `${body}\n// fixture command: ${message}\n`, "utf8");
       runCampaignFixtureGit(root, ["add", "--", "scripts/business-logic-isolated-runner.mjs"]);
       runCampaignFixtureGit(root, [
         "-c", "user.name=LORE Campaign Fixture",
@@ -628,6 +636,7 @@ export function assertLocalCampaignSourceProvenance() {
     assert.equal(existsSync(nodeModulesSwapMarker), true, "node_modules replacement action must run inside the detached snapshot");
     rmSync(nodeModulesPath, { recursive: true, force: true });
     renameSync(nodeModulesBackup, nodeModulesPath);
+    restoreFixtureTsxCli();
 
     const fixtureDataDirectory = join(root, "data");
     const fixtureDb = join(fixtureDataDirectory, "lore-v10.sqlite");
@@ -745,6 +754,7 @@ export function assertLocalCampaignSourceProvenance() {
     symlinkSync(nodeModulesPath, dependencySwapLink, "junction");
     removeFixtureSnapshot(dependencySwapId, dependencySwapSourceSha);
     rmSync(dependencySwapTarget, { recursive: true, force: true });
+    restoreFixtureTsxCli();
     writeFileSync(firstCommandPath, "process.exit(0);\n", "utf8");
     writeFileSync(p1CommandPath, "process.exit(0);\n", "utf8");
     writeFileSync(finalCommandPath, [
