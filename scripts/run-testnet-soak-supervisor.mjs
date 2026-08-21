@@ -70,6 +70,7 @@ const MAX_SOAK_STOP_JSON_BYTES = 4 * 1024;
 const MAX_CANARY_PROOF_VALIDATION_LOG_BYTES = 64 * 1024;
 const MAX_CANARY_PROOF_VALIDATION_FILE_BYTES = MAX_CANARY_PROOF_VALIDATION_LOG_BYTES + 2 * 1024;
 const MAX_CANARY_PROOF_VALIDATION_INPUT_BYTES = 64 * 1024 * 1024;
+const MAX_CANARY_PROOF_MANIFEST_BYTES = 512 * 1024;
 const MAX_LIVE_LOG_BYTES = parseInteger(
   "SOAK_MAX_LIVE_LOG_BYTES",
   48 * 1024 * 1024,
@@ -1609,6 +1610,29 @@ function buildProofValidationEnvironment(env = process.env) {
   return safeEnv;
 }
 
+function requireLiveCanaryProofManifest(env = process.env) {
+  const configured = env.CANARY_PROOF_PATH?.trim();
+  if (!configured) {
+    throw new Error("live testnet soak requires an explicit CANARY_PROOF_PATH for this run");
+  }
+  if (isAbsolute(configured)) {
+    throw new Error("CANARY_PROOF_PATH must be a repository-relative manifest path");
+  }
+  const absolutePath = resolve(ROOT, configured);
+  const relativePath = relative(ROOT, absolutePath);
+  if (!relativePath || isAbsolute(relativePath) || relativePath === ".." || relativePath.startsWith("..")) {
+    throw new Error("CANARY_PROOF_PATH must remain inside the repository");
+  }
+  const stats = lstatPathEntry(absolutePath);
+  if (stats === null || !stats.isFile() || stats.isSymbolicLink()) {
+    throw new Error("CANARY_PROOF_PATH must name an ordinary manifest file");
+  }
+  if (stats.size <= 0 || stats.size > MAX_CANARY_PROOF_MANIFEST_BYTES) {
+    throw new Error("CANARY_PROOF_PATH manifest size is outside the strict validation bound");
+  }
+  return absolutePath;
+}
+
 function boundedRedactedProofOutput(value) {
   const redacted = redactProofText(value);
   const bytes = Buffer.from(redacted, "utf8");
@@ -1772,7 +1796,7 @@ function writeProofValidationLog({
   };
 }
 
-async function validateLiveCanaryCompletion(liveLogPath) {
+async function validateLiveCanaryCompletion(liveLogPath, manifestPath) {
   const canonicalLiveLogPath = canonicalCurrentRunLiveLogPath(liveLogPath);
   if (!canonicalLiveLogPath) {
     const artifact = writeProofValidationLog({
@@ -1896,6 +1920,7 @@ async function validateLiveCanaryCompletion(liveLogPath) {
         "--require-epoch-bound",
         "--require-canary-admission",
         "--require-v10-deployment-manifest",
+        `--manifest=${manifestPath}`,
         `--expected-run-id=${RUN_ID}`,
         "--summary-only",
       ],
@@ -2201,6 +2226,26 @@ async function runBehaviorSelfTest() {
   selfTestCondition(proofValidationEnv.CANARY_PROOF_PATH === "docs/testnet-canary-proof.json", "proof validator lost proof path configuration");
   selfTestCondition(!Object.hasOwn(proofValidationEnv, "PRIVATE_KEY"), "proof validator inherited a private key");
   selfTestCondition(!Object.hasOwn(proofValidationEnv, "RPC_URL"), "proof validator inherited an RPC URL");
+  for (const manifestEnv of [
+    {},
+    { CANARY_PROOF_PATH: resolve(ROOT, "docs", "testnet-canary-proof.json") },
+    { CANARY_PROOF_PATH: "..\\outside-proof.json" },
+    { CANARY_PROOF_PATH: "docs" },
+  ]) {
+    let rejected = false;
+    try {
+      requireLiveCanaryProofManifest(manifestEnv);
+    } catch {
+      rejected = true;
+    }
+    selfTestCondition(rejected, "unsafe live proof manifest mutant was accepted");
+    faultMutantsRejected += 1;
+  }
+  selfTestCondition(
+    requireLiveCanaryProofManifest({ CANARY_PROOF_PATH: "docs/testnet-canary-proof.json" })
+      === resolve(ROOT, "docs", "testnet-canary-proof.json"),
+    "explicit repository proof manifest was not preserved",
+  );
   mkdirSync(OUT_DIR, { recursive: true });
   writeFileSync(LIVE_LOG_PATH, "{\"mode\":\"diagnostic\"}\n", "utf8");
   const initialLiveLogBytes = statSync(LIVE_LOG_PATH).size;
@@ -2435,6 +2480,7 @@ async function runBehaviorSelfTest() {
 
 async function main() {
   assertDiskCapacity();
+  const liveManifestPath = DRY_RUN ? null : requireLiveCanaryProofManifest();
   acquireLock();
   managedRunStarted = true;
   writeStatus("starting", { proofValidation: initialProofValidation });
@@ -2471,7 +2517,7 @@ async function main() {
     writeStatus("validating-proof", {
       proofValidation: { ...initialProofValidation, status: "running" },
     });
-    proofValidation = await validateLiveCanaryCompletion(readLiveLogPath());
+    proofValidation = await validateLiveCanaryCompletion(readLiveLogPath(), liveManifestPath);
     success = proofValidation.status === "passed";
   }
   const stopReason = success

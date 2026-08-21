@@ -1527,20 +1527,6 @@ async function main() {
   ) {
     throw new Error("V10 runtime identity does not match the canonical Sepolia deployment manifest");
   }
-  // Publish the read-only identity observation before loading any signing
-  // material. The later bound SYSTEM preflight ties the same evidence to the
-  // canonical admission once roles/caps have been derived.
-  writeEvent(logPath, {
-    amount: "0",
-    mode: "runtime-identity",
-    ok: true,
-    role: "SYSTEM",
-    round: -1,
-    runtimeIdentity,
-    deploymentManifestSha256: deploymentManifest.deploymentManifestSha256,
-    sourceArtifactGitSha: deploymentManifest.sourceArtifactGitSha,
-    timestamp: new Date().toISOString(),
-  });
 
   let executionWalletConfig: ExecutionWalletAdmission | null = null;
   let wallets: CanaryWallet[];

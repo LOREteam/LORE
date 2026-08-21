@@ -1417,9 +1417,13 @@ function evaluateCanaryAdmission({
     failures.push("canonical canary admission SHA-256 does not match payload");
   }
 
+  // Once the canonical admission is written, every subsequent run record is
+  // part of this evidence set. Do not leave health, timing, or failed-action
+  // records replayable under another wallet set simply because they do not
+  // move funds themselves.
   const relevantEvents = events
     .map((item, index) => ({ item, index }))
-    .filter(({ item }) => item.mode === "preflight" || item.mode === "approve" || item.mode === "resolve" || isBetEvent(item));
+    .filter(({ index }) => index > admissionIndex);
   const capByRole = roleCaps ? new Map(roleCaps.map((cap) => [cap.role, cap])) : new Map();
   const spentByRole = new Map();
   const runtimeIdentityPreflights = [];
@@ -1455,7 +1459,7 @@ function evaluateCanaryAdmission({
     }
     if (isRuntimeIdentity) {
       runtimeIdentityPreflights.push(item);
-      validateRuntimeIdentityBinding(item.runtimeIdentity, admission, failures);
+      validateRuntimeIdentityBinding(item, admission, failures);
     }
     if (isResolverAction && item.ok === true && item.txStatus === "success" && !isRealTx(eventTxHash(item))) {
       failures.push(`successful canary resolve tx hash is invalid (${label})`);
@@ -1472,6 +1476,9 @@ function evaluateCanaryAdmission({
       } else {
         if (allowanceCapWei !== cap.allowanceCapWei) failures.push(`canary preflight allowance cap does not match admission (${label})`);
         if (BigInt(allowanceWei) > BigInt(cap.allowanceCapWei)) failures.push(`canary preflight allowance exceeds admission cap (${label})`);
+        if (item.allowanceWithinRunCap !== (BigInt(allowanceWei) <= BigInt(allowanceCapWei))) {
+          failures.push(`canary preflight allowance boundary does not match evidence (${label})`);
+        }
       }
       if (item.allowanceWithinRunCap !== true && item.allowanceWithinRunCap !== false) {
         failures.push(`canary preflight allowance boundary is missing (${label})`);
@@ -1508,6 +1515,10 @@ function evaluateCanaryAdmission({
     const preflight = preflights[0];
     if (preflight.ok !== true) failures.push(`canonical admission wallet preflight failed for ${role}`);
     if (preflight.allowanceWithinRunCap !== true) failures.push(`canonical admission wallet preflight exceeds allowance cap for ${role}`);
+    if (preflight.participant !== true) failures.push(`canonical admission wallet preflight participation is missing for ${role}`);
+    if (canonicalWei(preflight.totalAmountWei, { allowZero: true }) !== cap.spendCapWei) {
+      failures.push(`canonical admission wallet preflight spend cap does not match admission for ${role}`);
+    }
     if (typeof preflight.approvalRequired !== "boolean") {
       failures.push(`canonical admission wallet preflight approval requirement is missing for ${role}`);
       continue;
@@ -1515,6 +1526,9 @@ function evaluateCanaryAdmission({
     const approvals = approvalsByRole.get(role) ?? [];
     if (!preflight.approvalRequired && approvals.length !== 0) {
       failures.push(`unexpected canary approval evidence for ${role}`);
+    }
+    if (!preflight.approvalRequired && preflight.allowanceWei !== cap.allowanceCapWei) {
+      failures.push(`canonical admission wallet preflight allowance is not the exact cap for ${role}`);
     }
     if (preflight.approvalRequired) {
       if (approvals.length !== 1) {
@@ -1597,7 +1611,8 @@ function canonicalAdmissionPayload(admission) {
   });
 }
 
-function validateRuntimeIdentityBinding(runtimeIdentity, admission, failures) {
+function validateRuntimeIdentityBinding(event, admission, failures) {
+  const runtimeIdentity = event?.runtimeIdentity;
   const runtimeDeployBlock = canonicalWei(runtimeIdentity?.deployBlock, { allowZero: true });
   const observedBlock = canonicalWei(runtimeIdentity?.observedBlock, { allowZero: true });
   const observedBlockIsAtOrAfterDeployment = runtimeDeployBlock !== null
@@ -1623,6 +1638,13 @@ function validateRuntimeIdentityBinding(runtimeIdentity, admission, failures) {
     || !Number.isSafeInteger(runtimeIdentity.immutableReferences)
     || runtimeIdentity.immutableReferences < 0
   ) failures.push("runtime identity preflight does not match canonical admission");
+  if (
+    admission.schema === 2
+    && (
+      event.deploymentManifestSha256 !== admission.deploymentManifestSha256
+      || event.sourceArtifactGitSha !== admission.sourceArtifactGitSha
+    )
+  ) failures.push("runtime identity preflight deployment provenance does not match canonical admission");
 }
 
 function findTargetEventMismatches(events, network, chainId, contractAddress, rpcLabel) {

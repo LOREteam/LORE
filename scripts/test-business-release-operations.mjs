@@ -1460,7 +1460,7 @@ export function runReleaseOperationsTests() {
       tiles: [1],
       timestamp: "2026-07-22T00:00:00.000Z",
     };
-    const buildAdmissionEvidence = ({ includeRuntime = true, approvalRequired = false, allowanceWithinRunCap = true, approvals = [] } = {}) => {
+    const buildAdmissionEvidence = ({ includeRuntime = true, approvalRequired = false, allowanceWei = "100", allowanceWithinRunCap = true, approvals = [] } = {}) => {
       const target = {
         amount: "0",
         chainId: 59141,
@@ -1494,11 +1494,13 @@ export function runReleaseOperationsTests() {
       evidence.push({
         ...target,
         allowanceCapWei: "100",
-        allowanceWei: "100",
+        allowanceWei,
         allowanceWithinRunCap,
         approvalRequired,
         mode: "preflight",
+        participant: true,
         role: "AUTOMINER_A",
+        totalAmountWei: "100",
       });
       return [...evidence, ...approvals];
     };
@@ -1644,6 +1646,25 @@ export function runReleaseOperationsTests() {
     );
     assert.equal(wrongWalletSetProof.status, 1, "a wallet preflight must bind the admitted wallet set");
     assert.match(wrongWalletSetProof.stdout, /canary action wallet set does not match canonical admission/);
+    const unboundDiagnosticProof = runV10CanaryProof(
+      "unbound-diagnostic",
+      [{
+        amount: "0",
+        chainId: 59141,
+        contractAddress: `0x${"1".repeat(40)}`,
+        mode: "diagnostic",
+        network: "sepolia",
+        ok: true,
+        role: "SYSTEM",
+        round: -1,
+        runId: undefined,
+        timestamp: "2026-07-22T00:00:00.500Z",
+        walletSetSha256: undefined,
+      }, ...matrixEvents],
+      ["--summary-only"],
+    );
+    assert.equal(unboundDiagnosticProof.status, 1, "every post-admission canary record must bind the admitted run and wallet set");
+    assert.match(unboundDiagnosticProof.stdout, /canary action is not bound to canonical admission \(round=-1 mode=diagnostic\)/);
     const wrongRuntimeIdentityEvidence = buildAdmissionEvidence();
     wrongRuntimeIdentityEvidence[0] = {
       ...wrongRuntimeIdentityEvidence[0],
@@ -1713,6 +1734,14 @@ export function runReleaseOperationsTests() {
     );
     assert.equal(unsafeAllowanceAdmission.status, 1, "strict proof must reject an unsafe allowance preflight");
     assert.match(unsafeAllowanceAdmission.stdout, /wallet preflight exceeds allowance cap for AUTOMINER_A/);
+    const incompleteAllowanceAdmission = runV10CanaryProof(
+      "incomplete-allowance-admission",
+      matrixEvents,
+      ["--summary-only"],
+      buildAdmissionEvidence({ allowanceWei: "99" }),
+    );
+    assert.equal(incompleteAllowanceAdmission.status, 1, "a no-approval wallet preflight must prove the exact declared allowance cap");
+    assert.match(incompleteAllowanceAdmission.stdout, /wallet preflight allowance is not the exact cap for AUTOMINER_A/);
     const missingApprovalAdmission = runV10CanaryProof(
       "missing-approval-admission",
       matrixEvents,
@@ -2033,7 +2062,7 @@ export function runReleaseOperationsTests() {
         atomicStatus: true,
         managedChildrenStarted: 0,
         networkRequests: 0,
-        faultMutantsRejected: 35,
+        faultMutantsRejected: 39,
       },
       `${name} soak admission behavior must remain transaction-free unless both live confirmations are present`,
     );
