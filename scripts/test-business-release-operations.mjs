@@ -70,7 +70,7 @@ function runCampaignFixtureGit(root, args) {
   return String(result.stdout ?? "").trim().toLowerCase();
 }
 
-function runCampaignFixturePowerShell(scriptPath, campaignId) {
+function runCampaignFixturePowerShell(scriptPath, campaignId, { failEventWrite = false } = {}) {
   const powerShellPath = join(
     process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows",
     "System32",
@@ -79,32 +79,40 @@ function runCampaignFixturePowerShell(scriptPath, campaignId) {
     "powershell.exe",
   );
   assert.ok(existsSync(powerShellPath), "Windows PowerShell must be available for the campaign fixture");
-  return spawnSync(powerShellPath, [
-    "-NoLogo",
-    "-NoProfile",
-    "-NonInteractive",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-File",
-    scriptPath,
-    "-Hours",
-    "1",
-    "-IntervalMinutes",
-    "15",
-    "-MaxIterations",
-    "1",
-    "-CampaignId",
-    campaignId,
-  ], {
+  const environment = campaignFixtureGitEnvironment();
+  const commonArgs = ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"];
+  const args = failEventWrite
+    ? [
+      ...commonArgs,
+      "-Command",
+      'function global:Add-Content { throw "fixture event write failure" }; & $env:LORE_CAMPAIGN_FIXTURE_SCRIPT -Hours 1 -IntervalMinutes 15 -MaxIterations 1 -CampaignId $env:LORE_CAMPAIGN_FIXTURE_ID',
+    ]
+    : [
+      ...commonArgs,
+      "-File",
+      scriptPath,
+      "-Hours",
+      "1",
+      "-IntervalMinutes",
+      "15",
+      "-MaxIterations",
+      "1",
+      "-CampaignId",
+      campaignId,
+    ];
+  if (failEventWrite) {
+    environment.LORE_CAMPAIGN_FIXTURE_SCRIPT = scriptPath;
+    environment.LORE_CAMPAIGN_FIXTURE_ID = campaignId;
+  }
+  return spawnSync(powerShellPath, args, {
     cwd: resolve(scriptPath, "..", ".."),
-    env: campaignFixtureGitEnvironment(),
+    env: environment,
     encoding: "utf8",
     timeout: 30_000,
     maxBuffer: 1024 * 1024,
     windowsHide: true,
   });
 }
-
 export function assertLocalCampaignSourceProvenance() {
   const source = readFileSync("scripts/run-local-test-campaign.ps1", "utf8");
   assert.match(source, /git -C \$repoRoot rev-parse --verify 'HEAD\^\{commit\}'/);
@@ -116,6 +124,9 @@ export function assertLocalCampaignSourceProvenance() {
   assert.match(source, /sourceIntegrityFailure = \$Failure/);
   assert.match(source, /-Phase 'before-command'/);
   assert.match(source, /-Phase 'before-completed'/);
+  assert.match(source, /-Phase 'after-command'/);
+  assert.match(source, /New-Item -ItemType Directory -Path \$campaignDirectory -ErrorAction Stop/);
+  assert.match(source, /Add-Content -LiteralPath \$summaryPath -Value \$serialized -Encoding utf8 -ErrorAction Stop/);
 
   if (process.platform !== "win32") return;
 
@@ -172,9 +183,56 @@ export function assertLocalCampaignSourceProvenance() {
     assert.deepEqual(cleanEvents.map((event) => event.status), ["started", ...Array(7).fill("passed"), "completed"]);
     assertBoundSourceSha(cleanEvents, sourceSha);
 
+    const eventWriteFailure = runCampaignFixturePowerShell(scriptPath, "fixture-event-write-failure", { failEventWrite: true });
+    assert.equal(eventWriteFailure.error, undefined, eventWriteFailure.error?.message);
+    assert.notEqual(eventWriteFailure.status, 0, "an event append failure must stop the campaign");
+    assert.match(`${eventWriteFailure.stdout ?? ""}\n${eventWriteFailure.stderr ?? ""}`, /could not record evidence/i);
+    assert.equal(
+      existsSync(join(root, "artifacts", "test-campaign-2026-08-20", "fixture-event-write-failure", "local-test-campaign.jsonl")),
+      false,
+      "a failed initial event append must not leave completed evidence",
+    );
+
     const firstCommandPath = join(scriptDirectory, "business-logic-isolated-runner.mjs");
     const p1CommandPath = join(scriptDirectory, "run-p1-hardening-tests.mjs");
     const finalCommandPath = join(scriptDirectory, "test-hermetic-build.mjs");
+    writeFileSync(firstCommandPath, [
+      'import { readFileSync, utimesSync, writeFileSync } from "node:fs";',
+      'const target = "scripts/run-p1-hardening-tests.mjs";',
+      'const original = readFileSync(target, "utf8");',
+      'writeFileSync(target, `${original}// transient tracked fixture drift\\n`, "utf8");',
+      'writeFileSync(target, original, "utf8");',
+      'const changedAt = new Date(Date.now() + 2_000);',
+      'utimesSync(target, changedAt, changedAt);',
+    ].join("\n"), "utf8");
+    runCampaignFixtureGit(root, ["add", "--", "scripts/business-logic-isolated-runner.mjs"]);
+    runCampaignFixtureGit(root, [
+      "-c", "user.name=LORE Campaign Fixture",
+      "-c", "user.email=lore-campaign-fixture@example.invalid",
+      "commit", "--quiet", "-m", "fixture transient tracked tree drift child",
+    ]);
+    const transientSourceSha = runCampaignFixtureGit(root, ["rev-parse", "--verify", "HEAD^{commit}"]);
+    const transientDrift = runCampaignFixturePowerShell(scriptPath, "fixture-transient-tracked-tree-drift");
+    assert.equal(transientDrift.error, undefined, transientDrift.error?.message);
+    assert.notEqual(transientDrift.status, 0, "a restored tracked mutation must stop after the child");
+    const transientEvents = readEvents("fixture-transient-tracked-tree-drift");
+    assert.deepEqual(transientEvents.map((event) => event.status), ["started", "failed", "stopped-on-failure"]);
+    assertBoundSourceSha(transientEvents, transientSourceSha);
+    assert.equal(transientEvents.at(-2).sourceIntegrityFailure, "tracked-tree-dirty");
+    assert.equal(transientEvents.at(-2).phase, "after-command");
+    assert.equal(transientEvents.at(-2).command, "business-logic-isolated");
+    assert.equal(transientEvents.some((event) => event.status === "passed"), false);
+    assert.equal(
+      runCampaignFixtureGit(root, ["status", "--porcelain=v1", "--untracked-files=no"]),
+      "",
+      "the transient fixture must restore tracked contents before the next step",
+    );
+    assert.equal(
+      existsSync(join(root, "artifacts", "test-campaign-2026-08-20", "fixture-transient-tracked-tree-drift", "local-001-p1-hardening-evm.log")),
+      false,
+      "post-child source drift must stop before the next child",
+    );
+
     writeFileSync(firstCommandPath, [
       'import { appendFileSync } from "node:fs";',
       'appendFileSync("scripts/run-p1-hardening-tests.mjs", "// tracked tree fixture drift\\n", "utf8");',
@@ -192,12 +250,13 @@ export function assertLocalCampaignSourceProvenance() {
     const trackedTreeEvents = readEvents("fixture-tracked-tree-dirty");
     assert.deepEqual(
       trackedTreeEvents.map((event) => event.status),
-      ["started", "passed", "failed", "stopped-on-failure"],
+      ["started", "failed", "stopped-on-failure"],
     );
     assertBoundSourceSha(trackedTreeEvents, trackedTreeSourceSha);
     assert.equal(trackedTreeEvents.at(-2).sourceIntegrityFailure, "tracked-tree-dirty");
-    assert.equal(trackedTreeEvents.at(-2).phase, "before-command");
-    assert.equal(trackedTreeEvents.at(-2).command, "p1-hardening-evm");
+    assert.equal(trackedTreeEvents.at(-2).phase, "after-command");
+    assert.equal(trackedTreeEvents.at(-2).command, "business-logic-isolated");
+    assert.equal(trackedTreeEvents.some((event) => event.status === "passed"), false);
     assert.equal(trackedTreeEvents.some((event) => event.status === "completed"), false);
     assert.equal(
       existsSync(join(root, "artifacts", "test-campaign-2026-08-20", "fixture-tracked-tree-dirty", "local-001-p1-hardening-evm.log")),
@@ -230,16 +289,28 @@ export function assertLocalCampaignSourceProvenance() {
     const sourceDriftEvents = readEvents("fixture-source-drift");
     assert.deepEqual(
       sourceDriftEvents.map((event) => event.status),
-      ["started", ...Array(7).fill("passed"), "failed", "stopped-on-failure"],
+      ["started", ...Array(6).fill("passed"), "failed", "stopped-on-failure"],
     );
     assertBoundSourceSha(sourceDriftEvents, completionSourceSha);
     assert.equal(sourceDriftEvents.at(-2).sourceIntegrityFailure, "source-drift");
-    assert.equal(sourceDriftEvents.at(-2).phase, "before-completed");
-    assert.equal(sourceDriftEvents.at(-2).command, undefined);
+    assert.equal(sourceDriftEvents.at(-2).phase, "after-command");
+    assert.equal(sourceDriftEvents.at(-2).command, "hermetic-build");
     assert.equal(sourceDriftEvents.some((event) => event.status === "completed"), false);
     const sourceHeadAfterDrift = runCampaignFixtureGit(root, ["rev-parse", "--verify", "HEAD^{commit}"]);
     assert.notEqual(sourceHeadAfterDrift, completionSourceSha);
     assert.doesNotMatch(JSON.stringify(sourceDriftEvents.at(-2)), new RegExp(sourceHeadAfterDrift, "i"));
+
+    const existingDirectory = join(root, "artifacts", "test-campaign-2026-08-20", "fixture-existing-directory");
+    mkdirSync(existingDirectory, { recursive: true });
+    const existingDirectoryRun = runCampaignFixturePowerShell(scriptPath, "fixture-existing-directory");
+    assert.equal(existingDirectoryRun.error, undefined, existingDirectoryRun.error?.message);
+    assert.notEqual(existingDirectoryRun.status, 0, "a pre-existing campaign directory must be rejected");
+    assert.match(`${existingDirectoryRun.stdout ?? ""}\n${existingDirectoryRun.stderr ?? ""}`, /requires a new campaign directory/i);
+    assert.equal(
+      existsSync(join(existingDirectory, "local-test-campaign.jsonl")),
+      false,
+      "an existing campaign directory must never be appended as fresh evidence",
+    );
 
     appendFileSync(scriptPath, "# tracked dirty fixture\n", "utf8");
     const preflightDirty = runCampaignFixturePowerShell(scriptPath, "fixture-preflight-dirty");

@@ -15,7 +15,8 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
 }
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $runtime = Join-Path $repoRoot '.tmp-npm-runtime-115\node.exe'
-$campaignDirectory = Join-Path (Join-Path $repoRoot 'artifacts\test-campaign-2026-08-20') $CampaignId
+$campaignRoot = Join-Path $repoRoot 'artifacts\test-campaign-2026-08-20'
+$campaignDirectory = Join-Path $campaignRoot $CampaignId
 $summaryPath = Join-Path $campaignDirectory 'local-test-campaign.jsonl'
 
 function Get-CampaignSourceSha {
@@ -40,7 +41,10 @@ function Get-CampaignSourceSha {
   return $head.ToLowerInvariant()
 }
 
-function Get-CampaignSourceIntegrityFailure([string]$ExpectedSourceSha) {
+function Get-CampaignSourceIntegrityFailure(
+  [string]$ExpectedSourceSha,
+  [AllowEmptyString()][string]$ExpectedTrackedMetadata
+) {
   $headLines = @(& git -C $repoRoot rev-parse --verify 'HEAD^{commit}' 2>$null)
   $headExitCode = $LASTEXITCODE
   if ($headExitCode -ne 0 -or $headLines.Count -ne 1) {
@@ -56,7 +60,34 @@ function Get-CampaignSourceIntegrityFailure([string]$ExpectedSourceSha) {
   if ($statusExitCode -ne 0 -or $trackedChanges.Count -ne 0) {
     return 'tracked-tree-dirty'
   }
+  if ($PSBoundParameters.ContainsKey('ExpectedTrackedMetadata')) {
+    $actualTrackedMetadata = Get-CampaignTrackedMetadata
+    if ($null -eq $actualTrackedMetadata -or -not [string]::Equals($actualTrackedMetadata, $ExpectedTrackedMetadata, [StringComparison]::Ordinal)) {
+      return 'tracked-tree-dirty'
+    }
+  }
   return $null
+}
+
+function Get-CampaignTrackedMetadata {
+  $trackedPaths = @(& git -C $repoRoot ls-files --full-name 2>$null)
+  $trackedPathsExitCode = $LASTEXITCODE
+  if ($trackedPathsExitCode -ne 0) {
+    return $null
+  }
+  $metadata = [Collections.Generic.List[string]]::new()
+  foreach ($relativePath in $trackedPaths) {
+    try {
+      $item = Get-Item -LiteralPath (Join-Path $repoRoot $relativePath) -Force -ErrorAction Stop
+      if ($item.PSIsContainer) {
+        return $null
+      }
+      [void]$metadata.Add(("{0}`0{1}`0{2}" -f $relativePath, $item.Length, $item.LastWriteTimeUtc.Ticks))
+    } catch {
+      return $null
+    }
+  }
+  return [string]::Join("`n", $metadata)
 }
 
 $sourceSha = Get-CampaignSourceSha
@@ -64,7 +95,12 @@ $sourceSha = Get-CampaignSourceSha
 if (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) {
   throw "Private Node runtime is unavailable: $runtime"
 }
-New-Item -ItemType Directory -Force -Path $campaignDirectory | Out-Null
+try {
+  New-Item -ItemType Directory -Force -Path $campaignRoot -ErrorAction Stop | Out-Null
+  New-Item -ItemType Directory -Path $campaignDirectory -ErrorAction Stop | Out-Null
+} catch {
+  throw 'Local test campaign requires a new campaign directory.'
+}
 
 function Write-CampaignEvent([hashtable]$Event) {
   if ($Event.ContainsKey('sourceSha')) {
@@ -77,7 +113,12 @@ function Write-CampaignEvent([hashtable]$Event) {
   foreach ($key in $Event.Keys) {
     $record[$key] = $Event[$key]
   }
-  ($record | ConvertTo-Json -Compress) | Add-Content -LiteralPath $summaryPath -Encoding utf8
+  try {
+    $serialized = $record | ConvertTo-Json -Compress -ErrorAction Stop
+    Add-Content -LiteralPath $summaryPath -Value $serialized -Encoding utf8 -ErrorAction Stop
+  } catch {
+    throw 'Local test campaign could not record evidence.'
+  }
 }
 
 function Stop-CampaignForSourceIntegrityFailure(
@@ -132,6 +173,10 @@ while ([DateTime]::UtcNow -lt $deadline -and ($MaxIterations -eq 0 -or $iteratio
     if ($null -ne $sourceIntegrityFailure) {
       Stop-CampaignForSourceIntegrityFailure -Iteration $iteration -Phase 'before-command' -Failure $sourceIntegrityFailure -CommandName $command.name
     }
+    $trackedMetadataBefore = Get-CampaignTrackedMetadata
+    if ($null -eq $trackedMetadataBefore) {
+      Stop-CampaignForSourceIntegrityFailure -Iteration $iteration -Phase 'before-command' -Failure 'tracked-tree-dirty' -CommandName $command.name
+    }
     $logPath = Join-Path $campaignDirectory ("local-{0:d3}-{1}.log" -f $iteration, $command.name)
     $started = [DateTime]::UtcNow
     $processEnvironment = [Environment]::GetEnvironmentVariables([EnvironmentVariableTarget]::Process)
@@ -157,6 +202,10 @@ while ([DateTime]::UtcNow -lt $deadline -and ($MaxIterations -eq 0 -or $iteratio
         $exitCode = 1
         $launchError = 'campaign-environment-restore-failed'
       }
+    }
+    $postChildIntegrityFailure = Get-CampaignSourceIntegrityFailure $sourceSha $trackedMetadataBefore
+    if ($null -ne $postChildIntegrityFailure) {
+      Stop-CampaignForSourceIntegrityFailure -Iteration $iteration -Phase 'after-command' -Failure $postChildIntegrityFailure -CommandName $command.name
     }
     $elapsedMs = [int]([DateTime]::UtcNow - $started).TotalMilliseconds
     $event = @{
