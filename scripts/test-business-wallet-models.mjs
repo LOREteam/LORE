@@ -563,7 +563,8 @@ export async function runWalletModelTests() {
   );
   assert.deepEqual(
     pageWalletOverview.normalizeCachedPrivyBalances({ token: "bad", eth: "-1" }),
-    { token: "0.00", eth: "0.0000" },
+    { token: null, eth: null },
+    "unknown cached balances must not be presented as a verified zero",
   );
   assert.equal(pageWalletOverview.normalizePageWalletAddress("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"), "0xd8da6bf26964af9d7eed9e03e53415d37aa96045");
   assert.equal(pageWalletOverview.normalizePageWalletAddress("0xabc"), null);
