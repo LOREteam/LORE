@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { config as loadDotenv } from "dotenv";
 import path from "node:path";
 import { redactProofText } from "./redact-proof-output.mjs";
 import { parseSummaryTimeoutEnv } from "./summary-timeout.mjs";
@@ -96,6 +97,9 @@ const SAFE_NON_CREDENTIAL_ENV_NAMES = new Set([
   "NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER",
 ]);
 const TRUSTED_NPM_LAUNCHER = resolveTrustedNpmCli();
+
+loadDotenv({ path: ".env.local", override: false, quiet: true });
+loadDotenv({ path: ".env", override: false, quiet: true });
 
 function npmRun(script) {
   const command = trustedNpmCommand(["run", script], TRUSTED_NPM_LAUNCHER);
