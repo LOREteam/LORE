@@ -78,7 +78,7 @@ export const WalletTransferRow = React.memo(function WalletTransferRow({
         </span>
       )}
       <div
-        className={`flex h-8 items-center justify-center rounded-lg border px-2 text-[10px] font-semibold uppercase tracking-widest shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ${transferBadgeVariantClasses[assetVariant]}`}
+        className={`flex min-h-11 items-center justify-center rounded-lg border px-2 text-[11px] font-semibold uppercase tracking-widest shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ${transferBadgeVariantClasses[assetVariant]}`}
       >
         <span className="block w-full text-center leading-none">{assetLabel}</span>
       </div>
@@ -88,7 +88,7 @@ export const WalletTransferRow = React.memo(function WalletTransferRow({
         value={value}
         onChange={(e) => onChange(e.target.value.slice(0, 20))}
         maxLength={20}
-        className="lore-nums h-8 min-w-0 px-4 py-1.5 text-sm"
+        className="lore-nums h-11 min-w-0 px-4 py-1.5 text-sm"
         placeholder={placeholder}
         aria-label={`${assetLabel} transfer amount`}
       />
@@ -99,7 +99,7 @@ export const WalletTransferRow = React.memo(function WalletTransferRow({
         size="sm"
         uppercase
         loading={loading}
-        className="h-8 w-full px-3 text-[10px]"
+        className="min-h-11 w-full px-3 text-[11px]"
         aria-label={presentation.actionLabel}
         title={presentation.actionLabel}
       >

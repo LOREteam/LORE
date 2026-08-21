@@ -39,7 +39,7 @@ function HeaderWalletActions({
         variant="secondary"
         size="sm"
         uppercase
-        className="flex-2 min-w-0 px-2 py-1 rounded-md text-[10px] tracking-[0.08em]"
+        className="flex-2 min-h-11 min-w-0 rounded-md px-2 text-[11px] tracking-[0.08em] focus-visible:ring-2 focus-visible:ring-violet-300/70"
       >
         Settings
       </UiButton>
@@ -48,7 +48,7 @@ function HeaderWalletActions({
         variant="ghost"
         size="sm"
         uppercase
-        className="flex-1 min-w-0 px-2 py-1 rounded-md text-[9px] tracking-[0.08em] text-gray-500 hover:bg-red-500/10 hover:border-red-500/20 hover:text-red-400"
+        className="flex-1 min-h-11 min-w-0 rounded-md px-2 text-[11px] tracking-[0.08em] text-gray-300 hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-300 focus-visible:ring-2 focus-visible:ring-red-300/70"
         title="Log out (use carefully)"
       >
         Out
@@ -131,14 +131,14 @@ export function HeaderWalletCard({
   const ethUpdatedAt = formatHeaderWalletBalanceUpdatedAt(privyEthBalanceStatus.updatedAt);
   const tokenUpdatedAt = formatHeaderWalletBalanceUpdatedAt(privyTokenBalanceStatus.updatedAt);
   const ethBalanceClass = ethBalancePresentation.state === "error"
-    ? "font-semibold text-red-200/90"
+    ? "font-semibold text-red-100"
     : ethBalancePresentation.state === "unavailable"
-      ? "font-semibold text-amber-200/80"
+      ? "font-semibold text-amber-100"
       : ethBalancePresentation.state === "refreshing" || ethBalancePresentation.state === "stale"
         ? "text-amber-200/90"
         : "text-gray-400";
   const tokenBalanceClass = tokenBalancePresentation.state === "error"
-    ? "text-red-200/90"
+    ? "text-red-100"
     : tokenBalancePresentation.state === "unavailable"
       ? "text-amber-200/85"
       : tokenBalancePresentation.state === "refreshing" || tokenBalancePresentation.state === "stale"
@@ -194,7 +194,7 @@ export function HeaderWalletCard({
               aria-live="polite"
               className="flex min-h-11 items-center justify-center gap-2 px-1"
             >
-              <p className="min-w-0 truncate text-center text-[10px] font-semibold leading-tight text-red-300/90">
+              <p className="min-w-0 truncate text-center text-[11px] font-semibold leading-tight text-red-300/90">
                 {loginState.error}
               </p>
               {showLoginReload && (
@@ -203,7 +203,7 @@ export function HeaderWalletCard({
                   onClick={() => window.location.reload()}
                   aria-label="Reload page to retry wallet login"
                   title="Reload page to retry wallet login"
-                  className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded border border-red-300/20 px-3 py-1 text-[9px] font-black uppercase tracking-[0.08em] text-red-200/90 outline-none transition-colors hover:border-red-300/35 hover:bg-red-400/10 focus-visible:ring-2 focus-visible:ring-red-300/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090914]"
+                  className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded border border-red-300/20 px-3 py-1 text-[9px] font-black uppercase tracking-[0.08em] text-red-100 outline-none transition-colors hover:border-red-300/35 hover:bg-red-400/10 focus-visible:ring-2 focus-visible:ring-red-300/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090914]"
                 >
                   Reload
                 </button>
@@ -216,8 +216,8 @@ export function HeaderWalletCard({
           <HeaderWalletActions onLogout={onLogout} onOpenWalletSettings={onOpenWalletSettings} />
           <div className="flex-1 min-h-0 px-3 py-1 bg-violet-500/6 flex flex-col gap-0.5">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.08em]">Privy</span>
-              <span className="text-[10px] font-bold uppercase tracking-[0.08em] flex items-center gap-1 text-emerald-400">
+              <span className="text-[11px] text-gray-400 font-bold uppercase tracking-[0.08em]">Privy</span>
+              <span className="text-[11px] font-bold uppercase tracking-[0.08em] flex items-center gap-1 text-emerald-400">
                 <span className="w-1 h-1 rounded-full bg-emerald-400" />
                 Active
               </span>
@@ -227,7 +227,7 @@ export function HeaderWalletCard({
                 type="button"
                 onClick={onCopyEmbeddedAddress}
                 aria-label={embeddedAddressCopied ? "Privy wallet address copied" : "Copy Privy wallet address"}
-                className={embeddedAddressCopied ? "text-[11px] font-mono font-bold text-emerald-300 drop-shadow-[0_0_10px_rgba(52,211,153,0.3)] leading-tight transition-colors duration-200 flex items-center gap-1 group" : "text-[11px] font-mono font-bold text-emerald-400 drop-shadow-[0_0_6px_rgba(52,211,153,0.2)] leading-tight hover:text-emerald-300 transition-colors flex items-center gap-1 group"}
+                className={embeddedAddressCopied ? "group inline-flex min-h-11 items-center gap-1 rounded px-2 text-[11px] font-mono font-bold leading-tight text-emerald-200 drop-shadow-[0_0_10px_rgba(52,211,153,0.3)] transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-300/70" : "group inline-flex min-h-11 items-center gap-1 rounded px-2 text-[11px] font-mono font-bold leading-tight text-emerald-300 drop-shadow-[0_0_6px_rgba(52,211,153,0.2)] transition-colors hover:text-emerald-200 focus-visible:ring-2 focus-visible:ring-emerald-300/70"}
                 title={embeddedAddressCopied ? "Copied" : "Copy address"}
               >
                 {embeddedAddressCopied ? "Copied" : shortenAddress(embeddedWalletAddress)}
@@ -247,11 +247,11 @@ export function HeaderWalletCard({
                   href={explorerAddressUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center justify-center text-emerald-400/40 transition-colors hover:text-emerald-300 shrink-0"
+                  className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded text-emerald-300 transition-colors hover:text-emerald-200 focus-visible:ring-2 focus-visible:ring-emerald-300/70"
                   aria-label="Open Privy wallet address in explorer"
                   title="Open wallet in explorer"
                 >
-                  <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                     <path d="M14 3h7v7" />
                     <path d="M10 14 21 3" />
                     <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
@@ -266,10 +266,10 @@ export function HeaderWalletCard({
                 data-balance-state={ethBalancePresentation.state}
                 title={ethBalancePresentation.label}
               >
-                {ethBalancePresentation.state === "loading" ? <span className="inline-block h-3 w-12 animate-pulse rounded bg-white/10" /> : ethBalancePresentation.text}<span className="text-gray-500 font-medium"> {ethBalancePresentation.suffix}</span>
-                {ethBalancePresentation.state === "refreshing" && <span className="ml-1 text-[8px] font-bold uppercase tracking-[0.06em] text-amber-200/80">Refreshing</span>}
-                {ethBalancePresentation.state === "stale" && <span className="ml-1 text-[8px] font-bold uppercase tracking-[0.06em] text-amber-200/80">Stale</span>}
-                {ethBalancePresentation.state === "error" && <span className="ml-1 text-[8px] font-bold uppercase tracking-[0.06em] text-red-200/90">RPC error</span>}
+                {ethBalancePresentation.state === "loading" ? <span className="inline-block h-3 w-12 animate-pulse rounded bg-white/10" /> : ethBalancePresentation.text}<span className="text-gray-300 font-medium"> {ethBalancePresentation.suffix}</span>
+                {ethBalancePresentation.state === "refreshing" && <span className="ml-1 text-[11px] font-bold uppercase tracking-[0.06em] text-amber-100">Refreshing</span>}
+                {ethBalancePresentation.state === "stale" && <span className="ml-1 text-[11px] font-bold uppercase tracking-[0.06em] text-amber-100">Stale</span>}
+                {ethBalancePresentation.state === "error" && <span className="ml-1 text-[11px] font-bold uppercase tracking-[0.06em] text-red-100">RPC error</span>}
               </span>
               <span
                 aria-label={tokenBalancePresentation.label}
@@ -277,14 +277,14 @@ export function HeaderWalletCard({
                 data-balance-state={tokenBalancePresentation.state}
                 title={tokenBalancePresentation.label}
               >
-                {tokenBalancePresentation.state === "loading" ? <span className="inline-block h-3 w-16 animate-pulse rounded bg-white/10" /> : tokenBalancePresentation.text}<span className="text-[10px] font-medium text-gray-500"> {tokenBalancePresentation.suffix}</span>
-                {tokenBalancePresentation.state === "refreshing" && <span className="ml-1 text-[8px] font-bold uppercase tracking-[0.06em] text-amber-200/80">Refreshing</span>}
-                {tokenBalancePresentation.state === "stale" && <span className="ml-1 text-[8px] font-bold uppercase tracking-[0.06em] text-amber-200/80">Stale</span>}
-                {tokenBalancePresentation.state === "error" && <span className="ml-1 text-[8px] font-bold uppercase tracking-[0.06em] text-red-200/90">RPC error</span>}
+                {tokenBalancePresentation.state === "loading" ? <span className="inline-block h-3 w-16 animate-pulse rounded bg-white/10" /> : tokenBalancePresentation.text}<span className="text-[11px] font-medium text-gray-300"> {tokenBalancePresentation.suffix}</span>
+                {tokenBalancePresentation.state === "refreshing" && <span className="ml-1 text-[11px] font-bold uppercase tracking-[0.06em] text-amber-100">Refreshing</span>}
+                {tokenBalancePresentation.state === "stale" && <span className="ml-1 text-[11px] font-bold uppercase tracking-[0.06em] text-amber-100">Stale</span>}
+                {tokenBalancePresentation.state === "error" && <span className="ml-1 text-[11px] font-bold uppercase tracking-[0.06em] text-red-100">RPC error</span>}
               </span>
             </div>
             {(ethUpdatedAt || tokenUpdatedAt) && (
-              <p className="text-[8px] font-semibold tracking-[0.04em] text-gray-500" data-balance-last-updated>
+              <p className="text-[11px] font-semibold tracking-[0.04em] text-gray-300" data-balance-last-updated>
                 Last updated: {ethUpdatedAt && `ETH ${ethUpdatedAt}`}{ethUpdatedAt && tokenUpdatedAt && " · "}{tokenUpdatedAt && `LINEA ${tokenUpdatedAt}`}
               </p>
             )}
@@ -295,13 +295,13 @@ export function HeaderWalletCard({
           <HeaderWalletActions onLogout={onLogout} onOpenWalletSettings={onOpenWalletSettings} />
           <div className="flex-1 min-h-0 px-3 py-1 bg-violet-500/6 flex flex-col gap-1">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.08em]">Privy</span>
-              <span className="text-[10px] font-bold uppercase tracking-[0.08em] flex items-center gap-1 text-violet-300/90">
+              <span className="text-[11px] text-gray-400 font-bold uppercase tracking-[0.08em]">Privy</span>
+              <span className="text-[11px] font-bold uppercase tracking-[0.08em] flex items-center gap-1 text-violet-300/90">
                 <span className="w-1 h-1 rounded-full bg-violet-300" />
                 Syncing
               </span>
             </div>
-            <p className="text-[10px] text-gray-500 leading-tight">
+            <p className="text-[11px] text-gray-300 leading-tight">
               Restoring embedded wallet session...
             </p>
           </div>
@@ -311,10 +311,10 @@ export function HeaderWalletCard({
           <HeaderWalletActions onLogout={onLogout} onOpenWalletSettings={onOpenWalletSettings} />
           <div className="flex-1 min-h-0 px-3 py-1 bg-violet-500/6 flex flex-col gap-1">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] text-gray-400 font-bold uppercase tracking-[0.08em]">Privy</span>
-              <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-amber-400/90">Not created</span>
+              <span className="text-[11px] text-gray-400 font-bold uppercase tracking-[0.08em]">Privy</span>
+              <span className="text-[11px] font-bold uppercase tracking-[0.08em] text-amber-400/90">Not created</span>
             </div>
-            <p className="text-[10px] text-gray-500 leading-tight">
+            <p className="text-[11px] text-gray-300 leading-tight">
               Create embedded wallet in Settings to play and receive rewards.
             </p>
           </div>

@@ -191,7 +191,7 @@ export const HubSidePanel = React.memo(function HubSidePanel({
             />
 
             {walletSetupError && (
-              <p role="alert" className="hidden min-[900px]:block px-1 text-center text-[10px] font-semibold text-red-300">
+              <p role="alert" className="hidden min-[900px]:block px-1 text-center text-[11px] font-semibold text-red-300">
                 {walletSetupError}
               </p>
             )}
@@ -423,15 +423,15 @@ function MobileMiningActionBar({
       <div className="rounded-2xl border border-violet-300/16 bg-[#070711]/96 p-2 shadow-[0_14px_34px_rgba(2,6,23,0.48)] backdrop-blur-xl">
         <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2 px-0.5">
           <div className="min-w-0" aria-label={selection.fullLabel}>
-            <div className="text-[8px] font-black uppercase leading-none tracking-[0.12em] text-slate-500">
+            <div className="text-[11px] font-black uppercase leading-none tracking-[0.12em] text-slate-300">
               {selection.count} selected
             </div>
-            <div className="mt-1 truncate text-[10px] font-bold leading-none text-emerald-200" title={selection.fullLabel}>
+            <div className="mt-1 truncate text-[11px] font-bold leading-none text-emerald-200" title={selection.fullLabel}>
               {selection.compactLabel}
             </div>
           </div>
           <div className="min-w-0 text-right">
-            <div className="text-[8px] font-black uppercase leading-none tracking-[0.12em] text-slate-500">Exact total</div>
+            <div className="text-[11px] font-black uppercase leading-none tracking-[0.12em] text-slate-300">Exact total</div>
             <output
               aria-label="Exact total stake"
               className={cn(
@@ -458,7 +458,7 @@ function MobileMiningActionBar({
               disabled={Boolean(readOnlyReason) || isPending || isRevealing || isAutoMining}
               maxLength={20}
               className={cn(
-                "lore-nums h-11 w-full rounded-xl border bg-black/34 px-2 text-sm font-black tabular-nums text-white outline-none transition focus:border-emerald-300/45 focus:ring-2 focus:ring-emerald-300/16",
+                "lore-nums h-11 w-full rounded-xl border bg-black/34 px-2 text-sm font-black tabular-nums text-white outline-none transition focus-visible:border-emerald-300/70 focus-visible:ring-2 focus-visible:ring-emerald-300/40",
                 manualBetForm.betAmountError ? "border-red-400/35" : "border-white/8",
               )}
             />
@@ -483,7 +483,7 @@ function MobileMiningActionBar({
             variant={manualAction.variant}
             size="sm"
             uppercase
-            className="h-11 min-w-0 rounded-xl px-1 text-[9px] leading-tight"
+            className="h-11 min-w-0 rounded-xl px-1 text-[11px] leading-tight"
           >
             {compactManualActionLabel(manualAction.label)}
           </UiButton>
@@ -507,13 +507,13 @@ function MobileMiningActionBar({
             variant={autoAction.variant}
             size="sm"
             uppercase
-            className="h-11 min-w-0 rounded-xl px-1 text-[9px] leading-tight"
+            className="h-11 min-w-0 rounded-xl px-1 text-[11px] leading-tight"
           >
             {compactAutoActionLabel(autoAction.label)}
           </UiButton>
         </div>
 
-        <div className="mt-1 flex min-h-3 items-center justify-between gap-2 px-0.5 text-[8px] font-bold uppercase tracking-[0.06em] text-slate-500">
+        <div className="mt-1 flex min-h-3 items-center justify-between gap-2 px-0.5 text-[11px] font-bold uppercase tracking-[0.06em] text-slate-300">
           <span id="mobile-bet-amount-error" role={manualBetForm.betAmountError ? "alert" : undefined} className={manualBetForm.betAmountError ? "truncate text-red-300" : "truncate"}>
             {visibleStatus}
           </span>

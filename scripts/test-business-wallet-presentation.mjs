@@ -67,8 +67,8 @@ export function runWalletPresentationTests() {
   const hubSidePanelSourceForTypography = readFileSync("app/components/HubSidePanel.tsx", "utf8");
   assert.match(
     hubSidePanelSourceForTypography,
-    /value=\{manualBetForm\.betAmount\}[\s\S]*lore-nums h-11 w-full[\s\S]*tabular-nums/,
-    "mobile compact manual bet amount input must use the shared numeric font class",
+    /value=\{manualBetForm\.betAmount\}[\s\S]*lore-nums h-11 w-full[\s\S]*tabular-nums[\s\S]*focus-visible:ring-2/,
+    "mobile compact manual bet amount input must keep the shared numeric font class and visible keyboard focus",
   );
   assert.match(
     hubSidePanelSourceForTypography,
@@ -212,6 +212,22 @@ export function runWalletPresentationTests() {
     walletTransferPanelsSource,
     /role="list"[\s\S]*aria-label="LINEA transfer history"[\s\S]*explorerLabel[\s\S]*role="listitem"[\s\S]*aria-label=\{explorerLabel\}[\s\S]*title=\{explorerLabel\}/,
     "wallet transfer history rows must expose list semantics and clear Lineascan link labels",
+  );
+  const headerWalletCardSource = readFileSync("app/components/header/HeaderWalletCard.tsx", "utf8");
+  assert.match(
+    headerWalletCardSource,
+    /Copy Privy wallet address[\s\S]*min-h-11[\s\S]*text-\[11px\][\s\S]*focus-visible:ring-2/,
+    "header wallet copy action must keep a readable 44px target and visible keyboard focus",
+  );
+  assert.match(
+    headerWalletCardSource,
+    /min-h-11 min-w-11[\s\S]*focus-visible:ring-2[\s\S]*Open Privy wallet address in explorer/,
+    "header wallet Explorer action must keep a 44px touch target and visible keyboard focus",
+  );
+  assert.match(
+    walletTransferPanelsSource,
+    /min-h-11 items-center[\s\S]*text-\[11px\][\s\S]*focus-visible:ring-2/,
+    "transfer Explorer links must keep a 44px touch target, readable text, and visible keyboard focus",
   );
   assert.match(
     walletTransferPanelsSource,
