@@ -18,6 +18,7 @@ interface HistoryViewRow {
 
 interface AnalyticsBlockchainHistoryPanelProps {
   historyViewData: HistoryViewRow[];
+  historyError: string | null;
   historyLoading: boolean;
   historyRefreshing: boolean;
   newHistoryIds: Set<string>;
@@ -31,6 +32,7 @@ function parseHistoryWinningTile(value: string) {
 
 export const AnalyticsBlockchainHistoryPanel = React.memo(function AnalyticsBlockchainHistoryPanel({
   historyViewData,
+  historyError,
   historyLoading,
   historyRefreshing,
   newHistoryIds,
@@ -46,20 +48,35 @@ export const AnalyticsBlockchainHistoryPanel = React.memo(function AnalyticsBloc
           <div className="w-1 h-4 bg-violet-500 rounded-sm shadow-[0_0_10px_rgba(139,92,246,0.4)]" />
           Blockchain History
         </h2>
-        {(historyLoading || historyViewData.length > 0) && (
+        {(historyError || historyLoading || historyViewData.length > 0) && (
           <span
             role="status"
             aria-live="polite"
             aria-busy={historyRefreshing || historyLoading}
-            className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider ${historyRefreshing || historyLoading ? "text-violet-300" : "text-gray-300"}`}
+            className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider ${historyError ? "text-amber-300" : historyRefreshing || historyLoading ? "text-violet-300" : "text-gray-300"}`}
           >
-            <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${historyRefreshing || historyLoading ? "bg-violet-400 animate-synced-pulse" : "bg-emerald-400/80"}`} />
-            {historyRefreshing || historyLoading ? "Refreshing" : "Ready"}
+            <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${historyError ? "bg-amber-400" : historyRefreshing || historyLoading ? "bg-violet-400 animate-synced-pulse" : "bg-emerald-400/80"}`} />
+            {historyError ? "Stale" : historyRefreshing || historyLoading ? "Refreshing" : "Ready"}
           </span>
         )}
       </div>
 
-      {historyLoading && historyViewData.length === 0 ? (
+      {historyError && historyViewData.length === 0 ? (
+        <div role="alert" className="flex flex-col items-center justify-center gap-2 py-4 text-center">
+          <svg className="h-5 w-5 text-amber-400/70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+          </svg>
+          <span className="text-[11px] text-amber-400/90">Unable to load blockchain history</span>
+          <span className="text-[10px] text-gray-400">Please refresh in a moment. Previously verified rounds remain visible when available.</span>
+        </div>
+      ) : (
+        <>
+          {historyError && (
+            <div role="alert" className="mb-2 rounded-md border border-amber-400/20 bg-amber-500/8 px-3 py-2 text-[10px] text-amber-200">
+              Refresh failed. Showing the last verified blockchain history.
+            </div>
+          )}
+          {historyLoading && historyViewData.length === 0 ? (
         <div role="status" aria-live="polite" aria-busy="true" className="space-y-1.5 py-2">
           <div className="flex items-center gap-2 mb-3">
             <div aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-synced-pulse" />
@@ -75,13 +92,13 @@ export const AnalyticsBlockchainHistoryPanel = React.memo(function AnalyticsBloc
             </div>
           ))}
         </div>
-      ) : historyViewData.length === 0 ? (
+          ) : historyViewData.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-8 px-4 text-center">
           <div className="mb-2 text-2xl opacity-30">⛏</div>
           <p className="text-[11px] font-bold uppercase tracking-wider text-gray-300">No rounds yet</p>
           <p className="mt-1 text-[10px] text-gray-400">Place your first bet to start mining the Lattice</p>
         </div>
-      ) : (
+          ) : (
         <UiTable aria-label="Blockchain history" tone="violet" maxHeightClass="max-h-[260px]">
           <table className="w-full text-left">
             <UiTableHead>
@@ -155,6 +172,8 @@ export const AnalyticsBlockchainHistoryPanel = React.memo(function AnalyticsBloc
             </UiTableBody>
           </table>
         </UiTable>
+          )}
+        </>
       )}
     </UiPanel>
   );

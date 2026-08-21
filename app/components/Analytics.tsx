@@ -20,6 +20,7 @@ interface AnalyticsProps {
     isDailyJackpot: boolean;
     isWeeklyJackpot: boolean;
   }>;
+  historyError: string | null;
   historyLoading: boolean;
   historyRefreshing: boolean;
   deposits: DepositEntry[] | null;
@@ -39,6 +40,7 @@ interface AnalyticsProps {
 export const Analytics = React.memo(function Analytics({
   walletAddress,
   historyViewData,
+  historyError,
   historyLoading,
   historyRefreshing,
   deposits,
@@ -131,6 +133,7 @@ export const Analytics = React.memo(function Analytics({
 
       <AnalyticsBlockchainHistoryPanel
         historyViewData={historyViewData}
+        historyError={historyError}
         historyLoading={historyLoading}
         historyRefreshing={historyRefreshing}
         newHistoryIds={newHistoryIds}

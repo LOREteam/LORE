@@ -84,6 +84,7 @@ interface CreateLineaOreClientViewPropsOptions {
   headerEthLoading: HeaderProps["privyEthBalanceLoading"];
   headerLineaBalance: HeaderProps["privyTokenBalance"];
   headerLineaLoading: HeaderProps["privyTokenBalanceLoading"];
+  historyError: PageTabContentProps["analyticsProps"]["historyError"];
   historyLoading: PageTabContentProps["analyticsProps"]["historyLoading"];
   historyRefreshing: PageTabContentProps["analyticsProps"]["historyRefreshing"];
   historyViewData: PageTabContentProps["analyticsProps"]["historyViewData"];
@@ -244,6 +245,7 @@ export function createLineaOreClientViewProps({
   headerEthLoading,
   headerLineaBalance,
   headerLineaLoading,
+  historyError,
   historyLoading,
   historyRefreshing,
   historyViewData,
@@ -461,6 +463,7 @@ export function createLineaOreClientViewProps({
       activeTab,
       normalizedEmbeddedAddress,
       historyViewData,
+      historyError,
       historyLoading,
       historyRefreshing,
       deposits,

@@ -122,6 +122,7 @@ export function buildLineaOreClientRuntimeViewProps({
     headerEthLoading: walletRuntime.headerEthLoading,
     headerLineaBalance: walletRuntime.headerLineaBalance,
     headerLineaLoading: walletRuntime.headerLineaLoading,
+    historyError: gameData.historyError,
     historyLoading: gameData.historyLoading,
     historyRefreshing: gameData.historyRefreshing,
     historyViewData: gameData.historyViewData,

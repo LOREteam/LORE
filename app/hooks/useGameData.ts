@@ -268,6 +268,7 @@ export function useGameData(options?: UseGameDataOptions) {
 
   const {
     historyViewData,
+    historyError,
     historyLoading,
     historyRefreshing,
     refetchHistory,
@@ -308,6 +309,7 @@ export function useGameData(options?: UseGameDataOptions) {
       currentAllowance,
       actualCurrentEpoch: resolvedCurrentEpoch,
       historyViewData,
+      historyError,
       historyLoading,
       historyRefreshing,
       epochDurationChange,
@@ -349,6 +351,7 @@ export function useGameData(options?: UseGameDataOptions) {
       currentAllowance,
       resolvedCurrentEpoch,
       historyViewData,
+      historyError,
       historyLoading,
       historyRefreshing,
       epochDurationChange,

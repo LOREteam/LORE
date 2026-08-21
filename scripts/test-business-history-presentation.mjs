@@ -67,6 +67,32 @@ export function runHistoryPresentationTests() {
   }));
   assert.match(emptyHistoryMarkup, /No rounds yet/, "empty blockchain history must render an explicit empty state");
   assert.doesNotMatch(emptyHistoryMarkup, /Loading rounds/, "settled empty blockchain history must not look stuck loading");
+  const unavailableHistoryMarkup = renderToStaticMarkup(createElement(AnalyticsBlockchainHistoryPanel, {
+    historyViewData: [],
+    historyError: "safe error",
+    historyLoading: false,
+    historyRefreshing: false,
+    newHistoryIds: new Set(),
+  }));
+  assert.match(unavailableHistoryMarkup, /Unable to load blockchain history/, "failed round RPC read must be explicit");
+  assert.doesNotMatch(unavailableHistoryMarkup, /No rounds yet/, "failed round RPC read must not become an empty history");
+  const staleHistoryMarkup = renderToStaticMarkup(createElement(AnalyticsBlockchainHistoryPanel, {
+    historyViewData: [{
+      roundId: "42",
+      poolDisplay: "1.00",
+      winningTile: "1",
+      isResolved: true,
+      userWon: false,
+      isDailyJackpot: false,
+      isWeeklyJackpot: false,
+    }],
+    historyError: "safe error",
+    historyLoading: false,
+    historyRefreshing: false,
+    newHistoryIds: new Set(),
+  }));
+  assert.match(staleHistoryMarkup, /Showing the last verified blockchain history/, "failed refresh must retain the verified round snapshot");
+  assert.match(staleHistoryMarkup, /#42/, "failed refresh must keep the verified round rows visible");
   const loadingHistoryMarkup = renderToStaticMarkup(createElement(AnalyticsBlockchainHistoryPanel, {
     historyViewData: [],
     historyLoading: true,

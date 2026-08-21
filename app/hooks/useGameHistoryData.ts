@@ -40,6 +40,7 @@ export function useGameHistoryData(options: UseGameHistoryDataOptions) {
     refetch: refetchHistory,
     isLoading: isHistoryDataLoading,
     isFetching: isHistoryDataFetching,
+    isError: isHistoryDataError,
   } = useReadContracts({
     contracts: historyEpochsList.map((id) => ({
       address: CONTRACT_ADDRESS,
@@ -75,6 +76,7 @@ export function useGameHistoryData(options: UseGameHistoryDataOptions) {
     data: historyUserBetsData,
     isLoading: isHistoryUserBetsLoading,
     isFetching: isHistoryUserBetsFetching,
+    isError: isHistoryUserBetsError,
   } = useReadContracts({
     contracts: historyUserBetsCalls,
     query: {
@@ -98,31 +100,35 @@ export function useGameHistoryData(options: UseGameHistoryDataOptions) {
     [historyData, historyEpochsList, historyUserBetsData],
   );
 
+  const historyReadFailed = isHistoryDataError || isHistoryUserBetsError;
   const lastReadyHistoryKeyRef = useRef("");
   const lastReadyHistoryDataRef = useRef<ReturnType<typeof buildHistoryViewData>>([]);
 
   useEffect(() => {
-    if (builtHistoryViewData.length === 0 || !historySnapshotKey) return;
+    if (historyReadFailed || builtHistoryViewData.length === 0 || !historySnapshotKey) return;
     lastReadyHistoryKeyRef.current = historySnapshotKey;
     lastReadyHistoryDataRef.current = builtHistoryViewData;
-  }, [builtHistoryViewData, historySnapshotKey]);
+  }, [builtHistoryViewData, historyReadFailed, historySnapshotKey]);
 
   const historyViewData = useMemo(() => {
-    if (builtHistoryViewData.length > 0) return builtHistoryViewData;
+    if (!historyReadFailed && builtHistoryViewData.length > 0) return builtHistoryViewData;
     if (historySnapshotKey && lastReadyHistoryKeyRef.current === historySnapshotKey) {
       return lastReadyHistoryDataRef.current;
     }
-    return builtHistoryViewData;
-  }, [builtHistoryViewData, historySnapshotKey]);
+    return historyReadFailed ? [] : builtHistoryViewData;
+  }, [builtHistoryViewData, historyReadFailed, historySnapshotKey]);
 
-  const historyLoading = historyViewData.length === 0 && (
+  const historyError = historyReadFailed
+    ? "Blockchain history is temporarily unavailable. Refresh the Analytics tab to retry."
+    : null;
+  const historyLoading = !historyError && historyViewData.length === 0 && (
     isHistoryDataLoading
     || isHistoryDataFetching
     || isHistoryUserBetsLoading
     || isHistoryUserBetsFetching
   );
 
-  const historyRefreshing = historyViewData.length > 0 && (
+  const historyRefreshing = !historyError && historyViewData.length > 0 && (
     isHistoryDataFetching
     || isHistoryUserBetsFetching
   );
@@ -130,6 +136,7 @@ export function useGameHistoryData(options: UseGameHistoryDataOptions) {
   return useMemo(
     () => ({
       historyViewData,
+      historyError,
       historyLoading,
       historyRefreshing,
       refetchHistory,
@@ -139,6 +146,7 @@ export function useGameHistoryData(options: UseGameHistoryDataOptions) {
     }),
     [
       historyViewData,
+      historyError,
       historyLoading,
       historyRefreshing,
       refetchHistory,

@@ -50,6 +50,10 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
    duplicate login action. Desktop and mobile actions share the existing
    in-flight guard.
 
+10. Deposit and blockchain-round histories now retain a last verified snapshot
+    (or remain null) after an API/RPC error and render an explicit unavailable
+    or stale state rather than a false empty history.
+
 ## Campaign status
 
 - `local-20260821-final-r3` iterations 1–3 completed all seven isolated gates.

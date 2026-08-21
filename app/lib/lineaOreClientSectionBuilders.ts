@@ -331,6 +331,7 @@ type BuildPageTabContentPropsOptions = {
   activeTab: PageTabContentProps["activeTab"];
   normalizedEmbeddedAddress?: `0x${string}`;
   historyViewData: PageTabContentProps["analyticsProps"]["historyViewData"];
+  historyError: PageTabContentProps["analyticsProps"]["historyError"];
   historyLoading: PageTabContentProps["analyticsProps"]["historyLoading"];
   historyRefreshing: PageTabContentProps["analyticsProps"]["historyRefreshing"];
   deposits: PageTabContentProps["analyticsProps"]["deposits"];
@@ -404,6 +405,7 @@ export function buildPageTabContentProps({
   activeTab,
   normalizedEmbeddedAddress,
   historyViewData,
+  historyError,
   historyLoading,
   historyRefreshing,
   deposits,
@@ -477,6 +479,7 @@ export function buildPageTabContentProps({
     analyticsProps: {
       walletAddress: normalizedEmbeddedAddress,
       historyViewData,
+      historyError,
       historyLoading,
       historyRefreshing,
       deposits,
