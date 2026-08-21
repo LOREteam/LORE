@@ -64,6 +64,10 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 12. Direct public URLs now pass their server-selected tab into the first app-shell
     render, and FAQ, White Paper, and Leaderboards are statically imported so
     SSR returns their requested content rather than Hub or a loading fallback.
+13. The Hub onboarding checklist now exposes only the next safe existing action:
+    login or wallet creation, Wallet Settings for backup/funding, or scroll to
+    bet preparation. Unknown ETH never counts as gas-ready, and first-bet
+    browser markers are scoped to the wallet address.
 ## Campaign status
 
 - `local-20260821-final-r3` iterations 1–3 completed all seven isolated gates.

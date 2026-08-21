@@ -487,6 +487,8 @@ export function createLineaOreClientViewProps({
       walletConnected,
       embeddedWalletSyncing,
       onCreateEmbeddedWallet: createEmbeddedWallet,
+      onOpenWalletSettings: openWalletSettings,
+      formattedEthBalance: formattedPrivyEthBalance,
       gridDisplayEpoch,
       gridSelectedTiles,
       handleAutoMineWithGuard,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { getAddress } from "viem";
 import type { WagmiBalanceLike } from "../lib/balanceFormatting";
 import { APP_CHAIN_ID, CONTRACT_ADDRESS } from "../lib/constants";
 import { validateBetAmount } from "../lib/utils";
@@ -39,20 +40,33 @@ interface UseMiningGuardsOptions {
 
 const LEGACY_LAST_BET_KEY = "lore:last-bet";
 const LAST_BET_KEY = `lore:last-bet:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
-const CONFIRMED_FIRST_BET_KEY = `lore:onboarding:first-confirmed-bet:v1:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
+const CONFIRMED_FIRST_BET_KEY_PREFIX = `lore:onboarding:first-confirmed-bet:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 
-function markConfirmedFirstBet() {
+export function confirmedFirstBetStorageKey(walletAddress: string | null | undefined): string | null {
+  if (!walletAddress) return null;
   try {
-    localStorage.setItem(CONFIRMED_FIRST_BET_KEY, "1");
+    return `${CONFIRMED_FIRST_BET_KEY_PREFIX}:${getAddress(walletAddress).toLowerCase()}`;
+  } catch {
+    return null;
+  }
+}
+
+function markConfirmedFirstBet(walletAddress: string | null | undefined) {
+  const key = confirmedFirstBetStorageKey(walletAddress);
+  if (!key) return;
+  try {
+    localStorage.setItem(key, "1");
   } catch {
     // The checklist remains conservative when persistent browser storage is unavailable.
   }
 }
 
-export function hasConfirmedFirstBet(): boolean {
+export function hasConfirmedFirstBet(walletAddress: string | null | undefined): boolean {
   if (typeof window === "undefined") return false;
+  const key = confirmedFirstBetStorageKey(walletAddress);
+  if (!key) return false;
   try {
-    return window.localStorage.getItem(CONFIRMED_FIRST_BET_KEY) === "1";
+    return window.localStorage.getItem(key) === "1";
   } catch {
     return false;
   }
@@ -127,6 +141,7 @@ export function useMiningGuards({
   const [lastBet, setLastBet] = useState<LastBet | null>(null);
   const [balanceWarningDismissed, setBalanceWarningDismissed] = useState(false);
   const hasPlayableWallet = Boolean(connectedWalletAddress || embeddedWalletAddress);
+  const firstBetWalletAddress = embeddedWalletAddress ?? connectedWalletAddress ?? null;
   // V9 atomic resolve: the previous epoch is finalized in the same tx that
   // advances `currentEpoch`, so the winning tile is already on-chain when
   // the new epoch starts. The grid-reveal animation is non-blocking — never
@@ -194,7 +209,7 @@ export function useMiningGuards({
       }
       if (result !== "confirmed") return;
       notify("Bet confirmed on-chain.", "success");
-      markConfirmedFirstBet();
+      markConfirmedFirstBet(firstBetWalletAddress);
       onBetConfirmed();
       if (tilesSnapshot.length > 0) {
         const entry = { tiles: tilesSnapshot, amount };
@@ -206,7 +221,7 @@ export function useMiningGuards({
         setLastBet(entry);
       }
     },
-    [bettingLocked, hasPlayableWallet, liveStateReady, notify, onBetConfirmed, onManualMine, onOpenWalletSettings, readOnlyReason, selectedTiles],
+    [bettingLocked, firstBetWalletAddress, hasPlayableWallet, liveStateReady, notify, onBetConfirmed, onManualMine, onOpenWalletSettings, readOnlyReason, selectedTiles],
   );
 
   const handleRepeatLastBet = useCallback(async () => {
@@ -236,14 +251,14 @@ export function useMiningGuards({
     }
     if (result !== "confirmed") return;
     notify("Repeat bet confirmed on-chain.", "success");
-    markConfirmedFirstBet();
+    markConfirmedFirstBet(firstBetWalletAddress);
     onBetConfirmed();
     try {
       localStorage.setItem(LAST_BET_KEY, JSON.stringify(lastBet));
     } catch {
       // ignore storage failures
     }
-  }, [bettingLocked, hasPlayableWallet, lastBet, liveStateReady, notify, onBetConfirmed, onDirectMine, onOpenWalletSettings, readOnlyReason]);
+  }, [bettingLocked, firstBetWalletAddress, hasPlayableWallet, lastBet, liveStateReady, notify, onBetConfirmed, onDirectMine, onOpenWalletSettings, readOnlyReason]);
 
   const handleAutoMineWithGuard = useCallback(
     async (bet: string, blocks: number, rounds: number) => {

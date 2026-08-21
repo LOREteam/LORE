@@ -141,7 +141,7 @@ export const HubSidePanel = React.memo(function HubSidePanel({
 
   return (
     <>
-      <div className="gameplay-action-rail min-[900px]:col-span-3 min-w-0 flex flex-col gap-1.5">
+      <div id="bet-panel" className="gameplay-action-rail min-[900px]:col-span-3 min-w-0 flex flex-col gap-1.5">
         {chatOpen ? (
           <div id="chat-panel-slot" className="min-h-141 flex-1" />
         ) : (

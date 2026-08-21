@@ -9,6 +9,7 @@ import * as miningManualActionsModule from "../app/hooks/useMiningManualActions.
 import * as maintenanceOverlayModule from "../app/components/MaintenanceOverlay.tsx";
 import * as mobileTabNavModule from "../app/components/MobileTabNav.tsx";
 import * as hubGameBoardModule from "../app/components/HubGameBoard.tsx";
+import * as miningGuardsModule from "../app/hooks/useMiningGuards.ts";
 
 const autoResolve = autoResolveModule.default ?? autoResolveModule;
 const backupGate = backupGateModule.default ?? backupGateModule;
@@ -18,6 +19,7 @@ const mobileTabNav = mobileTabNavModule.default ?? mobileTabNavModule;
 const MaintenanceOverlay = maintenanceOverlay.MaintenanceOverlay;
 const MobileTabNav = mobileTabNav.MobileTabNav;
 const hubGameBoard = hubGameBoardModule.default ?? hubGameBoardModule;
+const miningGuards = miningGuardsModule.default ?? miningGuardsModule;
 
 function listSourceFiles(root, sourceFilePattern = /\.(?:ts|tsx|mjs)$/) {
   const entries = readdirSync(root, { withFileTypes: true });
@@ -59,6 +61,7 @@ export async function runWalletShellAndMiningActionTests() {
     walletAddress: null,
     walletConnected: false,
     formattedBalance: null,
+    formattedEthBalance: null,
     lowEthBalance: true,
   }), {
     wallet: false,
@@ -67,6 +70,45 @@ export async function runWalletShellAndMiningActionTests() {
     linea: false,
     firstBet: false,
   }, "a guest must not be told that a wallet backup was saved");
+  assert.equal(hubGameBoard.getOnboardingState({
+    walletAddress: backupAddress,
+    walletConnected: true,
+    formattedBalance: "1.00",
+    formattedEthBalance: null,
+    lowEthBalance: false,
+  }).eth, false, "an unknown ETH read must not be presented as gas-ready");
+  assert.deepEqual(
+    hubGameBoard.getOnboardingNextAction({
+      onboarding: { wallet: false, backup: false, eth: false, linea: false, firstBet: false },
+      walletCta: "login",
+    }),
+    { kind: "login", label: "Log in to continue" },
+    "the first unauthenticated checklist action must use the existing login flow",
+  );
+  assert.deepEqual(
+    hubGameBoard.getOnboardingNextAction({
+      onboarding: { wallet: true, backup: false, eth: false, linea: false, firstBet: false },
+      walletCta: "ready",
+    }),
+    { kind: "settings", label: "Open Wallet Settings" },
+    "backup and funding checklist steps must use the existing Wallet Settings flow",
+  );
+  assert.deepEqual(
+    hubGameBoard.getOnboardingNextAction({
+      onboarding: { wallet: true, backup: true, eth: true, linea: true, firstBet: false },
+      walletCta: "ready",
+    }),
+    { kind: "bet", label: "Choose tiles and bet" },
+    "the first-bet checklist step must only navigate to bet preparation",
+  );
+  const firstBetWallet = "0x0000000000000000000000000000000000000002";
+  const secondBetWallet = "0x0000000000000000000000000000000000000003";
+  const firstBetKey = miningGuards.confirmedFirstBetStorageKey(firstBetWallet);
+  const secondBetKey = miningGuards.confirmedFirstBetStorageKey(secondBetWallet);
+  assert.ok(firstBetKey);
+  assert.ok(secondBetKey);
+  assert.notEqual(firstBetKey, secondBetKey, "first-bet checklist markers must be scoped per wallet");
+  assert.equal(miningGuards.confirmedFirstBetStorageKey("invalid-address"), null);
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const storedValues = new Map([["lineaore:privy-backup-confirmed", "invalid-address"]]);
   const removedStorageKeys = [];
@@ -90,6 +132,9 @@ export async function runWalletShellAndMiningActionTests() {
     assert.equal(storedValues.get("lineaore:privy-backup-confirmed"), backupAddress);
     assert.equal(backupGate.isBackupConfirmedFor(backupAddress), true);
     assert.equal(backupGate.isBackupConfirmedFor("invalid-address"), false);
+    storedValues.set(firstBetKey, "1");
+    assert.equal(miningGuards.hasConfirmedFirstBet(firstBetWallet), true);
+    assert.equal(miningGuards.hasConfirmedFirstBet(secondBetWallet), false, "a different wallet must not inherit the first-bet marker");
   } finally {
     if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
     else delete globalThis.window;

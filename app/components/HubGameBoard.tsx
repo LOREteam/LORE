@@ -39,7 +39,9 @@ interface HubGameBoardProps {
   walletConnected: boolean;
   embeddedWalletSyncing: boolean;
   onCreateEmbeddedWallet: () => Promise<void>;
+  onOpenWalletSettings: () => void;
   formattedBalance: string | null;
+  formattedEthBalance: string | null;
   lowEthBalance: boolean;
   isDailyJackpot: boolean;
   isWeeklyJackpot: boolean;
@@ -92,7 +94,9 @@ export const HubGameBoard = React.memo(function HubGameBoard({
   walletConnected,
   embeddedWalletSyncing,
   onCreateEmbeddedWallet,
+  onOpenWalletSettings,
   formattedBalance,
+  formattedEthBalance,
   lowEthBalance,
   isDailyJackpot,
   isWeeklyJackpot,
@@ -122,8 +126,10 @@ export const HubGameBoard = React.memo(function HubGameBoard({
     embeddedWalletSyncing,
   });
   const { walletCta: rewardsWalletCta } = rewardsWalletPresentation;
-  const onboarding = getOnboardingState({ walletAddress, walletConnected, formattedBalance, lowEthBalance });
+  const onboarding = getOnboardingState({ walletAddress, walletConnected, formattedBalance, formattedEthBalance, lowEthBalance });
   const onboardingComplete = Object.values(onboarding).every(Boolean);
+  const onboardingAction = getOnboardingNextAction({ onboarding, walletCta: rewardsWalletCta });
+  const nextOnboardingIndex = Object.values(onboarding).findIndex((complete) => !complete);
   return (
     <div className="gameplay-board-zone min-[900px]:col-span-9 flex min-w-0 flex-col gap-1.5">
       <MiningGrid
@@ -167,12 +173,32 @@ export const HubGameBoard = React.memo(function HubGameBoard({
             </span>
           </div>
           <ol className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-5">
-            <OnboardingStep complete={onboarding.wallet} label="Create wallet" detail={onboarding.wallet ? "Ready" : "Log in to create your LORE wallet"} />
-            <OnboardingStep complete={onboarding.backup} label="Back up key" detail={onboarding.backup ? "Saved" : "Export the private key before funding"} />
-            <OnboardingStep complete={onboarding.eth} label="Add ETH" detail={onboarding.eth ? "Gas ready" : "Fund ETH for gas"} />
-            <OnboardingStep complete={onboarding.linea} label="Add LINEA" detail={onboarding.linea ? "Balance detected" : "Fund LINEA for a stake"} />
-            <OnboardingStep complete={onboarding.firstBet} label="First bet" detail={onboarding.firstBet ? "Confirmed on-chain" : "Choose tiles and confirm a bet"} />
+            <OnboardingStep complete={onboarding.wallet} current={nextOnboardingIndex === 0} label="Create wallet" detail={onboarding.wallet ? "Ready" : "Log in to create your LORE wallet"} />
+            <OnboardingStep complete={onboarding.backup} current={nextOnboardingIndex === 1} label="Back up key" detail={onboarding.backup ? "Saved" : "Export the private key before funding"} />
+            <OnboardingStep complete={onboarding.eth} current={nextOnboardingIndex === 2} label="Add ETH" detail={onboarding.eth ? "Gas ready" : !hasKnownFormattedBalance(formattedEthBalance) ? "ETH balance unavailable — check Wallet Settings" : "Fund ETH for gas"} />
+            <OnboardingStep complete={onboarding.linea} current={nextOnboardingIndex === 3} label="Add LINEA" detail={onboarding.linea ? "Balance detected" : "Fund LINEA for a stake"} />
+            <OnboardingStep complete={onboarding.firstBet} current={nextOnboardingIndex === 4} label="First bet" detail={onboarding.firstBet ? "Confirmed on-chain" : "Choose tiles and confirm a bet"} />
           </ol>
+          {onboardingAction && (
+            <UiButton
+              onClick={() => {
+                if (onboardingAction.kind === "login") {
+                  requestWalletLogin();
+                } else if (onboardingAction.kind === "create") {
+                  void onCreateEmbeddedWallet();
+                } else if (onboardingAction.kind === "settings") {
+                  onOpenWalletSettings();
+                } else {
+                  document.getElementById("bet-panel")?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }
+              }}
+              variant="primary"
+              size="sm"
+              className="mt-3 min-h-11 px-3"
+            >
+              {onboardingAction.label}
+            </UiButton>
+          )}
         </section>
       )}
 
@@ -225,15 +251,20 @@ export function getOnboardingState({
   walletAddress,
   walletConnected,
   formattedBalance,
+  formattedEthBalance,
   lowEthBalance,
-}: Pick<HubGameBoardProps, "walletAddress" | "walletConnected" | "formattedBalance" | "lowEthBalance">) {
+}: Pick<HubGameBoardProps, "walletAddress" | "walletConnected" | "formattedBalance" | "formattedEthBalance" | "lowEthBalance">) {
   return {
     wallet: Boolean(walletAddress && walletConnected),
     backup: Boolean(walletAddress && isBackupConfirmedFor(walletAddress)),
-    eth: Boolean(walletAddress && !lowEthBalance),
-    linea: hasPositiveFormattedBalance(formattedBalance),
-    firstBet: hasConfirmedFirstBet(),
+    eth: Boolean(walletAddress && hasKnownFormattedBalance(formattedEthBalance) && !lowEthBalance),
+    linea: Boolean(walletAddress && hasPositiveFormattedBalance(formattedBalance)),
+    firstBet: hasConfirmedFirstBet(walletAddress),
   };
+}
+
+function hasKnownFormattedBalance(value: string | null): boolean {
+  return Boolean(value && /^\d+(?:\.\d+)?$/.test(value.trim()));
 }
 
 function hasPositiveFormattedBalance(value: string | null): boolean {
@@ -241,11 +272,30 @@ function hasPositiveFormattedBalance(value: string | null): boolean {
   return /[1-9]/.test(value.replace(".", ""));
 }
 
-function OnboardingStep({ complete, label, detail }: { complete: boolean; label: string; detail: string }) {
+export function getOnboardingNextAction({
+  onboarding,
+  walletCta,
+}: {
+  onboarding: ReturnType<typeof getOnboardingState>;
+  walletCta: ReturnType<typeof deriveWalletCta>;
+}): { kind: "login" | "create" | "settings" | "bet"; label: string } | null {
+  if (!onboarding.wallet) {
+    if (walletCta === "login") return { kind: "login", label: "Log in to continue" };
+    if (walletCta === "create") return { kind: "create", label: "Create wallet" };
+    return null;
+  }
+  if (!onboarding.backup || !onboarding.eth || !onboarding.linea) {
+    return { kind: "settings", label: "Open Wallet Settings" };
+  }
+  if (!onboarding.firstBet) return { kind: "bet", label: "Choose tiles and bet" };
+  return null;
+}
+
+function OnboardingStep({ complete, current, label, detail }: { complete: boolean; current: boolean; label: string; detail: string }) {
   return (
     <li className={`rounded-lg border px-3 py-2 ${complete ? "border-emerald-300/24 bg-emerald-400/8" : "border-white/8 bg-black/14"}`}>
       <div className={`text-xs font-black uppercase tracking-[0.1em] ${complete ? "text-emerald-200" : "text-slate-100"}`}>
-        {complete ? "Done" : "Next"} · {label}
+        {complete ? "Done" : current ? "Next" : "To do"} · {label}
       </div>
       <p className="mt-1 text-xs leading-snug text-slate-300">{detail}</p>
     </li>

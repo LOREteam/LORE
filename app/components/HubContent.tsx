@@ -51,6 +51,8 @@ interface HubContentProps {
   walletConnected: boolean;
   embeddedWalletSyncing: boolean;
   onCreateEmbeddedWallet: () => Promise<void>;
+  onOpenWalletSettings: () => void;
+  formattedEthBalance: string | null;
   gridDisplayEpoch: string | null;
   gridSelectedTiles: number[];
   handleAutoMineWithGuard: (betStr: string, blocks: number, rounds: number) => Promise<void>;
@@ -97,6 +99,8 @@ export const HubContent = React.memo(function HubContent({
   walletConnected,
   embeddedWalletSyncing,
   onCreateEmbeddedWallet,
+  onOpenWalletSettings,
+  formattedEthBalance,
   gridDisplayEpoch,
   gridSelectedTiles,
   handleAutoMineWithGuard,
@@ -252,7 +256,9 @@ export const HubContent = React.memo(function HubContent({
             walletConnected={walletConnected}
             embeddedWalletSyncing={embeddedWalletSyncing}
             onCreateEmbeddedWallet={onCreateEmbeddedWallet}
+            onOpenWalletSettings={onOpenWalletSettings}
             formattedBalance={formattedBalance}
+            formattedEthBalance={formattedEthBalance}
             lowEthBalance={lowEthBalance}
             isDailyJackpot={isDailyJackpot}
             isWeeklyJackpot={isWeeklyJackpot}
