@@ -124,7 +124,7 @@ export function BackupGate({
           </div>
 
           <p id="backup-gate-description" className="text-sm text-gray-300 leading-relaxed text-center">
-            Your Privy wallet is linked to your Privy account, so the same email or social login can restore access while that account remains available. <span className="text-amber-300 font-semibold">A private-key backup is your independent recovery route</span> if that access changes. We cannot reset or recover the key for you.
+            Your Privy wallet normally returns when you sign in with the same enabled method that created it (email or your external wallet) while that method remains available. <span className="text-amber-300 font-semibold">A private-key backup is your independent recovery route</span> if that access changes. We cannot reset or recover the key for you.
           </p>
 
           <p className="text-xs text-gray-500 text-center">

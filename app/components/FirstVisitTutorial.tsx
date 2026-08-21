@@ -68,7 +68,7 @@ const TUTORIAL_STEPS: TutorialStep[] = [
     title: "Wallet settings are your control center",
     body: "Open Wallet Settings from the header wallet card whenever you need to manage the embedded Privy wallet or the app's wallet tools.",
     bullets: [
-      "Privy lets you create the embedded wallet, copy its address, export a private-key backup, and deposit ETH or LINEA into it. Sign in with the same account to restore normal access; keep the backup as an independent recovery route.",
+      "After email sign-in, Privy normally creates the embedded wallet. If it is not ready, create it in Wallet Settings; then copy its address, export a private-key backup, and fund it with ETH or LINEA. Sign in with the same enabled method to restore normal access while it remains available; keep the backup as an independent recovery route.",
       "Transfer is for withdrawing ETH or LINEA and reviewing transfer history.",
       "General and Scan cover sound settings, reduced motion, pending-transaction tools, and deep reward scans.",
     ],
