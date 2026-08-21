@@ -57,13 +57,11 @@ while ([DateTime]::UtcNow -lt $deadline -and ($MaxIterations -eq 0 -or $iteratio
     $previousTsxDisableCache = [Environment]::GetEnvironmentVariable('TSX_DISABLE_CACHE', [EnvironmentVariableTarget]::Process)
     $exitCode = 1
     $launchError = $null
-    $errorCountBeforeLaunch = $Error.Count
     $global:LASTEXITCODE = 1
     try {
       [Environment]::SetEnvironmentVariable('TSX_DISABLE_CACHE', '1', [EnvironmentVariableTarget]::Process)
       & $runtime @($command.arguments) *> $logPath
       if ($null -ne $LASTEXITCODE) { $exitCode = $LASTEXITCODE }
-      if ($Error.Count -gt $errorCountBeforeLaunch) { $launchError = 'child-launch-failed' }
     } catch {
       $launchError = 'child-launch-failed'
     } finally {
