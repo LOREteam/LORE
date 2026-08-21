@@ -28,6 +28,7 @@ const SCOPED_EPOCHS_TABLE = "scoped_epochs";
 const SCOPED_BETS_TABLE = "scoped_bets";
 const SCOPED_JACKPOTS_TABLE = "scoped_jackpots";
 const SCOPED_REWARD_CLAIMS_TABLE = "scoped_reward_claims";
+const SCOPED_USER_ACTIVITY_TABLE = "scoped_user_activity";
 const SCOPED_PROTOCOL_FEE_FLUSHES_TABLE = "scoped_protocol_fee_flushes";
 const SCOPED_GLOBAL_STATS_AGGREGATE_TABLE = "scoped_global_stats_aggregate";
 const SCOPED_GLOBAL_STATS_DIRTY_TABLE = "scoped_global_stats_dirty";
@@ -103,6 +104,33 @@ export interface RewardClaimStorageRow {
   blockNumber: string;
 }
 
+export type UserActivityType =
+  | "bet"
+  | "reward_claim"
+  | "reward_batch_claim"
+  | "rebate_claim"
+  | "rebate_batch_claim";
+
+export interface UserActivityStorageRow {
+  eventId: string;
+  user: string;
+  activityType: UserActivityType;
+  epoch?: string;
+  amount: string;
+  amountNum: number;
+  txHash: string;
+  blockNumber: string;
+}
+
+export interface UserActivityPage {
+  rows: UserActivityStorageRow[];
+  hasMore: boolean;
+  nextCursor: string | null;
+  /** New ledger rows are durable, but historical raw rows are not backfilled. */
+  coverage: "partial";
+  indexedThroughBlock: string;
+}
+
 export interface FeeFlushStorageRow {
   id: string;
   ownerAmount: string;
@@ -150,6 +178,7 @@ const INDEXER_EVENT_PATHS: Record<string, IndexerEventCategory> = {
 };
 const MAX_INDEXER_EVENT_ID_LENGTH = 160;
 const MAX_INDEXER_EVENT_PAYLOAD_BYTES = 16 * 1024;
+const USER_ACTIVITY_TYPES = new Set<UserActivityType>(["bet", "reward_claim", "reward_batch_claim", "rebate_claim", "rebate_batch_claim"]);
 
 function stringifyBoundedIndexerEventPayload(payload: JsonMap) {
   try {
@@ -961,6 +990,7 @@ function purgeScopedContractData(exceptScope: string) {
     SCOPED_BETS_TABLE,
     SCOPED_JACKPOTS_TABLE,
     SCOPED_REWARD_CLAIMS_TABLE,
+    SCOPED_USER_ACTIVITY_TABLE,
     SCOPED_PROTOCOL_FEE_FLUSHES_TABLE,
     SCOPED_GLOBAL_STATS_AGGREGATE_TABLE,
     SCOPED_GLOBAL_STATS_DIRTY_TABLE,
@@ -1035,6 +1065,7 @@ function hasForeignScopedContractData(exceptScope: string) {
     SCOPED_BETS_TABLE,
     SCOPED_JACKPOTS_TABLE,
     SCOPED_REWARD_CLAIMS_TABLE,
+    SCOPED_USER_ACTIVITY_TABLE,
     SCOPED_PROTOCOL_FEE_FLUSHES_TABLE,
     SCOPED_GLOBAL_STATS_AGGREGATE_TABLE,
     SCOPED_GLOBAL_STATS_DIRTY_TABLE,
@@ -1693,6 +1724,8 @@ export function rollbackIndexerToBlock(
       .run(CURRENT_STORAGE_SCOPE, blockNumber);
     db.prepare(`DELETE FROM ${SCOPED_REWARD_CLAIMS_TABLE} WHERE scope = ? AND block_number > ?`)
       .run(CURRENT_STORAGE_SCOPE, blockNumber);
+    db.prepare(`DELETE FROM ${SCOPED_USER_ACTIVITY_TABLE} WHERE scope = ? AND block_number > ?`)
+      .run(CURRENT_STORAGE_SCOPE, blockNumber);
     db.prepare(`DELETE FROM ${SCOPED_PROTOCOL_FEE_FLUSHES_TABLE} WHERE scope = ? AND block_number > ?`)
       .run(CURRENT_STORAGE_SCOPE, blockNumber);
     db.prepare(`DELETE FROM ${SCOPED_INDEXER_EVENTS_TABLE} WHERE scope = ? AND block_number > ?`)
@@ -2163,8 +2196,155 @@ export function getEpochTilePoolsWei(epoch: number, gridSize = 25) {
   return perTile;
 }
 
+function normalizeCanonicalActivityEventId(value: string) {
+  const normalized = value.trim().toLowerCase();
+  const canonicalBet = /^[1-9]\d*_0x[0-9a-f]{64}_\d+$/.test(normalized);
+  const canonicalLog = /^0x[0-9a-f]{64}:\d+$/.test(normalized);
+  return canonicalBet || canonicalLog ? normalized : null;
+}
+
+function normalizeActivityTxHash(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return /^0x[0-9a-f]{64}$/.test(normalized) ? normalized : null;
+}
+
+function encodeUserActivityCursor(blockNumber: string, eventId: string) {
+  return Buffer.from(JSON.stringify({ b: blockNumber, i: eventId }), "utf8").toString("base64url");
+}
+
+export function decodeUserActivityCursor(value: string | null | undefined) {
+  if (!value || value.length > 512 || !/^[A-Za-z0-9_-]+$/.test(value)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
+    const blockNumber = typeof parsed.b === "string" ? parseSafePositiveIntegerString(parsed.b) : null;
+    const eventId = typeof parsed.i === "string" ? normalizeCanonicalActivityEventId(parsed.i) : null;
+    return blockNumber === null || eventId === null ? null : { blockNumber, eventId };
+  } catch {
+    return null;
+  }
+}
+
+export function upsertUserActivity(rows: UserActivityStorageRow[]) {
+  if (rows.length === 0) return;
+  const statement = db.prepare(`
+    INSERT INTO ${SCOPED_USER_ACTIVITY_TABLE}(
+      scope, event_id, user, activity_type, epoch, amount, amount_num, tx_hash, block_number
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(scope, event_id) DO UPDATE SET
+      user = excluded.user,
+      activity_type = excluded.activity_type,
+      epoch = excluded.epoch,
+      amount = excluded.amount,
+      amount_num = excluded.amount_num,
+      tx_hash = excluded.tx_hash,
+      block_number = excluded.block_number
+    WHERE excluded.block_number >= ${SCOPED_USER_ACTIVITY_TABLE}.block_number
+  `);
+  runInTransaction(() => {
+    for (const row of rows) {
+      const eventId = normalizeCanonicalActivityEventId(row.eventId);
+      const txHash = normalizeActivityTxHash(row.txHash);
+      const epoch = row.epoch === undefined ? null : parseSafePositiveIntegerString(row.epoch);
+      const blockNumber = parseSafePositiveIntegerString(row.blockNumber);
+      let user: string;
+      try {
+        user = getAddress(row.user.trim().replace(/^0X/, "0x")).toLowerCase();
+      } catch {
+        continue;
+      }
+      if (eventId === null || txHash === null || blockNumber === null || !USER_ACTIVITY_TYPES.has(row.activityType) ||
+        typeof row.amount !== "string" || row.amount.length === 0 || row.amount.length > 128 ||
+        !Number.isFinite(row.amountNum) || (row.epoch !== undefined && epoch === null)) continue;
+      statement.run(
+        CURRENT_STORAGE_SCOPE,
+        eventId,
+        user,
+        row.activityType,
+        epoch,
+        row.amount,
+        row.amountNum,
+        txHash,
+        blockNumber,
+      );
+    }
+  }, "user_activity");
+}
+
+export function getUserActivityPage(
+  user: string,
+  options?: { cursor?: string | null; limit?: number },
+): UserActivityPage {
+  let normalizedUser: string;
+  try {
+    normalizedUser = getAddress(user.trim().replace(/^0X/, "0x")).toLowerCase();
+  } catch {
+    return { rows: [], hasMore: false, nextCursor: null, coverage: "partial", indexedThroughBlock: "0" };
+  }
+  const limit = normalizePageLimit(options?.limit, 32, 64);
+  const cursor = decodeUserActivityCursor(options?.cursor);
+  const rows = (cursor
+    ? db.prepare(`
+        SELECT event_id, user, activity_type, epoch, amount, amount_num, tx_hash, block_number
+        FROM ${SCOPED_USER_ACTIVITY_TABLE}
+        WHERE scope = ? AND user = ?
+          AND (block_number < ? OR (block_number = ? AND event_id < ?))
+        ORDER BY block_number DESC, event_id DESC
+        LIMIT ?
+      `).all(CURRENT_STORAGE_SCOPE, normalizedUser, cursor.blockNumber, cursor.blockNumber, cursor.eventId, limit + 1)
+    : db.prepare(`
+        SELECT event_id, user, activity_type, epoch, amount, amount_num, tx_hash, block_number
+        FROM ${SCOPED_USER_ACTIVITY_TABLE}
+        WHERE scope = ? AND user = ?
+        ORDER BY block_number DESC, event_id DESC
+        LIMIT ?
+      `).all(CURRENT_STORAGE_SCOPE, normalizedUser, limit + 1)
+  ) as Array<Record<string, unknown>>;
+  const pageRows = rows.slice(0, limit).flatMap((row) => {
+    const eventId = normalizeCanonicalActivityEventId(String(row.event_id ?? ""));
+    const txHash = normalizeActivityTxHash(String(row.tx_hash ?? ""));
+    const blockNumber = parseSafePositiveIntegerString(String(row.block_number ?? ""));
+    const epochValue = row.epoch == null ? undefined : parseSafePositiveIntegerString(String(row.epoch));
+    const activityType = row.activity_type as UserActivityType;
+    if (eventId === null || txHash === null || blockNumber === null ||
+      !USER_ACTIVITY_TYPES.has(activityType) ||
+      (row.epoch != null && epochValue === null)) return [];
+    return [{
+      eventId,
+      user: normalizedUser,
+      activityType,
+      ...(epochValue === undefined ? {} : { epoch: String(epochValue) }),
+      amount: String(row.amount ?? "0"),
+      amountNum: Number(row.amount_num ?? 0),
+      txHash,
+      blockNumber: String(blockNumber),
+    } satisfies UserActivityStorageRow];
+  });
+  const tail = pageRows.at(-1);
+  return {
+    rows: pageRows,
+    hasMore: rows.length > limit,
+    nextCursor: rows.length > limit && tail ? encodeUserActivityCursor(tail.blockNumber, tail.eventId) : null,
+    coverage: "partial",
+    indexedThroughBlock: getCanonicalLastIndexedBlock(),
+  };
+}
+
 export function upsertBets(rows: BetStorageRow[]) {
   if (rows.length === 0) return;
+  const activityRows = rows.flatMap((row) => {
+    const identity = buildIndexerBetIdentity(row.epoch, row.txHash, row.blockNumber, row.logIndex);
+    if (identity === null || identity.id === identity.legacyId) return [];
+    return [{
+      eventId: identity.id,
+      user: row.user,
+      activityType: "bet" as const,
+      epoch: row.epoch,
+      amount: row.totalAmount,
+      amountNum: row.totalAmountNum,
+      txHash: row.txHash,
+      blockNumber: row.blockNumber,
+    } satisfies UserActivityStorageRow];
+  });
   const migrateLegacyStatement = db.prepare(`
     UPDATE ${SCOPED_BETS_TABLE}
     SET id = ?
@@ -2256,6 +2436,7 @@ export function upsertBets(rows: BetStorageRow[]) {
     if (aggregateChanged || leaderboardChanged || readiness.needsRevisionBump || leaderboardReadiness.needsRevisionBump) {
       bumpPublicReadModelRevision();
     }
+    upsertUserActivity(activityRows);
   }, "bets");
 }
 
@@ -2438,6 +2619,16 @@ export function upsertJackpots(rows: JackpotStorageRow[]) {
 }
 export function upsertRewardClaims(rows: RewardClaimStorageRow[]) {
   if (rows.length === 0) return;
+  const activityRows = rows.map((row) => ({
+    eventId: row.id,
+    user: row.user,
+    activityType: "reward_claim" as const,
+    epoch: row.epoch,
+    amount: row.reward,
+    amountNum: row.rewardNum,
+    txHash: row.txHash,
+    blockNumber: row.blockNumber,
+  } satisfies UserActivityStorageRow));
   const statement = db.prepare(`
     INSERT INTO ${SCOPED_REWARD_CLAIMS_TABLE}(scope, id, epoch, user, reward, reward_num, tx_hash, block_number)
     VALUES(?, ?, ?, ?, ?, ?, ?, ?)
@@ -2471,6 +2662,7 @@ export function upsertRewardClaims(rows: RewardClaimStorageRow[]) {
     }
     const leaderboardChanged = finalizeLeaderboardReadModelAfterRawMutationInTransaction(changed);
     if (leaderboardChanged || leaderboardReadiness.needsRevisionBump) bumpPublicReadModelRevision();
+    upsertUserActivity(activityRows);
   }, "reward_claims");
 }
 

@@ -8,6 +8,7 @@ import { AnalyticsAchievementsPanel } from "./analytics/AnalyticsAchievementsPan
 import { AnalyticsDepositsPanel } from "./analytics/AnalyticsDepositsPanel";
 import { AnalyticsJackpotHistoryPanel } from "./analytics/AnalyticsJackpotHistoryPanel";
 import { AnalyticsBlockchainHistoryPanel } from "./analytics/AnalyticsBlockchainHistoryPanel";
+import { AnalyticsActivityPanel } from "./analytics/AnalyticsActivityPanel";
 
 interface AnalyticsProps {
   walletAddress?: string;
@@ -130,6 +131,8 @@ export const Analytics = React.memo(function Analytics({
         jackpotHistoryLoading={jackpotHistoryLoading}
         onRefreshJackpotHistory={onRefreshJackpotHistory}
       />
+
+      <AnalyticsActivityPanel walletAddress={walletAddress} />
 
       <AnalyticsBlockchainHistoryPanel
         historyViewData={historyViewData}

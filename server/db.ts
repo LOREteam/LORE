@@ -209,6 +209,28 @@ function bootstrapSchema() {
     CREATE INDEX IF NOT EXISTS idx_scoped_reward_claims_scope_epoch ON scoped_reward_claims(scope, epoch DESC, block_number DESC);
     CREATE INDEX IF NOT EXISTS idx_scoped_reward_claims_scope_block ON scoped_reward_claims(scope, block_number DESC, id DESC);
 
+    -- The user-facing ledger is deliberately append-only from the first
+    -- indexer version that writes it. Existing raw tables are not silently
+    -- backfilled: callers must surface the resulting partial coverage.
+    CREATE TABLE IF NOT EXISTS scoped_user_activity (
+      scope TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      user TEXT NOT NULL,
+      activity_type TEXT NOT NULL CHECK(activity_type IN (
+        'bet', 'reward_claim', 'reward_batch_claim', 'rebate_claim', 'rebate_batch_claim'
+      )),
+      epoch INTEGER,
+      amount TEXT NOT NULL,
+      amount_num REAL NOT NULL,
+      tx_hash TEXT NOT NULL,
+      block_number INTEGER NOT NULL,
+      PRIMARY KEY(scope, event_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_scoped_user_activity_scope_user_block
+      ON scoped_user_activity(scope, user, block_number DESC, event_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_scoped_user_activity_scope_block
+      ON scoped_user_activity(scope, block_number DESC, event_id DESC);
+
     CREATE TABLE IF NOT EXISTS protocol_fee_flushes (
       id TEXT PRIMARY KEY,
       owner_amount TEXT NOT NULL,

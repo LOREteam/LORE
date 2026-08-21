@@ -71,6 +71,7 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
     bet preparation. Unknown ETH never counts as gas-ready, and first-bet
     browser markers are scoped to the wallet address.
 
+14. A new `scoped_user_activity` ledger now stores canonical indexed bets and reward/rebate claim events with user/block/event indexes and reorg rollback. Its API and Analytics panel explicitly label coverage `partial`: rows are durable once indexed, but existing raw history is not silently backfilled. The panel preserves loading, unavailable, stale, empty, and Explorer-link states rather than implying an empty complete history.
 ## Pre-document verification snapshot
 
 - The isolated business suite passed at `786b8692b` after stale-fixture fixes.

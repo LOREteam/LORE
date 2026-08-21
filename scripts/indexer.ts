@@ -61,9 +61,11 @@ import {
   setMetaJson,
   upsertProtocolFeeFlushes,
   upsertRewardClaims,
+  upsertUserActivity,
   type FeeFlushStorageRow,
   type IndexerBlockCheckpoint,
   type RewardClaimStorageRow,
+  type UserActivityStorageRow,
 } from "../server/storage";
 import {
   findLatestCanonicalCheckpoint,
@@ -1037,10 +1039,25 @@ function writeRewardClaims(rewardClaims: RewardClaimRecord[]) {
 function writeBatchClaims(records: BatchClaimRecord[]) {
   if (records.length === 0) return;
   const patch: Record<string, unknown> = {};
+  const activityRows: UserActivityStorageRow[] = [];
   for (const row of records) {
     patch[row.id] = row;
+    activityRows.push({
+      eventId: row.id,
+      user: row.user,
+      // RebateClaimed logs are excluded above when their transaction also
+      // has RebateBatchClaimed, so one batch can never produce two rows.
+      activityType: row.kind === "reward"
+        ? "reward_batch_claim"
+        : row.epochsClaimed === 1 ? "rebate_claim" : "rebate_batch_claim",
+      amount: row.totalAmount,
+      amountNum: Number(row.totalAmount),
+      txHash: row.txHash,
+      blockNumber: row.blockNumber,
+    });
   }
   storagePatch("gamedata/batchClaims", patch);
+  upsertUserActivity(activityRows);
 }
 
 function writeResolverRewards(records: ResolverRewardRecord[]) {
