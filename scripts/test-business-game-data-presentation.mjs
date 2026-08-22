@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import * as miningGridModule from "../app/components/MiningGrid.tsx";
 import * as gameDataHelpersModule from "../app/hooks/useGameData.helpers.ts";
 import * as roundPresentationModule from "../app/lib/roundPresentation.ts";
+
+function firstMiningGridTileMarkup(markup) {
+  const match = markup.match(/<button\b[^>]*\bdata-tile-id="1"[^>]*>[\s\S]*?<\/button>/);
+  assert.ok(match, "MiningGrid SSR output must include the first tile button");
+  return match[0];
+}
 
 export function runGameDataPresentationTests() {
   const gameDataHelpers = gameDataHelpersModule.default ?? gameDataHelpersModule;
@@ -234,6 +242,47 @@ export function runGameDataPresentationTests() {
     1,
     "a positive own stake must remain visible even when an upstream player count is zero",
   );
+  const renderMiningGrid = (overrides = {}) =>
+    renderToStaticMarkup(
+      React.createElement(miningGrid.MiningGrid, {
+        tileViewData: [{ tileId: 1, users: 4, poolDisplay: "2.5", hasMyBet: false }],
+        coldBootDefaults: false,
+        liveStateReady: true,
+        selectedTiles: [],
+        winningTileId: null,
+        isRevealing: false,
+        isAnalyzing: false,
+        reducedMotion: true,
+        showSelection: false,
+        onTileClick: () => {},
+        ...overrides,
+      }),
+    );
+  const syncingTile = firstMiningGridTileMarkup(renderMiningGrid({ liveStateReady: false }));
+  assert.match(syncingTile, /disabled=""/);
+  assert.match(syncingTile, /aria-label="Tile 1, live state syncing"/);
+  assert.match(syncingTile, />\.\.\.<\/span>/);
+  assert.match(syncingTile, />-<\/span>/);
+  assert.doesNotMatch(syncingTile, />2\.5<\/span>|>4<\/span>/);
+  const coldBootTile = firstMiningGridTileMarkup(
+    renderMiningGrid({ liveStateReady: false, coldBootDefaults: true }),
+  );
+  assert.match(coldBootTile, /disabled=""/);
+  assert.match(coldBootTile, /aria-label="Tile 1, live state syncing"/);
+  assert.match(coldBootTile, />2\.5<\/span>/);
+  assert.match(coldBootTile, />4<\/span>/);
+  const emptyTile = firstMiningGridTileMarkup(
+    renderMiningGrid({
+      tileViewData: [{ tileId: 1, users: 7, poolDisplay: "0.004", hasMyBet: false }],
+    }),
+  );
+  assert.doesNotMatch(emptyTile, /disabled=""/);
+  assert.match(emptyTile, /aria-label="Tile 1, 0 players, 0 LINEA pooled"/);
+  assert.match(emptyTile, />0<\/span>/);
+  assert.doesNotMatch(emptyTile, />7<\/span>/);
+  const resolvingTile = firstMiningGridTileMarkup(renderMiningGrid({ isRevealing: true }));
+  assert.match(resolvingTile, /disabled=""/);
+  assert.match(resolvingTile, /ore-tile-resolving-dim/);
   assert.equal(
     miningGrid.isMiningGridTileSelectable({ liveStateReady: true, isRevealing: false, isAnalyzing: true }),
     true,
