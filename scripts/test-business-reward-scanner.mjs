@@ -182,6 +182,11 @@ export async function runRewardScannerTests() {
     "a v3 empty cache is a verified no-reward result",
   );
   assert.equal(rewardScanner.isRewardScanCacheCoveredForEpoch(verifiedEmptyCache, 100n), true);
+  assert.equal(
+    rewardScanner.getCachedRewardScanState(verifiedEmptyCache, "0xabc", 100n).status,
+    "verified",
+    "a complete v3 empty cache is the only verified no-reward result",
+  );
   assert.equal(rewardScanner.isRewardScanCacheCoveredForEpoch(verifiedEmptyCache, 101n), false, "a cache verified for an older epoch must refresh immediately");
   assert.equal(
     rewardScanner.getCachedRewardScanState(verifiedEmptyCache, "0xabc", 101n).status,
@@ -235,6 +240,32 @@ export async function runRewardScannerTests() {
   }, 2);
   assert.equal(legacyEmptyCache.isVerified, false, "a v2 empty cache cannot prove that no rewards exist");
   assert.equal(legacyEmptyCache.verifiedAt, null);
+  for (const legacyLabel of ["v2", "v1"]) {
+    const spoofedLegacyCache = rewardScanner.parseRewardScanCacheEnvelope({
+      cacheVersion: 3,
+      verifiedAt,
+      savedAt: verifiedAt,
+      lastScannedEpoch: "100",
+      deepestScannedEpoch: "1",
+      wins: [],
+    }, 2);
+    assert.equal(spoofedLegacyCache.isVerified, false, legacyLabel + " cache must not self-upgrade by claiming cacheVersion 3");
+    assert.equal(
+      rewardScanner.getCachedRewardScanState(spoofedLegacyCache, "0xabc", 100n).status,
+      "idle",
+      legacyLabel + " cache must not restore a verified reward state",
+    );
+  }
+  const malformedV3Cache = rewardScanner.parseRewardScanCacheEnvelope({
+    cacheVersion: 3,
+    verifiedAt,
+    savedAt: verifiedAt,
+    lastScannedEpoch: "100",
+    deepestScannedEpoch: "1",
+    wins: "not-an-array",
+  }, 3);
+  assert.equal(malformedV3Cache.isVerified, false, "malformed v3 cache must fail closed");
+  assert.equal(rewardScanner.getCachedRewardScanState(malformedV3Cache, "0xabc", 100n).status, "idle");
   assert.deepEqual(
     rewardScanner.getRewardScanFailureState({
       walletAddress: "0xabc",

@@ -1223,8 +1223,18 @@ export async function runChatAndClientSafetyTests() {
   );
   assert.match(
     readFileSync("app/hooks/useRewardScanner.ts", "utf8"),
-    /const cacheKey = getRewardScanCacheKey\(address\)[\s\S]*let sourceKey = cacheKey[\s\S]*sourceKey = v1Key[\s\S]*localStorage\.removeItem\(sourceKey\)/,
-    "reward scan cache reads must clear corrupt or invalid v2 and legacy cache entries",
+    /const verifiedAt = sourceVersion === 3 && parsed\.cacheVersion === 3[\s\S]*\? normalizeCacheTimestamp\(parsed\.verifiedAt\)[\s\S]*: null;[\s\S]*const isVerified = verifiedAt !== null && lastScannedEpoch !== null && deepestScannedEpoch !== null;/,
+    "reward scan cache verification must require a complete v3 envelope",
+  );
+  assert.match(
+    readFileSync("app/hooks/useRewardScanner.ts", "utf8"),
+    /const v3Raw = localStorage\.getItem\(v3Key\);[\s\S]*if \(v3Raw\) return parseRewardScanCacheEnvelope\(JSON\.parse\(v3Raw\), 3\);[\s\S]*const v2Raw = localStorage\.getItem\(v2Key\);[\s\S]*if \(v2Raw\) return parseRewardScanCacheEnvelope\(JSON\.parse\(v2Raw\), 2\);[\s\S]*const v1Raw = localStorage\.getItem\(v1Key\);[\s\S]*if \(v1Raw\) return parseRewardScanCacheEnvelope\(JSON\.parse\(v1Raw\), 2\);[\s\S]*catch \{[\s\S]*return \{ \.\.\.EMPTY_REWARD_SCAN_CACHE \};/,
+    "reward scan cache loader must route legacy and malformed entries through the untrusted path",
+  );
+  assert.match(
+    readFileSync("app/hooks/useRewardScanner.ts", "utf8"),
+    /setUnclaimedWins\(cached\.isVerified \? cached\.wins : \[\]\);[\s\S]*setRewardScanState\(getCachedRewardScanState\(cached, normalizedAddress, actualCurrentEpoch\)\);[\s\S]*getRewardScanRescanDelayMs\(cacheCoversCurrentEpoch \? cached\.verifiedAt : null\)/,
+    "reward scan restore must expose rows only from verified cache and rescan stale coverage",
   );
   assert.match(
     readFileSync("app/hooks/useDepositHistory.ts", "utf8"),
