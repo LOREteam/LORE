@@ -358,9 +358,24 @@ function compactLines(output, limit = 24) {
 }
 
 function formatCodeBlock(value) {
-  const lines = compactLines(value);
+  return formatCodeBlockLines(compactLines(value));
+}
+
+function formatCodeBlockLines(lines) {
   if (lines.length === 0) return "_No output captured._";
   return ["```text", ...lines, "```"].join("\n");
+}
+
+function formatMatrixCodeBlock(value, safeLogPath) {
+  const lines = compactLines(value)
+    .map((line) => {
+      const logAssignment = /\blog\s*=/i.exec(line);
+      if (!logAssignment) return line;
+      if (!safeLogPath) return null;
+      return `${line.slice(0, logAssignment.index)}log=${safeLogPath}`;
+    })
+    .filter(Boolean);
+  return formatCodeBlockLines(lines);
 }
 
 function summarizePlanner(step) {
@@ -470,7 +485,7 @@ if (matrixSummary.log) {
 }
 
 let analyzer = null;
-if (matrixSummary.log) {
+if (logBindingBefore) {
   analyzer = runStep(
     "dry-run proof analyzer",
     nodeCommand([
@@ -484,6 +499,9 @@ if (matrixSummary.log) {
     ]),
   );
 }
+const analyzerSkipMessage = matrixSummary.log
+  ? "- analyzer skipped because the matrix dry-run log did not pass safe binding"
+  : "- analyzer skipped because the matrix dry-run did not expose a log path";
 
 const plannerSummary = summarizePlanner(planner);
 const pendingSummary = summarizePendingNonce(pendingNonce);
@@ -661,7 +679,7 @@ ${formatCodeBlock(pendingNonce.output)}
 Command:
 
 \`\`\`powershell
-$env:LIVE_CANARY_RPC_LABEL = "${process.env.LIVE_CANARY_RPC_LABEL || DEFAULT_RPC_LABEL}"
+# LIVE_CANARY_RPC_LABEL is read from the local environment.
 npm.cmd run live:canary:v10:matrix
 \`\`\`
 
@@ -688,7 +706,7 @@ ${renderBullets([
 
 Redacted excerpt:
 
-${formatCodeBlock(matrix.output)}
+${formatMatrixCodeBlock(matrix.output, matrixSummary.log)}
 
 ## Dry-Run Proof Analysis
 
@@ -706,7 +724,7 @@ ${analyzer ? renderBullets([
   sha256Bullet("logSha256", analyzerSummary.logSha256),
   bullet("logBytes", analyzerSummary.logBytes),
   bullet("missingGasCases", analyzerSummary.missingGasCases),
-]) : "- analyzer skipped because the matrix dry-run did not expose a log path"}
+]) : analyzerSkipMessage}
 
 Redacted excerpt:
 
