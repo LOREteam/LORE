@@ -19,6 +19,219 @@ function assertRewardScannerPresentation() {
   assert.equal(result.status, 0, `reward scanner presentation fixture failed:\n${result.stderr || result.stdout}`);
 }
 
+function createRewardScanMemoryStorage(entries = []) {
+  const values = new Map(entries);
+  const reads = [];
+  return {
+    reads,
+    getItem(key) {
+      reads.push(key);
+      return values.get(key) ?? null;
+    },
+  };
+}
+
+function assertRewardScanCacheStorageAndRestore(rewardScanner) {
+  const cacheAddress = "0x52908400098527886e0f7030069857d2e4169ee7";
+  const checksumAddress = "0x52908400098527886E0F7030069857D2E4169EE7";
+  const v1Key = "lore:reward-scan:v1:" + cacheAddress;
+  const v2Key = "lore:reward-scan:v2:" + cacheAddress;
+  const v3Key = "lore:reward-scan:v3:" + cacheAddress;
+  assert.deepEqual(
+    [
+      rewardScanner.getRewardScanCacheKey(checksumAddress, 1),
+      rewardScanner.getRewardScanCacheKey(checksumAddress, 2),
+      rewardScanner.getRewardScanCacheKey(checksumAddress, 3),
+    ],
+    [v1Key, v2Key, v3Key],
+    "reward cache keys must normalize every supported storage version",
+  );
+
+  const now = 2_000_000;
+  const verifiedAt = 1_999_000;
+  const wins = [{ epoch: "7", amountWei: "11" }];
+  const v3Payload = {
+    cacheVersion: 3,
+    verifiedAt,
+    savedAt: verifiedAt,
+    lastScannedEpoch: "100",
+    deepestScannedEpoch: "1",
+    wins,
+  };
+  const spoofedLegacyPayload = {
+    ...v3Payload,
+    wins: [{ epoch: "8", amountWei: "12" }],
+  };
+  const priorityStorage = createRewardScanMemoryStorage([
+    [v3Key, JSON.stringify(v3Payload)],
+    [v2Key, JSON.stringify(spoofedLegacyPayload)],
+    [v1Key, JSON.stringify(spoofedLegacyPayload)],
+  ]);
+  const currentCache = rewardScanner.loadRewardScanCacheFromStorage(cacheAddress, priorityStorage);
+  assert.deepEqual(priorityStorage.reads, [v3Key], "a present v3 cache must take precedence over legacy entries");
+  assert.equal(currentCache.isVerified, true);
+  assert.deepEqual(
+    rewardScanner.deriveRewardScanCacheRestore(currentCache, cacheAddress, 100n, now),
+    {
+      wins,
+      state: {
+        status: "verified",
+        walletAddress: cacheAddress,
+        lastVerifiedAt: verifiedAt,
+        incomplete: false,
+        error: null,
+      },
+      rescanDelayMs: 899_000,
+    },
+    "current verified v3 coverage may restore rows and defer the next scan",
+  );
+  assert.deepEqual(
+    rewardScanner.deriveRewardScanCacheRestore(currentCache, cacheAddress, 101n, now),
+    {
+      wins,
+      state: {
+        status: "stale",
+        walletAddress: cacheAddress,
+        lastVerifiedAt: verifiedAt,
+        incomplete: false,
+        error: null,
+      },
+      rescanDelayMs: 0,
+    },
+    "an epoch transition may show verified rows only as stale and must rescan immediately",
+  );
+
+  const incompleteRestore = {
+    wins: [],
+    state: {
+      status: "idle",
+      walletAddress: cacheAddress,
+      lastVerifiedAt: null,
+      incomplete: false,
+      error: null,
+    },
+    rescanDelayMs: 0,
+  };
+  for (const incompleteV3 of [
+    { label: "wrong cache version", override: { cacheVersion: 2 } },
+    { label: "missing verifiedAt", override: { verifiedAt: undefined } },
+    { label: "invalid verifiedAt", override: { verifiedAt: "not-a-timestamp" } },
+    { label: "missing lastScannedEpoch", override: { lastScannedEpoch: undefined } },
+    { label: "invalid lastScannedEpoch", override: { lastScannedEpoch: "not-an-epoch" } },
+    { label: "missing deepestScannedEpoch", override: { deepestScannedEpoch: undefined } },
+    { label: "invalid deepestScannedEpoch", override: { deepestScannedEpoch: "not-an-epoch" } },
+  ]) {
+    const storage = createRewardScanMemoryStorage([
+      [v3Key, JSON.stringify({ ...v3Payload, ...incompleteV3.override })],
+      [v2Key, JSON.stringify(spoofedLegacyPayload)],
+    ]);
+    const cache = rewardScanner.loadRewardScanCacheFromStorage(cacheAddress, storage);
+    assert.equal(cache.isVerified, false, incompleteV3.label + " must not be treated as verified");
+    assert.deepEqual(
+      rewardScanner.deriveRewardScanCacheRestore(cache, cacheAddress, 100n, now),
+      incompleteRestore,
+      incompleteV3.label + " must not expose rows or defer a scan",
+    );
+    assert.deepEqual(storage.reads, [v3Key], incompleteV3.label + " must fail closed without legacy downgrade");
+  }
+
+  const invalidatedStorage = createRewardScanMemoryStorage([
+    [v3Key, JSON.stringify({ ...v3Payload, invalidatedAt: verifiedAt })],
+  ]);
+  const invalidatedCache = rewardScanner.loadRewardScanCacheFromStorage(cacheAddress, invalidatedStorage);
+  assert.equal(invalidatedCache.isVerified, true);
+  assert.equal(invalidatedCache.isInvalidated, true);
+  assert.deepEqual(
+    rewardScanner.deriveRewardScanCacheRestore(invalidatedCache, cacheAddress, 100n, now),
+    {
+      wins,
+      state: {
+        status: "stale",
+        walletAddress: cacheAddress,
+        lastVerifiedAt: verifiedAt,
+        incomplete: false,
+        error: null,
+      },
+      rescanDelayMs: 0,
+    },
+    "claim-invalidated v3 rows stay visible only as stale while refresh starts immediately",
+  );
+
+  for (const legacyCase of [
+    {
+      label: "v2",
+      storage: createRewardScanMemoryStorage([[v2Key, JSON.stringify(spoofedLegacyPayload)]]),
+      expectedReads: [v3Key, v2Key],
+    },
+    {
+      label: "v1",
+      storage: createRewardScanMemoryStorage([[v1Key, JSON.stringify(spoofedLegacyPayload)]]),
+      expectedReads: [v3Key, v2Key, v1Key],
+    },
+  ]) {
+    const legacyCache = rewardScanner.loadRewardScanCacheFromStorage(cacheAddress, legacyCase.storage);
+    assert.equal(legacyCache.isVerified, false, legacyCase.label + " cache must not self-upgrade");
+    assert.deepEqual(
+      rewardScanner.deriveRewardScanCacheRestore(legacyCache, cacheAddress, 100n, now),
+      {
+        wins: [],
+        state: {
+          status: "idle",
+          walletAddress: cacheAddress,
+          lastVerifiedAt: null,
+          incomplete: false,
+          error: null,
+        },
+        rescanDelayMs: 0,
+      },
+      legacyCase.label + " cache must not expose rows or defer a verified scan",
+    );
+    assert.deepEqual(legacyCase.storage.reads, legacyCase.expectedReads);
+  }
+
+  const emptyCache = {
+    wins: [],
+    savedAt: null,
+    lastScannedEpoch: null,
+    deepestScannedEpoch: null,
+    verifiedAt: null,
+    isVerified: false,
+    isInvalidated: false,
+  };
+  for (const malformedV3 of [
+    { label: "empty", raw: "" },
+    { label: "invalid JSON", raw: "{not-json" },
+    { label: "invalid envelope", raw: JSON.stringify({ ...v3Payload, wins: "not-an-array" }) },
+  ]) {
+    const storage = createRewardScanMemoryStorage([
+      [v3Key, malformedV3.raw],
+      [v2Key, JSON.stringify(spoofedLegacyPayload)],
+    ]);
+    assert.deepEqual(
+      rewardScanner.loadRewardScanCacheFromStorage(cacheAddress, storage),
+      emptyCache,
+      malformedV3.label + " v3 cache must fail closed without a legacy downgrade",
+    );
+    assert.deepEqual(storage.reads, [v3Key]);
+  }
+
+  const malformedV2Storage = createRewardScanMemoryStorage([
+    [v2Key, ""],
+    [v1Key, JSON.stringify(spoofedLegacyPayload)],
+  ]);
+  assert.deepEqual(
+    rewardScanner.loadRewardScanCacheFromStorage(cacheAddress, malformedV2Storage),
+    emptyCache,
+    "a present malformed v2 cache must fail closed without a v1 downgrade",
+  );
+  assert.deepEqual(malformedV2Storage.reads, [v3Key, v2Key]);
+  assert.deepEqual(
+    rewardScanner.loadRewardScanCacheFromStorage(cacheAddress, null),
+    emptyCache,
+    "storage-unavailable restore must fail closed",
+  );
+}
+
 function assertClaimTransactionIntentPolicy(candidate) {
   const hash = `0x${"1".repeat(64)}`;
   const actor = "0x1111111111111111111111111111111111111111";
@@ -266,6 +479,7 @@ export async function runRewardScannerTests() {
   }, 3);
   assert.equal(malformedV3Cache.isVerified, false, "malformed v3 cache must fail closed");
   assert.equal(rewardScanner.getCachedRewardScanState(malformedV3Cache, "0xabc", 100n).status, "idle");
+  assertRewardScanCacheStorageAndRestore(rewardScanner);
   assert.deepEqual(
     rewardScanner.getRewardScanFailureState({
       walletAddress: "0xabc",
@@ -432,7 +646,6 @@ export async function runRewardScannerTests() {
   );
   assert.match(rewardScannerSource, /activeClaimAddressRef\.current = address\?\.toLowerCase\(\)[\s\S]*const claimActor = address\.toLowerCase\(\)[\s\S]*activeClaimAddressRef\.current !== claimActor[\s\S]*claimActorChanged/, "reward claims must stop sends and stale state updates when the active wallet changes");
   assert.match(rewardScannerSource, /function saveInvalidatedRewardScanCache[\s\S]*verifiedAt: number,[\s\S]*verifiedAt,[\s\S]*invalidatedAt: Date\.now\(\)/, "claim invalidation must retain the prior verification timestamp instead of advancing it");
-  assert.match(rewardScannerSource, /getRewardScanRescanDelayMs\(cacheCoversCurrentEpoch \? cached\.verifiedAt : null\)/, "only current-epoch v3 coverage may defer a reward refresh");
 
   const rewardClaimSource = rewardScannerSource.slice(rewardScannerSource.indexOf("const claimReward"), rewardScannerSource.indexOf("return useMemo"));
   assert.match(rewardClaimSource, /submittedHash = hash;[\s\S]*invalidateVerifiedRewardScanCache\(claimActor, unclaimedWinsRef\.current\);[\s\S]*const receiptState = await waitReceipt\(hash/, "single claim submission must invalidate cache before receipt certainty");

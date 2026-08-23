@@ -89,7 +89,7 @@ export class RewardScanIncompleteError extends Error {
   }
 }
 
-function getRewardScanCacheKey(address: string, version: 2 | 3 = 3) {
+export function getRewardScanCacheKey(address: string, version: 1 | 2 | 3 = 3) {
   return `lore:reward-scan:v${version}:${getAddress(address).toLowerCase()}`;
 }
 
@@ -143,6 +143,23 @@ export function getCachedRewardScanState(
     lastVerifiedAt: cache.verifiedAt,
     incomplete: false,
     error: null,
+  };
+}
+
+export function deriveRewardScanCacheRestore(
+  cache: CachedRewardScan,
+  walletAddress: string,
+  currentEpoch: bigint,
+  now = Date.now(),
+) {
+  const cacheCoversCurrentEpoch = isRewardScanCacheCoveredForEpoch(cache, currentEpoch);
+  return {
+    wins: cache.isVerified ? cache.wins : [],
+    state: getCachedRewardScanState(cache, walletAddress, currentEpoch),
+    rescanDelayMs: getRewardScanRescanDelayMs(
+      cacheCoversCurrentEpoch ? cache.verifiedAt : null,
+      now,
+    ),
   };
 }
 
@@ -248,22 +265,32 @@ export function compareRewardScanWinsDesc(left: UnclaimedWin, right: UnclaimedWi
   return a === b ? 0 : b > a ? 1 : -1;
 }
 
-function loadCachedRewardScan(address: string): CachedRewardScan {
-  if (typeof localStorage === "undefined") return { ...EMPTY_REWARD_SCAN_CACHE };
+export function loadRewardScanCacheFromStorage(
+  address: string,
+  storage: Pick<Storage, "getItem"> | null | undefined,
+): CachedRewardScan {
+  if (!storage) return { ...EMPTY_REWARD_SCAN_CACHE };
   const v3Key = getRewardScanCacheKey(address, 3);
   const v2Key = getRewardScanCacheKey(address, 2);
-  const v1Key = `lore:reward-scan:v1:${getAddress(address).toLowerCase()}`;
+  const v1Key = getRewardScanCacheKey(address, 1);
   try {
-    const v3Raw = localStorage.getItem(v3Key);
-    if (v3Raw) return parseRewardScanCacheEnvelope(JSON.parse(v3Raw), 3);
-    const v2Raw = localStorage.getItem(v2Key);
-    if (v2Raw) return parseRewardScanCacheEnvelope(JSON.parse(v2Raw), 2);
-    const v1Raw = localStorage.getItem(v1Key);
-    if (v1Raw) return parseRewardScanCacheEnvelope(JSON.parse(v1Raw), 2);
+    const v3Raw = storage.getItem(v3Key);
+    if (v3Raw !== null) return parseRewardScanCacheEnvelope(JSON.parse(v3Raw), 3);
+    const v2Raw = storage.getItem(v2Key);
+    if (v2Raw !== null) return parseRewardScanCacheEnvelope(JSON.parse(v2Raw), 2);
+    const v1Raw = storage.getItem(v1Key);
+    if (v1Raw !== null) return parseRewardScanCacheEnvelope(JSON.parse(v1Raw), 2);
     return { ...EMPTY_REWARD_SCAN_CACHE };
   } catch {
     return { ...EMPTY_REWARD_SCAN_CACHE };
   }
+}
+
+function loadCachedRewardScan(address: string): CachedRewardScan {
+  return loadRewardScanCacheFromStorage(
+    address,
+    typeof localStorage === "undefined" ? null : localStorage,
+  );
 }
 
 function saveInvalidatedRewardScanCache(
@@ -818,19 +845,23 @@ export function useRewardScanner(
     if (!enabled || !isPageVisible || !address || !actualCurrentEpoch) return;
     const normalizedAddress = address.toLowerCase();
     const cached = loadCachedRewardScan(normalizedAddress);
-    const cacheCoversCurrentEpoch = isRewardScanCacheCoveredForEpoch(cached, actualCurrentEpoch);
+    const restore = deriveRewardScanCacheRestore(
+      cached,
+      normalizedAddress,
+      actualCurrentEpoch,
+    );
     cacheSavedAtRef.current = cached.isVerified ? cached.verifiedAt : null;
     lastVerifiedAtRef.current = cached.isVerified ? cached.verifiedAt : null;
     lastVerifiedAddressRef.current = cached.isVerified ? normalizedAddress : null;
 
     // A v3 snapshot may be shown as stale, but only current-epoch coverage may defer a refresh.
     if (mountedRef.current) {
-      setUnclaimedWins(cached.isVerified ? cached.wins : []);
-      setRewardScanState(getCachedRewardScanState(cached, normalizedAddress, actualCurrentEpoch));
+      setUnclaimedWins(restore.wins);
+      setRewardScanState(restore.state);
     }
 
     // Missing coverage, including an invalidated post-claim cache, refreshes immediately.
-    const remaining = getRewardScanRescanDelayMs(cacheCoversCurrentEpoch ? cached.verifiedAt : null);
+    const remaining = restore.rescanDelayMs;
     if (remaining > 0) {
       const timeoutId = window.setTimeout(() => {
         void scanRewards();
