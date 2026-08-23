@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   WORKSPACE_CLEANUP_AGED_CHILD_PARENTS,
+  WORKSPACE_CLEANUP_PROTECTED_AGED_CHILD_PREFIXES,
   WORKSPACE_CLEANUP_WHOLE_TARGETS,
   createWorkspaceCleanupPlan,
   formatWorkspaceCleanupBytes,
+  isProtectedWorkspaceCleanupAgedChildName,
   isInsideWorkspaceRoot,
   normalizeWorkspaceCleanupByteCount,
   parseCleanupMinAgeHours,
@@ -75,6 +77,18 @@ async function assertCleanupBehavior(runCleanup, root) {
   const nestedRecent = await createFixture(root, "playwright-report/nested/recent.txt", "new", recent);
   const oldTmp = await createFixture(root, ".tmp/old-run/data.txt", "temporary", old);
   const recentTmp = await createFixture(root, ".tmp/recent-run/data.txt", "keep", recent);
+  const protectedRecovery = await createFixture(
+    root,
+    ".tmp/protected-db-recovery-exact-20260823/lore-v10.sqlite-wal",
+    "recovery",
+    old,
+  );
+  const protectedShmRecovery = await createFixture(
+    root,
+    ".tmp/SHM-RECONSTRUCT-20260823/lore-v10.sqlite-shm",
+    "recovery",
+    old,
+  );
   const protectedEnv = await createFixture(root, ".env", "do-not-touch", old);
   const protectedDependency = await createFixture(root, "node_modules/example/index.js", "keep", old);
   const protectedDatabase = await createFixture(root, "data/lore.db", "keep", old);
@@ -100,7 +114,7 @@ async function assertCleanupBehavior(runCleanup, root) {
     bytes: 14,
     bytesFormatted: "14 B",
   });
-  for (const path of [oldCache, nestedRecent, oldTmp, recentTmp, protectedEnv, protectedDependency, protectedDatabase, outsideFile]) {
+  for (const path of [oldCache, nestedRecent, oldTmp, recentTmp, protectedRecovery, protectedShmRecovery, protectedEnv, protectedDependency, protectedDatabase, outsideFile]) {
     assert.equal(Boolean(await stat(path).catch(() => null)), true, `dry-run must preserve ${path}`);
   }
 
@@ -121,12 +135,67 @@ async function assertCleanupBehavior(runCleanup, root) {
   assert.match(applied.targets, /\.tmp\/old-run/);
   assert.equal(Boolean(await stat(oldCache).catch(() => null)), false);
   assert.equal(Boolean(await stat(oldTmp).catch(() => null)), false);
-  for (const path of [nestedRecent, recentTmp, protectedEnv, protectedDependency, protectedDatabase, outsideFile]) {
+  for (const path of [nestedRecent, recentTmp, protectedRecovery, protectedShmRecovery, protectedEnv, protectedDependency, protectedDatabase, outsideFile]) {
     assert.equal(Boolean(await stat(path).catch(() => null)), true, `apply must preserve ${path}`);
   }
     assert.equal(await readFile(protectedEnv, "utf8"), "do-not-touch");
   } finally {
     await rm(outsideRoot, { recursive: true, force: true });
+  }
+}
+
+async function assertReparseContainmentBehavior(runCleanup) {
+  const root = await mkdtemp(join(tmpdir(), "lore-cleanup-reparse-root-"));
+  const externalNext = await mkdtemp(join(tmpdir(), "lore-cleanup-reparse-next-"));
+  const externalTmp = await mkdtemp(join(tmpdir(), "lore-cleanup-reparse-tmp-"));
+  const rootLinkParent = await mkdtemp(join(tmpdir(), "lore-cleanup-reparse-root-link-"));
+  const linkedRoot = join(rootLinkParent, "workspace");
+  const nextLink = join(root, ".next");
+  const tmpLink = join(root, ".tmp");
+  const now = 2_000_000_000_000;
+  const old = now - (12 * HOUR_MS);
+  const externalCache = await createFixture(externalNext, "cache/outside-cache.txt", "outside-cache", old);
+  const externalTmpChild = await createFixture(externalTmp, "outside-run/data.txt", "outside-tmp", old);
+  const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
+  await symlink(externalNext, nextLink, directoryLinkType);
+  await symlink(externalTmp, tmpLink, directoryLinkType);
+  await symlink(root, linkedRoot, directoryLinkType);
+  try {
+    await assert.rejects(
+      () => runCleanup({
+        root: linkedRoot,
+        dryRun: true,
+        summaryOnly: true,
+        minAgeHours: 8,
+        minAgeMs: 8 * HOUR_MS,
+        now,
+      }),
+      /workspace cleanup root must (?:be an ordinary non-reparse directory|not resolve through a symlink, junction, or reparse point)/,
+      "reparse workspace root must fail closed",
+    );
+
+    const summary = await runCleanup({
+      root,
+      dryRun: false,
+      summaryOnly: true,
+      minAgeHours: 8,
+      minAgeMs: 8 * HOUR_MS,
+      now,
+    });
+    assert.equal(summary.status, "ok");
+    assert.equal(summary.matchedTargets, 0);
+    assert.equal(summary.deletedTargets, 0);
+    assert.equal(summary.bytes, 0);
+    assert.equal(summary.skippedTargets, 4);
+    assert.equal((await lstat(nextLink)).isSymbolicLink(), true, "intermediate .next link must remain");
+    assert.equal((await lstat(tmpLink)).isSymbolicLink(), true, "aged-child parent link must remain");
+    assert.equal(await readFile(externalCache, "utf8"), "outside-cache");
+    assert.equal(await readFile(externalTmpChild, "utf8"), "outside-tmp");
+  } finally {
+    await rm(rootLinkParent, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+    await rm(externalNext, { recursive: true, force: true });
+    await rm(externalTmp, { recursive: true, force: true });
   }
 }
 
@@ -158,8 +227,23 @@ export async function runCleanupWorkspaceBehaviorTests() {
     "coverage",
   ]);
   assert.deepEqual(WORKSPACE_CLEANUP_AGED_CHILD_PARENTS, [".tmp"]);
+  assert.deepEqual(WORKSPACE_CLEANUP_PROTECTED_AGED_CHILD_PREFIXES, [
+    "protected-db-recovery-exact-",
+    "shm-reconstruct-",
+  ]);
   assert.equal(Object.isFrozen(WORKSPACE_CLEANUP_WHOLE_TARGETS), true);
   assert.equal(Object.isFrozen(WORKSPACE_CLEANUP_AGED_CHILD_PARENTS), true);
+  assert.equal(Object.isFrozen(WORKSPACE_CLEANUP_PROTECTED_AGED_CHILD_PREFIXES), true);
+  for (const name of [
+    "protected-db-recovery-exact-20260823",
+    "PROTECTED-DB-RECOVERY-EXACT-20260823",
+    "shm-reconstruct-20260823",
+  ]) {
+    assert.equal(isProtectedWorkspaceCleanupAgedChildName(name), true, `recovery child must be protected: ${name}`);
+  }
+  for (const name of ["old-run", "protected-db-recovery-exact", "shm-reconstruct", "unrelated-recovery-20260823"]) {
+    assert.equal(isProtectedWorkspaceCleanupAgedChildName(name), false, `non-recovery child must stay eligible: ${name}`);
+  }
   const sampleRoot = resolve(tmpdir(), "lore-cleanup-plan-root");
   assertCleanupPlanPolicy(createWorkspaceCleanupPlan, sampleRoot);
   assertAgeParserPolicy(parseDecimalHoursToThousandths);
@@ -195,6 +279,7 @@ export async function runCleanupWorkspaceBehaviorTests() {
   const cliRoot = await mkdtemp(join(tmpdir(), "lore-cleanup-cli-"));
   try {
     await assertCleanupBehavior(runWorkspaceCleanup, behaviorRoot);
+    await assertReparseContainmentBehavior(runWorkspaceCleanup);
     await createFixture(cliRoot, "coverage/proof.txt", "proof", Date.now() - HOUR_MS);
     await assertCleanupCliBoundary(cliRoot);
   } finally {

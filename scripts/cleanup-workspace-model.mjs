@@ -1,4 +1,4 @@
-import { lstat, readdir, rm } from "node:fs/promises";
+import { lstat, readdir, realpath, rm } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const DECIMAL_HOURS_RE = /^(0|[1-9]\d{0,5})(?:\.(\d{1,3}))?$/;
@@ -15,6 +15,12 @@ export const WORKSPACE_CLEANUP_WHOLE_TARGETS = Object.freeze([
 ]);
 
 export const WORKSPACE_CLEANUP_AGED_CHILD_PARENTS = Object.freeze([".tmp"]);
+
+// These prefixes identify staged SQLite recovery assets. They are never cleanup candidates.
+export const WORKSPACE_CLEANUP_PROTECTED_AGED_CHILD_PREFIXES = Object.freeze([
+  "protected-db-recovery-exact-",
+  "shm-reconstruct-",
+]);
 
 export function parseDecimalHoursToThousandths(value, name = "decimal hours") {
   const match = typeof value === "string" ? value.match(DECIMAL_HOURS_RE) : null;
@@ -70,8 +76,51 @@ export function isInsideWorkspaceRoot(root, target) {
   return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
+function sameWorkspaceCleanupPath(left, right) {
+  const normalizedLeft = resolve(left);
+  const normalizedRight = resolve(right);
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+async function resolveOrdinaryWorkspaceCleanupRoot(root) {
+  const resolvedRoot = resolve(root);
+  const info = await lstat(resolvedRoot);
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw new Error("workspace cleanup root must be an ordinary non-reparse directory");
+  }
+  const canonicalRoot = resolve(await realpath(resolvedRoot));
+  if (!sameWorkspaceCleanupPath(resolvedRoot, canonicalRoot)) {
+    throw new Error("workspace cleanup root must not resolve through a symlink, junction, or reparse point");
+  }
+  return canonicalRoot;
+}
+
+async function inspectWorkspaceCleanupTarget(canonicalRoot, target) {
+  const info = await lstat(target).catch(() => null);
+  if (!info) return { info: null, reason: "missing" };
+  if (info.isSymbolicLink()) return { info, reason: "reparse-point" };
+  try {
+    const canonicalTarget = resolve(await realpath(target));
+    if (!isInsideWorkspaceRoot(canonicalRoot, canonicalTarget)) {
+      return { info, reason: "outside-canonical-root" };
+    }
+  } catch {
+    return { info, reason: "canonicalization-failed" };
+  }
+  return { info, reason: null };
+}
+
 export function normalizeWorkspaceCleanupByteCount(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+export function isProtectedWorkspaceCleanupAgedChildName(name) {
+  const normalized = typeof name === "string" ? name.toLowerCase() : "";
+  return WORKSPACE_CLEANUP_PROTECTED_AGED_CHILD_PREFIXES.some((prefix) =>
+    normalized.startsWith(prefix),
+  );
 }
 
 export function formatWorkspaceCleanupBytes(value) {
@@ -108,30 +157,41 @@ async function newestMtimeMs(target) {
   return newest;
 }
 
-async function maybeDelete({ root, target, requireAge, dryRun, minAgeMs, now }) {
+async function maybeDelete({ root, canonicalRoot, target, requireAge, dryRun, minAgeMs, now }) {
   if (!isInsideWorkspaceRoot(root, target)) {
     return { target, skipped: true, reason: "outside-root", bytes: 0 };
   }
-  const info = await lstat(target).catch(() => null);
-  if (!info) return { target, skipped: true, reason: "missing", bytes: 0 };
+  const candidate = await inspectWorkspaceCleanupTarget(canonicalRoot, target);
+  if (!candidate.info || candidate.reason) {
+    return { target, skipped: true, reason: candidate.reason, bytes: 0 };
+  }
   if (requireAge) {
     const ageMs = now - (await newestMtimeMs(target));
     if (ageMs < minAgeMs) return { target, skipped: true, reason: "too-new", bytes: 0 };
   }
   const bytes = await sizeOf(target);
-  if (!dryRun) await rm(target, { recursive: true, force: true });
+  if (!dryRun) {
+    const finalCandidate = await inspectWorkspaceCleanupTarget(canonicalRoot, target);
+    if (!finalCandidate.info || finalCandidate.reason) {
+      return { target, skipped: true, reason: finalCandidate.reason, bytes: 0 };
+    }
+    await rm(target, { recursive: true, force: true });
+  }
   return { target, skipped: false, reason: dryRun ? "dry-run" : "deleted", bytes };
 }
 
-async function agedChildren({ root, parent, minAgeMs, now }) {
+async function agedChildren({ root, canonicalRoot, parent, minAgeMs, now }) {
   if (!isInsideWorkspaceRoot(root, parent)) return [];
+  const parentCandidate = await inspectWorkspaceCleanupTarget(canonicalRoot, parent);
+  if (!parentCandidate.info || parentCandidate.reason) return [];
   try {
     const entries = await readdir(parent, { withFileTypes: true });
     const targets = [];
     for (const entry of entries) {
+      if (isProtectedWorkspaceCleanupAgedChildName(entry.name)) continue;
       const target = join(parent, entry.name);
-      const info = await lstat(target).catch(() => null);
-      if (!info) continue;
+      const candidate = await inspectWorkspaceCleanupTarget(canonicalRoot, target);
+      if (!candidate.info || candidate.reason) continue;
       const ageMs = now - (await newestMtimeMs(target));
       if (ageMs >= minAgeMs) targets.push(target);
     }
@@ -156,10 +216,12 @@ export async function runWorkspaceCleanup({
     throw new Error("workspace cleanup now must be a non-negative safe integer");
   }
   const plan = createWorkspaceCleanupPlan(root);
+  const canonicalRoot = await resolveOrdinaryWorkspaceCleanupRoot(plan.root);
   const results = [];
   for (const target of plan.wholeTargets) {
     results.push(await maybeDelete({
       root: plan.root,
+      canonicalRoot,
       target,
       requireAge: true,
       dryRun,
@@ -168,10 +230,17 @@ export async function runWorkspaceCleanup({
     }));
   }
   for (const parent of plan.agedChildParents) {
-    const targets = await agedChildren({ root: plan.root, parent, minAgeMs, now });
+    const targets = await agedChildren({
+      root: plan.root,
+      canonicalRoot,
+      parent,
+      minAgeMs,
+      now,
+    });
     for (const target of targets) {
       results.push(await maybeDelete({
         root: plan.root,
+        canonicalRoot,
         target,
         requireAge: false,
         dryRun,
