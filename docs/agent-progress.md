@@ -1,6 +1,6 @@
 # Agent Progress
 
-Last updated: 2026-08-21.
+Last updated: 2026-08-23.
 
 Current truth is in [`current_state.md`](current_state.md). The active queue is
 [`remaining-worklist.md`](remaining-worklist.md); long-running testnet work is
@@ -8,20 +8,27 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
-- Branch `codex/repo-cleanup`; latest code/test source commit before this
-  progress refresh: `7905dc764` (`test(recovery): cover canonical jackpot event
-  identity`). It is pre-document local-verification lineage, not final
-  immutable-SHA, sealed-provenance, clean-checkout, deployment, or hosted proof.
-- Recent local sequence: `d51b5bb02` honest global-data state,
-  `603c43b75` honest wallet unavailable state, `ef0359c95` model-contract
-  regression, `7a75f709f` completed Header loading truthfulness, `2518babcf` fixed
-  manual bet restore-before-persist, `e185c392e` hardened local campaign
-  cache/env handling, and `466de05d` renders Header unavailable balances.
-- No remote, hosted, wallet, signing, or chain actions occurred in this local
-  sequence.
-- The protected base, WAL, and SHM are all present and exact. Preserve their
-  hashes/sizes/mtimes from `current_state.md`; no deletion or checkpoint is
-  authorized.
+- Branch `codex/repo-cleanup`; latest code/test source commit is `5fb4605b3`
+  (`fix(rewards): test cache restore behavior`). It is local mutable-lineage
+  evidence, not final immutable-SHA, sealed-provenance, clean-checkout,
+  deployment, or hosted proof.
+- The reward-cache P1.10 packet replaced five source-regex assertions with
+  executable key, version precedence, malformed-envelope, stale, invalidated,
+  legacy, and rescan-delay behavior. Focused reward/chat tests and direct
+  TypeScript passed; the audit is `5179/5943` behavioral (`87.14%`).
+- Bounded cleanup removed only rebuildable `.next` and
+  `tsconfig.tsbuildinfo`; the post-smoke `.next` regeneration was removed
+  again. QA artifacts, dependencies, source, and browser/session data remain.
+- No remote, hosted, wallet, signing, or chain action occurred.
+- A local UI-only smoke opened the configured protected SQLite path before the
+  hazard was detected. The base remains exact, but WAL/SHM at `data/` no
+  longer match the protected sidecar identities. The server is stopped and no
+  destructive recovery was attempted.
+- A coherent exact base/WAL/SHM recovery trio is staged at
+  `.tmp/protected-db-recovery-exact-20260823/`. Restoring it requires a new
+  exact destructive approval. Until then, run no DB-adjacent gate and start no
+  server against the configured protected path; use an owned OS-temp
+  `LORE_DB_PATH`.
 
 ## Current verified local work
 
@@ -42,8 +49,8 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
    the focused wallet-funding test, full isolated business runner, TypeScript,
    ESLint, script parse, and diff checks passed at the relevant local commits;
    protected DB snapshots remained exact.
-7. The P1.10 audit currently reports `4796/5509` behavioral assertions
-   (`87.06%`) at `7905dc764`.
+7. The P1.10 audit at `5fb4605b3` reports `5179/5943` behavioral assertions
+   (`87.14%`).
 8. Bounded cleanup removed about `1.00 GiB` of old Node/npm caches only. No
    project data, campaign record, browser profile, protected SQLite, or active
    runtime was removed.

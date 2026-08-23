@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-08-21.
+Last updated: 2026-08-23.
 
 This file is the current repository truth. Historical detail is retained under
 [`docs/archive/`](archive/). The active queue is
@@ -10,8 +10,8 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Latest code/test source commit before this state refresh: `7905dc764`
-  (`test(recovery): cover canonical jackpot event identity`). This is
+- Latest code/test source commit: `5fb4605b3`
+  (`fix(rewards): test cache restore behavior`). This is
   pre-document local-verification lineage only, not final immutable-SHA,
   sealed-provenance, clean-checkout, deployment, or hosted evidence.
 - Before this docs refresh, tracked files were clean. The intentionally
@@ -31,18 +31,36 @@ The protected base remains exact:
 - `258048` bytes
 - mtime `2026-08-13T12:18:50.8015294Z`
 
-The present sidecars are also protected evidence, not disposable test output:
+A local UI-only browser smoke on 2026-08-23 opened the configured runtime DB
+before the hazard was detected. The server is stopped. The current
+protected-path sidecars are:
 
-- `data/lore-v10.sqlite-wal`: `90672` bytes, SHA-256
-  `F5E02ACCB60DDCFAFDE9E591E8A5F7934A198400DFB87163C461E65DDDE5B1F5`,
-  mtime `2026-08-21T04:35:00.3645942Z`;
+- `data/lore-v10.sqlite-wal`: `280192` bytes, SHA-256
+  `5E841C8D75E63E3CC32087435DB3C31312D7919015A53FC0315DF08679CF015A`,
+  mtime `2026-08-23T17:05:06.5621389Z`;
 - `data/lore-v10.sqlite-shm`: `32768` bytes, SHA-256
-  `00E17C02AE1597CBFF1CF1417BDD098D3AB3776A2DD9CFA9B9E8436D21981AEE`,
-  mtime `2026-08-21T04:35:00.3595362Z`.
+  `D23741B73941D310CBB480BFC1DA78342414F458AF06DEDC6E5CC915451FF4A3`,
+  mtime `2026-08-23T17:03:27.9843266Z`.
 
-Never delete, checkpoint, replace, or vacuum any of these three files without a
-new exact destructive approval. Local DB tests must use explicit owned
-OS-temp SQLite paths.
+The first `90672` bytes of the current WAL still have the exact pre-incident
+SHA-256
+`F5E02ACCB60DDCFAFDE9E591E8A5F7934A198400DFB87163C461E65DDDE5B1F5`.
+A coherent exact recovery trio is staged only under
+`.tmp/protected-db-recovery-exact-20260823/`; its base, WAL, and SHM match
+the required hashes below. No protected file has been truncated, replaced,
+checkpointed, deleted, or opened during recovery.
+
+The required pre-incident identities remain:
+
+- WAL: `90672` bytes,
+  `F5E02ACCB60DDCFAFDE9E591E8A5F7934A198400DFB87163C461E65DDDE5B1F5`;
+- SHM: `32768` bytes,
+  `00E17C02AE1597CBFF1CF1417BDD098D3AB3776A2DD9CFA9B9E8436D21981AEE`.
+
+Never delete, checkpoint, replace, or vacuum any of these three protected files
+without a new exact destructive approval. Until the coherent trio is restored
+and rehashed, do not run DB-adjacent gates or start a server against this path.
+Every local runtime must use an explicit owned OS-temp SQLite path.
 
 ## 2026-08-21 local progress
 
@@ -72,7 +90,7 @@ OS-temp SQLite paths.
 - Removed only measured rebuildable caches: the old Node compile cache and npm
   `_cacache`/`_npx`, freeing about `1.00 GiB`. The active runtime, campaign
   records, project data, browser profile, and all SQLite files were retained.
-- P1.10 AST audit is currently `4796/5509` behavioral assertions (`87.06%`);
+- P1.10 AST audit at `5fb4605b3` is `5179/5943` behavioral assertions (`87.14%`);
   extraction remains partial.
 
 ## Verification state
@@ -87,7 +105,7 @@ OS-temp SQLite paths.
 | Pre-doc local business suite | The isolated business suite passed at `786b8692b` after stale-fixture fixes. `7905dc764` adds a later test-only recovery-identity assertion; this is not represented as a current-SHA final-suite rerun. | Pass locally for the stated mutable lineage only |
 | Pre-doc local gate packet | At `7905dc764`: P1 hardening `42/42` in `139491ms`; TypeScript `typegen` plus `tsc`, standalone V10 and V9 local invariants, global-stats `10000+`, leaderboard `110003`, and the hermetic wrapper passed. | Pass locally only; not final immutable-SHA evidence |
 | Read-only browser smoke | Local read-only Playwright smoke passed; screenshot: `artifacts/smoke-browser/sha7905-current-readonly.png`. It did not sign, create a wallet, approve, bet, claim, or send a transaction. | Local UI evidence only, not launch, hosted, or live-wallet proof |
-| P1.10 audit | `scripts/audit-p1-behavior.mjs` passed at `7905dc764`: `4796/5509` behavioral assertions (`87.06%`) | Pass locally; partial objective |
+| P1.10 audit | `scripts/audit-p1-behavior.mjs` passed at `5fb4605b3`: `5179/5943` behavioral assertions (`87.14%`) | Pass locally; partial objective |
 | P1.17 mechanism | Current self-tests at `7905dc764` passed: collector `85` cases (schema `3`) and verifier `55` cases (schema `3`). No two-hour run, build, browser, or DB gate is represented here. | Open: final immutable clean SHA, sealed canonical/profile pair, headed native-hidden two-hour run, and strict verification |
 | Sepolia V10 target | Canonical target is `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` at block `31678224`; managed runtime must set `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1` and require the epoch-bound selector. Offline manifest/provenance verification at `7905dc764` is local only. | Deployed-bytecode, hosted frontend/indexer, and independent external evidence remain open |
 | Production HTTPS | `https://playlore.xyz/` previously presented `ERR_CERT_COMMON_NAME_INVALID` | External hosting/domain remediation |
@@ -97,8 +115,9 @@ OS-temp SQLite paths.
 
 ### P0
 
-1. Preserve and recheck the exact base/WAL/SHM snapshot around every DB-adjacent
-   gate. Do not delete the sidecars as a prerequisite.
+1. Restore and recheck the coherent exact base/WAL/SHM trio with a new explicit
+   approval before every DB-adjacent gate. Do not delete or checkpoint the
+   sidecars as a prerequisite.
 2. On a new immutable SHA, run a detached fresh `npm ci`, dependency/local
    prelaunch gates, clean-checkout reproduction, and the supported final
    security scan when disk and entitlement permit.
