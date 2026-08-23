@@ -45,9 +45,7 @@ import { runProductionRuntimeStrictTests } from "./test-business-production-runt
 import { runProductionRuntimeNetworkMatrixTests } from "./test-business-production-runtime-network-matrix.mjs";
 import { runJackpotAndRebateSecurityTests } from "./test-business-jackpot-rebate-security.mjs";
 import { runChatAndClientSafetyTests } from "./test-business-chat-client-safety.mjs";
-import { runReleaseOperationsTests } from "./test-business-release-operations.mjs";
-import { runLiveCanaryHealthBehaviorTests } from "./test-business-live-canary-health.mjs";
-import { runPlaytestWalletPolicyTests } from "./test-business-playtest-wallet-policy.mjs";
+import { runReleaseEvidenceSuite } from "./test-business-release-evidence-suite.mjs";
 import { runRuntimeMetricsTests } from "./test-business-runtime-metrics.mjs";
 import { runErrorBoundaryAndJsonTests } from "./test-business-error-boundaries.mjs";
 import { runWalletAndRouteSafetyTests } from "./test-business-wallet-route-safety.mjs";
@@ -64,8 +62,6 @@ import { runSecurityFollowupBehaviorTests } from "./test-business-security-follo
 import { runPublicPresentationTests } from "./test-business-public-presentation.mjs";
 import { runDirectRouteSsrTests } from "./test-business-direct-route-ssr.mjs";
 import { runSummaryTimeoutTests } from "./test-business-summary-timeout.mjs";
-import { runAutonomousStatusBehaviorTests } from "./test-business-autonomous-status.mjs";
-import { runAutonomousDailyStatusTests } from "./test-business-autonomous-daily-status.mjs";
 import { runDataSyncHealthPolicyTests } from "./test-business-data-sync-health-policy.mjs";
 import { runAdminOpsPolicyTests } from "./test-business-admin-ops-policy.mjs";
 import { runAdminOpsPresentationTests } from "./test-business-admin-ops-presentation.mjs";
@@ -73,11 +69,7 @@ import * as fetchTimeoutTestModule from "./test-fetch-with-timeout.ts";
 import { runCheckLocalPolicyTests } from "./test-business-check-local-policy.mjs";
 import { runCompilerAdvisoryBehaviorTests } from "./test-business-compiler-advisory.mjs";
 import { runDependencyAuditBehaviorTests, runWalletDependencyAuditBehaviorTests } from "./test-business-dependency-audit.mjs";
-import { runPrelaunchStatusBehaviorTests } from "./test-business-prelaunch-status.mjs";
-import { runProofDraftBehaviorTests } from "./test-business-proof-drafts.mjs";
 import { runIndexerStorageBehaviorTests } from "./test-business-indexer-storage-behavior.mjs";
-import { runProofFileBehaviorTests } from "./test-business-proof-files.mjs";
-import { runLaunchProofRunnerBehaviorTests, runLocalProofPreflightBehaviorTests } from "./test-business-local-proof-preflight.mjs";
 import { runLaunchCommandMapBehaviorTests } from "./test-business-launch-command-map.mjs";
 import { runReadinessChecklistBehaviorTests } from "./test-business-readiness-checklist.mjs";
 import { runProofCollectorRedactionBehaviorTests } from "./test-business-proof-collector-redaction.mjs";
@@ -199,16 +191,7 @@ export async function runBusinessLogicSuite() {
   runJackpotAndRebateSecurityTests();
 
   await runV10PreviewEnvBoundaryTests();
-  runReleaseOperationsTests();
-  await runLiveCanaryHealthBehaviorTests();
-  await runPlaytestWalletPolicyTests();
-  runAutonomousStatusBehaviorTests();
-  runAutonomousDailyStatusTests();
-  runPrelaunchStatusBehaviorTests();
-  runProofDraftBehaviorTests();
-  runProofFileBehaviorTests();
-  runLocalProofPreflightBehaviorTests();
-  runLaunchProofRunnerBehaviorTests();
+  await runReleaseEvidenceSuite();
 
   await runChatAndClientSafetyTests();
 
