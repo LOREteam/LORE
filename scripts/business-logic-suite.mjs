@@ -97,6 +97,7 @@ import { runV10DeployedInputPolicyTests } from "./test-business-v10-deployed-inp
 import * as v10RuntimeIdentityTestModule from "./test-v10-runtime-identity.ts";
 import { runV10SepoliaDeploymentManifestTests } from "./test-v10-sepolia-deployment-manifest.mjs";
 import { runContractV10SummaryBehaviorTests } from "./test-business-contract-v10-summary.mjs";
+import { runV10PreviewEnvBoundaryTests } from "./test-v10-preview-env-boundary.mjs";
 import { runReleaseDocumentationTests } from "./test-business-release-documentation.mjs";
 import { runBusinessCoordinatorIsolatedFixtures } from "./test-business-coordinator-isolated-fixtures.mjs";
 import { runBusinessCoordinatorBoundaryTests } from "./test-business-coordinator-boundaries.mjs";
@@ -197,6 +198,7 @@ export async function runBusinessLogicSuite() {
   runHostEvidencePolicyTests();
   runJackpotAndRebateSecurityTests();
 
+  await runV10PreviewEnvBoundaryTests();
   runReleaseOperationsTests();
   await runLiveCanaryHealthBehaviorTests();
   await runPlaytestWalletPolicyTests();

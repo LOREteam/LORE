@@ -4023,8 +4023,6 @@ export function runReleaseOperationsTests() {
     /assertCanaryApprovalPostcondition\(\{ actualAllowance, approvalTarget: approveAmount \}\)/,
     "live canary must verify the exact allowance after every approval receipt",
   );
-  const v10DryRunPreviewSource = readFileSync("scripts/create-v10-canary-dry-run-preview.mjs", "utf8");
-  const v10DryRunPreviewCheckSource = readFileSync("scripts/check-v10-dry-run-preview.mjs", "utf8");
   assert.equal(
     packageScripts["preview:canary:v10:dry-run"],
     "node scripts/create-v10-canary-dry-run-preview.mjs",
@@ -4039,81 +4037,6 @@ export function runReleaseOperationsTests() {
     packageScripts["preview:canary:v10:authorization-ready:summary"],
     "node scripts/check-v10-dry-run-preview.mjs --require-fresh-authorization",
     "V10 dry-run Preview must expose a strict freshness validator before requesting real-transaction authorization",
-  );
-  assert.match(
-    v10DryRunPreviewCheckSource,
-    /staleError\.previewAgeMinutes = Math\.floor\(ageMs \/ 60_000\)[\s\S]*previewAgeMinutes[\s\S]*ageMinutes: previewAgeMinutes/,
-    "V10 dry-run Preview stale authorization failures must report the actual Preview age instead of letting dashboards show ageMinutes=0",
-  );
-  assert.match(
-    v10DryRunPreviewSource,
-    /plan:canary:v10:postdeploy:summary[\s\S]*soak:testnet:clear-pending:summary[\s\S]*live:canary:v10:matrix[\s\S]*analyze-live-canary-proof\.mjs[\s\S]*--profile=v10-matrix[\s\S]*--require-epoch-bound[\s\S]*--require-v10-gas-matrix/,
-    "V10 dry-run Preview must compose the read-only planner, pending nonce dry-run, V10 matrix dry-run, and strict analyzer",
-  );
-  assert.match(
-    v10DryRunPreviewSource,
-    /LIVE_TEST_DRY_RUN: "1"[\s\S]*LIVE_TEST_EXECUTE: "0"[\s\S]*SOAK_EXECUTE_LIVE: "0"[\s\S]*TEST_WALLET_EXECUTE: "0"/,
-    "V10 dry-run Preview must force child commands into non-executing dry-run mode",
-  );
-  assert.match(
-    v10DryRunPreviewSource,
-    /parseSummaryTimeoutEnv[\s\S]*V10_CANARY_DRY_RUN_PREVIEW_TIMEOUT_MS", 240_000[\s\S]*timeout: CHILD_TIMEOUT_MS/,
-    "V10 dry-run Preview timeout env must be canonical decimal and range checked before child process execution",
-  );
-  assert.doesNotMatch(
-    v10DryRunPreviewSource,
-    /Number\.parseInt\(process\.env\.V10_CANARY_DRY_RUN_PREVIEW_TIMEOUT_MS|Number\.isFinite\(CHILD_TIMEOUT_MS\)/,
-    "V10 dry-run Preview timeout env must not use partial parseInt or broad numeric fallback",
-  );
-  assert.doesNotMatch(
-    v10DryRunPreviewSource,
-    /--execute-live|--execute"|--confirm-lowest-pending-nonce-replacement|LIVE_TEST_EXECUTE: "1"|SOAK_EXECUTE_LIVE: "1"|TEST_WALLET_EXECUTE: "1"/,
-    "V10 dry-run Preview must not contain live execution flags or enabling env values",
-  );
-  assert.match(
-    v10DryRunPreviewSource,
-    /redactProofText[\s\S]*docs["'], ["']v10-canary-dry-run-preview\.md[\s\S]*dryRunProofBlocksG10G11[\s\S]*Fresh Consent Boundary/,
-    "V10 dry-run Preview must write a redacted markdown Preview and keep G10/G11 blocked until live evidence exists",
-  );
-  assert.match(
-    v10DryRunPreviewSource,
-    /MAX_PREVIEW_FIELD_CHARS[\s\S]*function bullet\(label, value\)[\s\S]*formatPreviewField\(value\)[\s\S]*function formatPreviewField\(value\)[\s\S]*redactProofText\(String\(value\)\)[\s\S]*replace\(\/\\s\+\/g, " "\)[\s\S]*<truncated>/,
-    "V10 dry-run Preview compact bullet fields must be redacted, single-line, and bounded",
-  );
-  assert.match(
-    v10DryRunPreviewSource,
-    /function extractCanaryLog\(output\)[\s\S]*normalizeCanaryLogPath\(raw\)[\s\S]*function safeCanaryLogPath\(value\)[\s\S]*path\.isAbsolute\(normalized\)[\s\S]*data[\s\S]*live-test-runs[\s\S]*\^live-canary-\[0-9TZ-\]\+\\\.jsonl\$[\s\S]*function normalizeCanaryLogPath\(value\)[\s\S]*if \(!path\.isAbsolute\(text\)\) return safeCanaryLogPath\(text\);[\s\S]*assertOrdinaryPath\(absolutePath, "dry-run canary log", false\)/,
-    "V10 dry-run Preview must restrict logs to ordinary current live-test-run artifacts before running the analyzer",
-  );
-  assert.doesNotMatch(
-    v10DryRunPreviewSource,
-    /function extractCanaryLog\(output\)[\s\S]*return extractValue\(output,[\s\S]*\?\? extractValue\(output,/,
-    "V10 dry-run Preview must not pass raw child log paths directly into the analyzer",
-  );
-  assert.match(
-    v10DryRunPreviewCheckSource,
-    /PREVIEW_PATH = path\.join\("docs", "v10-canary-dry-run-preview\.md"\)[\s\S]*MAX_PREVIEW_BYTES = 512 \* 1024[\s\S]*MAX_DRY_RUN_LOG_BYTES = 256 \* 1024[\s\S]*V10_DRY_RUN_PREVIEW_MAX_AGE_MS/,
-    "V10 dry-run Preview validator must use bounded artifact reads and a freshness window",
-  );
-  assert.match(
-    v10DryRunPreviewCheckSource,
-    /function parsePositiveIntegerEnv\(name, fallback, min, max\)[\s\S]*DECIMAL_INTEGER_RE[\s\S]*const parsed = BigInt\(raw\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*return Number\(parsed\)/,
-    "V10 dry-run Preview validator freshness env must be BigInt-bound before Number narrowing",
-  );
-  assert.match(
-    v10DryRunPreviewCheckSource,
-    /not an authorization to send transactions[\s\S]*Do not execute any of the following without a fresh exact authorization[\s\S]*requireBullet\(overall, "transactionSent", "false"\)[\s\S]*requireBullet\(overall, "dryRunProofBlocksG10G11", "true"\)/,
-    "V10 dry-run Preview validator must preserve non-authorization, fresh consent, no-transaction, and G10/G11 blocked boundaries",
-  );
-  assert.match(
-    v10DryRunPreviewCheckSource,
-    /function readBoundedCanaryLogBinding\(relativePath\)[\s\S]*safeCanaryLogPath\(relativePath\)[\s\S]*assertCanonicalDirectory\(runDirectory[\s\S]*MAX_DRY_RUN_LOG_BYTES[\s\S]*function safeCanaryLogPath\(value\)[\s\S]*path\.isAbsolute\(normalized\)[\s\S]*data[\s\S]*live-test-runs[\s\S]*\^live-canary-\[0-9TZ-\]\+\\\.jsonl\$/,
-    "V10 dry-run Preview validator must only validate bounded ordinary relative dry-run logs",
-  );
-  assert.doesNotMatch(
-    v10DryRunPreviewCheckSource,
-    /preview:canary:v10:dry-run|live:canary:v10:matrix|--execute-live|LIVE_TEST_EXECUTE: "1"|SOAK_EXECUTE_LIVE: "1"/,
-    "V10 dry-run Preview validator must not rerun Preview commands or contain live execution flags",
   );
   const v10CompilerMatrixSource = readFileSync("scripts/benchmark-contract-v10.mjs", "utf8");
   const v10BenchmarkSource = readFileSync("scripts/benchmark-v10-linea-gas.ts", "utf8");

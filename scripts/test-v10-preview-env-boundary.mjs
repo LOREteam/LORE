@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -14,7 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import nodeTest from "node:test";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { privateKeyToAccount } from "viem/accounts";
@@ -57,6 +58,11 @@ const DRY_RUN_LOG_RELATIVE_PATH = path.join("data", "live-test-runs", DRY_RUN_LO
 const LIVE_WALLET_ROLES = ["MANUAL", "AUTOMINER_A", "AUTOMINER_B", "AUTOMINER_C", "RESOLVER"];
 const WALLET_SET_SHA256 = "a".repeat(64);
 const CANARY_PLAN_SHA256 = "b".repeat(64);
+const previewEnvBoundaryCases = [];
+
+function test(name, fn) {
+  previewEnvBoundaryCases.push({ name, fn });
+}
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -149,12 +155,22 @@ function previewStepOutputs({
   ];
 }
 
-function runMockedPreview(overrides = {}, { matrixLogPath, absoluteMatrixLog = false, analyzer } = {}) {
+function runMockedPreview(
+  overrides = {},
+  {
+    matrixLogPath,
+    absoluteMatrixLog = false,
+    analyzer,
+    extraEnv = {},
+    captureChildCalls = false,
+  } = {},
+) {
   const cwd = mkdtempSync(path.join(tmpdir(), "lore-preview-boundary-"));
   mkdirSync(path.join(cwd, "docs"));
   const logDir = path.join(cwd, "data", "live-test-runs");
   mkdirSync(logDir, { recursive: true });
   writeFileSync(path.join(logDir, DRY_RUN_LOG_NAME), DRY_RUN_LOG_TEXT, "utf8");
+  const childCallsPath = path.join(cwd, "mock-preview-child-calls.jsonl");
   const outputLogPath = matrixLogPath ?? (absoluteMatrixLog
     ? path.join(logDir, DRY_RUN_LOG_NAME)
     : DRY_RUN_LOG_RELATIVE_PATH);
@@ -165,10 +181,25 @@ function runMockedPreview(overrides = {}, { matrixLogPath, absoluteMatrixLog = f
   });
   const preloadSource = `
     import childProcess from "node:child_process";
+    import { appendFileSync } from "node:fs";
     import { syncBuiltinESMExports } from "node:module";
     const outputs = ${JSON.stringify(outputs)};
+    const capturePath = ${captureChildCalls ? JSON.stringify(childCallsPath) : "null"};
     let callIndex = 0;
-    childProcess.spawnSync = () => {
+    childProcess.spawnSync = (command, args, options) => {
+      if (capturePath) {
+        appendFileSync(capturePath, JSON.stringify({
+          command: String(command),
+          args: Array.isArray(args) ? args.map((value) => String(value)) : [],
+          executionGates: Object.fromEntries([
+            "LIVE_TEST_DRY_RUN",
+            "LIVE_TEST_EXECUTE",
+            "SOAK_EXECUTE_LIVE",
+            "TEST_WALLET_EXECUTE",
+          ].map((name) => [name, options?.env?.[name] ?? null])),
+          timeout: options?.timeout ?? null,
+        }) + "\\n");
+      }
       const output = outputs[callIndex++] ?? {
         status: 1,
         stdout: "",
@@ -183,20 +214,26 @@ function runMockedPreview(overrides = {}, { matrixLogPath, absoluteMatrixLog = f
     const result = spawnSync(process.execPath, ["--import", preloadUrl, PREVIEW_SCRIPT], {
       cwd,
       encoding: "utf8",
-      env: { ...process.env, LIVE_CANARY_RPC_LABEL: "test-public-sepolia" },
+      env: { ...process.env, LIVE_CANARY_RPC_LABEL: "test-public-sepolia", ...extraEnv },
     });
     const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean);
+    const previewPath = path.join(cwd, "docs", "v10-canary-dry-run-preview.md");
+    const capturedChildCalls = captureChildCalls && existsSync(childCallsPath)
+      ? readFileSync(childCallsPath, "utf8").split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line))
+      : [];
+    const loadedPreviewMarkdown = existsSync(previewPath) ? readFileSync(previewPath, "utf8") : null;
     return {
       result,
       summary: lines.length > 0 ? JSON.parse(lines.at(-1)) : null,
-      markdown: readFileSync(path.join(cwd, "docs", "v10-canary-dry-run-preview.md"), "utf8"),
+      markdown: loadedPreviewMarkdown,
+      childCalls: capturedChildCalls,
     };
   } finally {
     rmSync(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 }
 
-function checkPreviewMarkdown(markdown, { logText = DRY_RUN_LOG_TEXT } = {}) {
+function checkPreviewMarkdown(markdown, { logText = DRY_RUN_LOG_TEXT, args = [], extraEnv = {} } = {}) {
   const cwd = mkdtempSync(path.join(tmpdir(), "lore-preview-check-"));
   const docsDir = path.join(cwd, "docs");
   const logDir = path.join(cwd, "data", "live-test-runs");
@@ -205,10 +242,10 @@ function checkPreviewMarkdown(markdown, { logText = DRY_RUN_LOG_TEXT } = {}) {
   writeFileSync(path.join(docsDir, "v10-canary-dry-run-preview.md"), markdown, "utf8");
   writeFileSync(path.join(logDir, "live-canary-20260813T000000Z.jsonl"), logText, "utf8");
   try {
-    const result = spawnSync(process.execPath, [PREVIEW_CHECK_SCRIPT], {
+    const result = spawnSync(process.execPath, [PREVIEW_CHECK_SCRIPT, ...args], {
       cwd,
       encoding: "utf8",
-      env: process.env,
+      env: { ...process.env, ...extraEnv },
     });
     const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean);
     return { result, summary: lines.length > 0 ? JSON.parse(lines.at(-1)) : null };
@@ -1018,6 +1055,81 @@ test("Preview generator behavior fails closed on contradictory or unreported chi
   }
 });
 
+test("Preview generator invokes the ordered sanitized dry-run child contract", () => {
+  const timeoutMs = 12_345;
+  const generated = runMockedPreview({}, {
+    captureChildCalls: true,
+    extraEnv: { V10_CANARY_DRY_RUN_PREVIEW_TIMEOUT_MS: String(timeoutMs) },
+  });
+  assert.equal(generated.result.status, 0, generated.result.stderr || generated.result.stdout);
+  assert.equal(generated.childCalls.length, 4);
+  const expectedScripts = [
+    "plan:canary:v10:postdeploy:summary",
+    "soak:testnet:clear-pending:summary",
+    "live:canary:v10:matrix",
+    "scripts/analyze-live-canary-proof.mjs",
+  ];
+  assert.deepEqual(
+    generated.childCalls.map((call) => call.args.find((arg) => expectedScripts.includes(arg)) ?? null),
+    expectedScripts,
+    "Preview must preserve the planner, pending nonce, matrix, and strict analyzer order",
+  );
+  assert.deepEqual(
+    generated.childCalls.slice(0, 3).map((call) => call.args.slice(-2)),
+    [
+      ["run", "plan:canary:v10:postdeploy:summary"],
+      ["run", "soak:testnet:clear-pending:summary"],
+      ["run", "live:canary:v10:matrix"],
+    ],
+  );
+  assert.deepEqual(generated.childCalls.at(-1).args, [
+    "scripts/analyze-live-canary-proof.mjs",
+    DRY_RUN_LOG_RELATIVE_PATH,
+    "--profile=v10-matrix",
+    "--strict",
+    "--summary-only",
+    "--require-epoch-bound",
+    "--require-v10-gas-matrix",
+  ]);
+  for (const call of generated.childCalls) {
+    assert.deepEqual(call.executionGates, {
+      LIVE_TEST_DRY_RUN: "1",
+      LIVE_TEST_EXECUTE: "0",
+      SOAK_EXECUTE_LIVE: "0",
+      TEST_WALLET_EXECUTE: "0",
+    });
+    for (const forbidden of ["--execute", "--execute-live", "--confirm-lowest-pending-nonce-replacement"]) {
+      assert.equal(call.args.includes(forbidden), false, `${forbidden} must not reach a Preview child`);
+    }
+  }
+  assert.deepEqual(generated.childCalls.map((call) => call.timeout), [timeoutMs, timeoutMs, timeoutMs, timeoutMs]);
+});
+
+test("Preview generator rejects an invalid timeout before invoking a child", () => {
+  const generated = runMockedPreview({}, {
+    captureChildCalls: true,
+    extraEnv: { V10_CANARY_DRY_RUN_PREVIEW_TIMEOUT_MS: "1e3" },
+  });
+  assert.notEqual(generated.result.status, 0);
+  assert.match(generated.result.stderr, /V10_CANARY_DRY_RUN_PREVIEW_TIMEOUT_MS must be a canonical decimal integer/);
+  assert.deepEqual(generated.childCalls, []);
+  assert.equal(generated.summary, null);
+  assert.equal(generated.markdown, null);
+});
+
+test("Preview generator redacts and bounds compact Markdown fields", () => {
+  const secret = "preview-output-secret-sentinel";
+  const generated = runMockedPreview({
+    planner: { plannedTransfersLinea: `API_KEY=${secret} ${"x".repeat(240)}` },
+  });
+  assert.equal(generated.result.status, 0, generated.result.stderr || generated.result.stdout);
+  assert.doesNotMatch(generated.markdown, new RegExp(secret));
+  const field = generated.markdown.match(/^- plannedTransfersLinea: (.+)$/m)?.[1] ?? "";
+  assert.match(field, /API_KEY=<redacted>/);
+  assert.match(field, /\.\.\.<truncated>$/);
+  assert.ok(field.length <= 180, `compact field must be bounded, got ${field.length}`);
+});
+
 test("Preview generator normalizes the upstream absolute live-canary log path into its safe binding", () => {
   const generated = runMockedPreview({}, { absoluteMatrixLog: true });
   assert.equal(generated.result.status, 0, generated.result.stderr || generated.result.stdout);
@@ -1070,6 +1182,33 @@ test("Preview checker behavior requires the generated operational boundary evide
     assert.notEqual(mutation.result.status, 0);
     assert.equal(mutation.summary.status, "fail");
   }
+});
+
+test("authorization-ready Preview checker reports the actual stale age", () => {
+  const staleAt = new Date(Date.now() - 60 * 60_000).toISOString();
+  const markdown = makeBoundPreviewMarkdown(DRY_RUN_LOG_TEXT).replace(
+    /^Last updated:\s*.+\.$/m,
+    `Last updated: ${staleAt}.`,
+  );
+  const result = checkPreviewMarkdown(markdown, {
+    args: ["--require-fresh-authorization"],
+    extraEnv: {
+      V10_DRY_RUN_PREVIEW_MAX_AGE_MS: String(24 * 60 * 60_000),
+      V10_DRY_RUN_AUTHORIZATION_MAX_AGE_MS: String(15 * 60_000),
+    },
+  });
+  assert.notEqual(result.result.status, 0);
+  assert.equal(result.summary.status, "fail");
+  assert.equal(result.summary.authorizationFreshnessRequired, true);
+  assert.equal(result.summary.maxPreviewAgeMinutes, 15);
+  const expectedAgeMinutes = Math.floor((Date.now() - Date.parse(staleAt)) / 60_000);
+  assert.ok(
+    Number.isSafeInteger(result.summary.ageMinutes) &&
+      result.summary.ageMinutes >= expectedAgeMinutes &&
+      result.summary.ageMinutes <= expectedAgeMinutes + 1,
+    `checker must report the current stale Preview age, got ${result.summary.ageMinutes}`,
+  );
+  assert.equal(result.summary.issue, "v10-dry-run-preview-is-not-fresh-enough-for-authorization");
 });
 
 test("Preview checker binds the current regular log and independently verifies the strict dry-run verdict", () => {
@@ -1233,3 +1372,24 @@ test("pending-nonce Preview child detects inherited signing material before RPC 
   assert.match(result.stderr, /inspection refuses inherited signing material/);
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /inherited-signing-sentinel/);
 });
+
+export async function runV10PreviewEnvBoundaryTests() {
+  for (const { fn } of previewEnvBoundaryCases) {
+    await fn();
+  }
+}
+
+const currentTestPath = fileURLToPath(import.meta.url);
+const isDirectTestInvocation = process.argv.some((argument) => {
+  if (typeof argument !== "string" || !argument) return false;
+  const candidatePath = path.resolve(argument);
+  return process.platform === "win32"
+    ? candidatePath.toLowerCase() === currentTestPath.toLowerCase()
+    : candidatePath === currentTestPath;
+});
+
+if (isDirectTestInvocation) {
+  for (const { name, fn } of previewEnvBoundaryCases) {
+    nodeTest(name, fn);
+  }
+}
