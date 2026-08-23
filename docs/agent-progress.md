@@ -8,21 +8,25 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
-- Branch `codex/repo-cleanup`; latest code/test source commit is `b72e22a44`
-  (`test(preview): run dry-run boundary behavior in suite`). It is local mutable-lineage
+- Branch `codex/repo-cleanup`; latest code/test source commit is `d3916c37d`
+  (`refactor(tests): shrink release evidence coordinator`). It is local mutable-lineage
   evidence, not final immutable-SHA, sealed-provenance, clean-checkout,
   deployment, or hosted proof.
 - The reward-cache P1.10 packet replaced five source-regex assertions with
   executable key, version precedence, malformed-envelope, stale, invalidated,
   legacy, and rescan-delay behavior. The V10 Preview packet then moved 15
-  release-operation source checks into 23 isolated runtime cases for ordered
-  child commands, disabled execution gates, timeout validation, compact-output
-  redaction, stale authorization age, and artifact boundaries. Node test and
-  the P1 `tsx` path passed 23/23; inert import, the exported runner, and direct
-  TypeScript passed. The audit is `5349/6118` behavioral (`87.43%`).
-- Bounded cleanup removed only rebuildable `.next` and
-  `tsconfig.tsbuildinfo`; the post-smoke `.next` regeneration was removed
-  again. QA artifacts, dependencies, source, and browser/session data remain.
+  release-operation source checks into 25 isolated runtime cases for ordered
+  child commands, disabled execution gates, timeout/freshness validation,
+  redacted compact output, canonical bounded log binding, and artifact
+  boundaries. Node test and the P1 `tsx` path passed 25/25; inert import and
+  the exported runner passed. The release-evidence grouping leaves `95` direct
+  runner imports, `2` side-effect imports, and `95` direct calls. The audit is
+  `5387/6166` behavioral (`87.37%`) across `106` modules.
+- Bounded cleanup removed only rebuildable old Node/npm caches (about `1.00
+  GiB`), `.next`, `tsconfig.tsbuildinfo`, and eleven aged `.tmp` outputs
+  (`4.4 MiB`). The post-smoke `.next` regeneration was removed again. Recovery
+  prefixes and paths resolving outside the repository are now excluded; QA
+  artifacts, dependencies, source, browser/session data, and the protected SQLite trio remain.
 - No remote, hosted, wallet, signing, or chain action occurred.
 - A local UI-only smoke opened the configured protected SQLite path before the
   hazard was detected. The base remains exact, but WAL/SHM at `data/` no
@@ -53,12 +57,15 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
    the focused wallet-funding test, full isolated business runner, TypeScript,
    ESLint, script parse, and diff checks passed at the relevant local commits;
    protected DB snapshots remained exact.
-7. The P1.10 audit at `b72e22a44` reports `5349/6118` behavioral assertions
-   (`87.43%`); Preview execution tests run through both standalone P1 and the
-   business-suite export without registering tests on inert import.
-8. Bounded cleanup removed about `1.00 GiB` of old Node/npm caches only. No
-   project data, campaign record, browser profile, protected SQLite, or active
-   runtime was removed.
+7. The P1.10 audit at `d3916c37d` reports `5387/6166` behavioral assertions
+   (`87.37%`) across `106` modules; Preview execution tests run through both
+   standalone P1 and the business-suite export without registering tests on inert
+   import. The release-evidence grouping was static-imported only, not run as a
+   full business suite.
+8. Bounded cleanup removed about `1.00 GiB` of old Node/npm caches plus
+   `.next`, `tsconfig.tsbuildinfo`, and `4.4 MiB` of eleven aged `.tmp` outputs.
+   No project data, campaign record, browser profile, protected SQLite, staged
+   recovery set, or active runtime was removed.
 9. Hub CTA now separates guest login from authenticated embedded-wallet setup:
    users wait while wallet state syncs, then get `CREATE WALLET` without a
    duplicate login action. Desktop and mobile actions share the existing

@@ -1,6 +1,6 @@
 # Remaining Worklist
 
-Last updated: 2026-08-21. This is the active queue. Historical detail belongs
+Last updated: 2026-08-23. This is the active queue. Historical detail belongs
 under [`docs/archive/`](archive/).
 
 ## P0: trustworthy local release candidate
@@ -27,8 +27,9 @@ under [`docs/archive/`](archive/).
 
 ### P1.10 behavioral extraction
 
-- [x] Current audit at `7905dc764`: `4796/5509` behavioral assertions
-      (`87.06%`).
+- [x] Latest audited baseline at `d3916c37d`: `5387/6166` behavioral assertions
+      (`87.37%`) across `106` modules; the coordinator has `95` direct runner
+      imports, `2` side-effect imports, and `95` direct runner calls.
 - [x] Extract and cover manual bet storage restore/persist behavior, including
       restore-before-persist on browser mount.
 - [ ] Continue replacing source operands only when a stable public behavior seam

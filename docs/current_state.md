@@ -10,8 +10,8 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Latest code/test source commit: `b72e22a44`
-  (`test(preview): run dry-run boundary behavior in suite`). This is
+- Latest code/test source commit: `d3916c37d`
+  (`refactor(tests): shrink release evidence coordinator`). This is
   pre-document local-verification lineage only, not final immutable-SHA,
   sealed-provenance, clean-checkout, deployment, or hosted evidence.
 - Before this docs refresh, tracked files were clean. The intentionally
@@ -62,7 +62,7 @@ without a new exact destructive approval. Until the coherent trio is restored
 and rehashed, do not run DB-adjacent gates or start a server against this path.
 Every local runtime must use an explicit owned OS-temp SQLite path.
 
-## 2026-08-21 local progress
+## Recent local progress
 
 - `738b23617`: removed the demonstrably unused direct `autoprefixer`
   devDependency.
@@ -87,12 +87,18 @@ Every local runtime must use an explicit owned OS-temp SQLite path.
   mobile rewards, canonical jackpot-share identity, direct public routes,
   indexing defaults, and opt-in Web Vitals received focused local hardening.
   The later `7905dc764` change is a recovery assertion only.
-- Removed only measured rebuildable caches: the old Node compile cache and npm
-  `_cacache`/`_npx`, freeing about `1.00 GiB`. The active runtime, campaign
-  records, project data, browser profile, and all SQLite files were retained.
-- P1.10 AST audit at `b72e22a44` is `5349/6118` behavioral assertions (`87.43%`).
-  The V10 Preview packet brings 23 isolated runtime cases into the business
-  coordinator while retaining standalone P1 execution; extraction remains partial.
+- Removed only measured rebuildable artifacts: old Node/npm caches (about
+  `1.00 GiB`), `.next`, `tsconfig.tsbuildinfo`, and eleven aged `.tmp` outputs
+  (`4.4 MiB`). Dependencies, active runtime, campaign records, project data,
+  browser/session data, the protected SQLite trio, and staged recovery assets were retained.
+  Workspace cleanup now excludes recovery-prefix directories and fails closed on
+  symlink/junction paths that resolve outside the repository.
+- P1.10 AST audit at `d3916c37d` is `5387/6166` behavioral assertions (`87.37%`)
+  across `106` modules. The V10 Preview packet now has 25 isolated runtime cases
+  for bounded/canonical log binding, redacted output, timeout/freshness, and
+  fail-closed dry-run boundaries. The release-evidence grouping reduces direct
+  coordinator fan-out to `95` runner imports, `2` side-effect imports, and `95`
+  direct calls; extraction remains partial.
 
 ## Verification state
 
@@ -106,7 +112,7 @@ Every local runtime must use an explicit owned OS-temp SQLite path.
 | Pre-doc local business suite | The isolated business suite passed at `786b8692b` after stale-fixture fixes. `7905dc764` adds a later test-only recovery-identity assertion; this is not represented as a current-SHA final-suite rerun. | Pass locally for the stated mutable lineage only |
 | Pre-doc local gate packet | At `7905dc764`: P1 hardening `42/42` in `139491ms`; TypeScript `typegen` plus `tsc`, standalone V10 and V9 local invariants, global-stats `10000+`, leaderboard `110003`, and the hermetic wrapper passed. | Pass locally only; not final immutable-SHA evidence |
 | Read-only browser smoke | Local read-only Playwright smoke passed; screenshot: `artifacts/smoke-browser/sha7905-current-readonly.png`. It did not sign, create a wallet, approve, bet, claim, or send a transaction. | Local UI evidence only, not launch, hosted, or live-wallet proof |
-| P1.10 audit | At `b72e22a44`, Preview boundary tests passed 23/23 through both Node test and the P1 `tsx` path; inert import and exported coordinator runner passed. `scripts/audit-p1-behavior.mjs` reports `5349/6118` behavioral assertions (`87.43%`). | Pass locally; partial objective |
+| P1.10 audit | At `d3916c37d`, Preview boundary tests passed 25/25 through both Node test and the P1 `tsx` path; inert import and exported coordinator runner passed. `scripts/audit-p1-behavior.mjs` reports `5387/6166` behavioral assertions (`87.37%`) across `106` modules; the release-evidence suite was inert-imported only. | Pass locally; partial objective |
 | P1.17 mechanism | Current self-tests at `7905dc764` passed: collector `85` cases (schema `3`) and verifier `55` cases (schema `3`). No two-hour run, build, browser, or DB gate is represented here. | Open: final immutable clean SHA, sealed canonical/profile pair, headed native-hidden two-hour run, and strict verification |
 | Sepolia V10 target | Canonical target is `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` at block `31678224`; managed runtime must set `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1` and require the epoch-bound selector. Offline manifest/provenance verification at `7905dc764` is local only. | Deployed-bytecode, hosted frontend/indexer, and independent external evidence remain open |
 | Production HTTPS | `https://playlore.xyz/` previously presented `ERR_CERT_COMMON_NAME_INVALID` | External hosting/domain remediation |
