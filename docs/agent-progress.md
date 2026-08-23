@@ -8,14 +8,18 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
-- Branch `codex/repo-cleanup`; latest code/test source commit is `5fb4605b3`
-  (`fix(rewards): test cache restore behavior`). It is local mutable-lineage
+- Branch `codex/repo-cleanup`; latest code/test source commit is `b72e22a44`
+  (`test(preview): run dry-run boundary behavior in suite`). It is local mutable-lineage
   evidence, not final immutable-SHA, sealed-provenance, clean-checkout,
   deployment, or hosted proof.
 - The reward-cache P1.10 packet replaced five source-regex assertions with
   executable key, version precedence, malformed-envelope, stale, invalidated,
-  legacy, and rescan-delay behavior. Focused reward/chat tests and direct
-  TypeScript passed; the audit is `5179/5943` behavioral (`87.14%`).
+  legacy, and rescan-delay behavior. The V10 Preview packet then moved 15
+  release-operation source checks into 23 isolated runtime cases for ordered
+  child commands, disabled execution gates, timeout validation, compact-output
+  redaction, stale authorization age, and artifact boundaries. Node test and
+  the P1 `tsx` path passed 23/23; inert import, the exported runner, and direct
+  TypeScript passed. The audit is `5349/6118` behavioral (`87.43%`).
 - Bounded cleanup removed only rebuildable `.next` and
   `tsconfig.tsbuildinfo`; the post-smoke `.next` regeneration was removed
   again. QA artifacts, dependencies, source, and browser/session data remain.
@@ -49,8 +53,9 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
    the focused wallet-funding test, full isolated business runner, TypeScript,
    ESLint, script parse, and diff checks passed at the relevant local commits;
    protected DB snapshots remained exact.
-7. The P1.10 audit at `5fb4605b3` reports `5179/5943` behavioral assertions
-   (`87.14%`).
+7. The P1.10 audit at `b72e22a44` reports `5349/6118` behavioral assertions
+   (`87.43%`); Preview execution tests run through both standalone P1 and the
+   business-suite export without registering tests on inert import.
 8. Bounded cleanup removed about `1.00 GiB` of old Node/npm caches only. No
    project data, campaign record, browser profile, protected SQLite, or active
    runtime was removed.

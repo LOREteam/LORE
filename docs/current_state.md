@@ -10,8 +10,8 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Latest code/test source commit: `5fb4605b3`
-  (`fix(rewards): test cache restore behavior`). This is
+- Latest code/test source commit: `b72e22a44`
+  (`test(preview): run dry-run boundary behavior in suite`). This is
   pre-document local-verification lineage only, not final immutable-SHA,
   sealed-provenance, clean-checkout, deployment, or hosted evidence.
 - Before this docs refresh, tracked files were clean. The intentionally
@@ -90,8 +90,9 @@ Every local runtime must use an explicit owned OS-temp SQLite path.
 - Removed only measured rebuildable caches: the old Node compile cache and npm
   `_cacache`/`_npx`, freeing about `1.00 GiB`. The active runtime, campaign
   records, project data, browser profile, and all SQLite files were retained.
-- P1.10 AST audit at `5fb4605b3` is `5179/5943` behavioral assertions (`87.14%`);
-  extraction remains partial.
+- P1.10 AST audit at `b72e22a44` is `5349/6118` behavioral assertions (`87.43%`).
+  The V10 Preview packet brings 23 isolated runtime cases into the business
+  coordinator while retaining standalone P1 execution; extraction remains partial.
 
 ## Verification state
 
@@ -105,7 +106,7 @@ Every local runtime must use an explicit owned OS-temp SQLite path.
 | Pre-doc local business suite | The isolated business suite passed at `786b8692b` after stale-fixture fixes. `7905dc764` adds a later test-only recovery-identity assertion; this is not represented as a current-SHA final-suite rerun. | Pass locally for the stated mutable lineage only |
 | Pre-doc local gate packet | At `7905dc764`: P1 hardening `42/42` in `139491ms`; TypeScript `typegen` plus `tsc`, standalone V10 and V9 local invariants, global-stats `10000+`, leaderboard `110003`, and the hermetic wrapper passed. | Pass locally only; not final immutable-SHA evidence |
 | Read-only browser smoke | Local read-only Playwright smoke passed; screenshot: `artifacts/smoke-browser/sha7905-current-readonly.png`. It did not sign, create a wallet, approve, bet, claim, or send a transaction. | Local UI evidence only, not launch, hosted, or live-wallet proof |
-| P1.10 audit | `scripts/audit-p1-behavior.mjs` passed at `5fb4605b3`: `5179/5943` behavioral assertions (`87.14%`) | Pass locally; partial objective |
+| P1.10 audit | At `b72e22a44`, Preview boundary tests passed 23/23 through both Node test and the P1 `tsx` path; inert import and exported coordinator runner passed. `scripts/audit-p1-behavior.mjs` reports `5349/6118` behavioral assertions (`87.43%`). | Pass locally; partial objective |
 | P1.17 mechanism | Current self-tests at `7905dc764` passed: collector `85` cases (schema `3`) and verifier `55` cases (schema `3`). No two-hour run, build, browser, or DB gate is represented here. | Open: final immutable clean SHA, sealed canonical/profile pair, headed native-hidden two-hour run, and strict verification |
 | Sepolia V10 target | Canonical target is `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` at block `31678224`; managed runtime must set `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1` and require the epoch-bound selector. Offline manifest/provenance verification at `7905dc764` is local only. | Deployed-bytecode, hosted frontend/indexer, and independent external evidence remain open |
 | Production HTTPS | `https://playlore.xyz/` previously presented `ERR_CERT_COMMON_NAME_INVALID` | External hosting/domain remediation |
