@@ -54,6 +54,7 @@ const PROJECT_ROOT = process.cwd();
 const DEFAULT_DIST_DIR = path.join(PROJECT_ROOT, ".next");
 const DEFAULT_PROFILING_DIST_DIR = path.join(PROJECT_ROOT, ".next-p1-profile");
 const OUTPUT_PATH = path.join(PROJECT_ROOT, "artifacts", "performance", "p1-evidence.json");
+const ARTIFACTS_ONLY_OUTPUT_PATH = path.join(PROJECT_ROOT, "artifacts", "performance", "p1-artifacts-only-evidence.json");
 const NETWORK_GUARD_PATH = path.join(PROJECT_ROOT, "scripts", "p1-perf-local-network-guard.mjs");
 const DEFAULT_DURATION_MS = 30_000;
 const MIN_DURATION_MS = 9_000;
@@ -131,6 +132,10 @@ function parseArgs(argv) {
     throw new Error("--simulate-auto-miner requires --duration of at least 60s");
   }
   return options;
+}
+
+function performanceEvidenceOutputPath(options) {
+  return options.artifactsOnly ? ARTIFACTS_ONLY_OUTPUT_PATH : OUTPUT_PATH;
 }
 
 function printUsage() {
@@ -2009,6 +2014,8 @@ async function runSelfTest() {
   assert.equal(parseArgs(["--artifacts-only", "--require-sealed"]).requireSealed, true);
   assert.equal(parseArgs(["--help"]).help, true);
   assert.equal(parseArgs(["--headed-native-hidden"]).headless, false);
+  assert.equal(performanceEvidenceOutputPath({ artifactsOnly: false }), OUTPUT_PATH);
+  assert.equal(performanceEvidenceOutputPath({ artifactsOnly: true }), ARTIFACTS_ONLY_OUTPUT_PATH);
   assert.equal(parseArgs(["--duration", "60s", "--simulate-auto-miner"]).simulateAutoMiner, true);
   assert.throws(() => parseArgs(["--dist-dir", ".next-p1-profile"]), /use --profiling-dist-dir/);
   assert.equal(parseArgs(["--profiling-dist-dir", ".next-p1-profile"]).distDirRelativePath, ".next-p1-profile");
@@ -2562,10 +2569,14 @@ async function runSelfTest() {
   const atomicFixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "lore-p1-evidence-"));
   try {
     const atomicOutput = path.join(atomicFixtureRoot, "evidence.json");
+    const diagnosticOutput = path.join(atomicFixtureRoot, "artifacts-only-evidence.json");
     await fs.writeFile(atomicOutput, "{\"old\":true}\n", "utf8");
     await writeJsonAtomic(atomicOutput, { status: "new" }, fs, atomicFixtureRoot);
     assert.deepEqual(JSON.parse(await fs.readFile(atomicOutput, "utf8")), { status: "new" });
-    assert.deepEqual(await fs.readdir(atomicFixtureRoot), ["evidence.json"]);
+    await writeJsonAtomic(diagnosticOutput, { status: "artifact-only" }, fs, atomicFixtureRoot);
+    assert.deepEqual(JSON.parse(await fs.readFile(atomicOutput, "utf8")), { status: "new" });
+    assert.deepEqual(JSON.parse(await fs.readFile(diagnosticOutput, "utf8")), { status: "artifact-only" });
+    assert.deepEqual((await fs.readdir(atomicFixtureRoot)).sort(), ["artifacts-only-evidence.json", "evidence.json"]);
     const previousBytes = await fs.readFile(atomicOutput);
     const failingRenameFileSystem = new Proxy(fs, {
       get(target, property, receiver) {
@@ -2584,7 +2595,7 @@ async function runSelfTest() {
       /fixture Windows rename refusal/,
     );
     assert.deepEqual(await fs.readFile(atomicOutput), previousBytes);
-    assert.deepEqual(await fs.readdir(atomicFixtureRoot), ["evidence.json"]);
+    assert.deepEqual((await fs.readdir(atomicFixtureRoot)).sort(), ["artifacts-only-evidence.json", "evidence.json"]);
   } finally {
     await fs.rm(atomicFixtureRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
@@ -2842,8 +2853,9 @@ async function main() {
   const output = options.summaryOnly ? summaryView(report) : report;
   console.log(JSON.stringify(output, null, 2));
   if (!options.summaryOnly) {
-    await writeJsonAtomic(OUTPUT_PATH, report);
-    console.log(`P1 performance evidence written: ${path.relative(PROJECT_ROOT, OUTPUT_PATH)}`);
+    const outputPath = performanceEvidenceOutputPath(options);
+    await writeJsonAtomic(outputPath, report);
+    console.log(`P1 performance evidence written: ${path.relative(PROJECT_ROOT, outputPath)}`);
   }
 }
 
