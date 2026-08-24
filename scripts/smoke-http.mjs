@@ -16,6 +16,13 @@ const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const EXPECT_EPOCH_BOUND_BETS = ["1", "true", "yes", "on"].includes(
   (process.env.NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS ?? "").trim().toLowerCase(),
 );
+const PUBLIC_SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://playlore.xyz").trim().replace(/\/+$/, "");
+const EXPECT_PUBLIC_INDEXING =
+  process.env.NODE_ENV === "production" &&
+  process.env.LORE_ALLOW_PUBLIC_INDEXING === "1" &&
+  process.env.NEXT_PUBLIC_MAINTENANCE_MODE !== "1" &&
+  PUBLIC_SITE_URL === "https://playlore.xyz" &&
+  (process.env.VERCEL_ENV === undefined || process.env.VERCEL_ENV === "production");
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000001";
 const HOME_TITLE = "LORE - Linea Mining Game";
 const HOME_MARKERS = ["LORE", "Hot Tiles", "Analytics", "FAQ", "Leaderboards"];
@@ -344,8 +351,14 @@ export const HTTP_SMOKE_CHECKS = [
       if (!response.headers.get("content-type")?.includes("text/plain")) {
         throw new Error("expected text/plain");
       }
-      if (!body.includes("Sitemap:") || !body.includes("/sitemap.xml")) {
-        throw new Error("robots.txt is missing sitemap reference");
+      if (EXPECT_PUBLIC_INDEXING) {
+        if (!body.includes("Sitemap:") || !body.includes("/sitemap.xml")) {
+          throw new Error("public robots.txt is missing sitemap reference");
+        }
+      } else {
+        if (!body.includes("Disallow: /") || body.includes("Sitemap:")) {
+          throw new Error("non-public robots.txt must disallow crawling without a sitemap reference");
+        }
       }
       if (body.includes("ReferenceError") || body.includes("Internal Server Error")) {
         throw new Error("robots.txt contains server error markers");
@@ -359,10 +372,13 @@ export const HTTP_SMOKE_CHECKS = [
       if (!response.headers.get("content-type")?.includes("application/xml")) {
         throw new Error("expected application/xml");
       }
-      for (const path of ["/jackpot-win", "/privacy", "/terms"]) {
+      for (const path of ["/faq", "/whitepaper", "/leaderboards", "/privacy", "/terms"]) {
         if (!body.includes(path)) {
           throw new Error(`sitemap missing path: ${path}`);
         }
+      }
+      if (body.includes("/jackpot-win")) {
+        throw new Error("sitemap must not expose a generic jackpot route without canonical event identity");
       }
       if (body.includes("ReferenceError") || body.includes("Internal Server Error")) {
         throw new Error("sitemap contains server error markers");

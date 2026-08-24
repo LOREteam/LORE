@@ -1389,9 +1389,7 @@ test("Preview and proof commands ignore poisoned package-manager, PATH, and shel
 
   if (process.platform === "win32") {
     const runtimeDerivedEnv = trustedNpmEnvironment({}, launcher);
-    const runtimeDerivedSystemRoot = realpathSync(
-      path.resolve(path.parse(REPO_ROOT).root, "Windows"),
-    );
+    const runtimeDerivedSystemRoot = realpathSync(process.env.SystemRoot ?? process.env.WINDIR);
     assert.equal(runtimeDerivedEnv.SystemRoot.toLowerCase(), runtimeDerivedSystemRoot.toLowerCase());
     assert.equal(runtimeDerivedEnv.WINDIR.toLowerCase(), runtimeDerivedSystemRoot.toLowerCase());
     const alternateDriveLauncher = {

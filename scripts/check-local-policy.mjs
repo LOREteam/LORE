@@ -126,7 +126,7 @@ const NPM_CORE_POLICY = Object.freeze([
 const DIRECT_CORE_POLICY = Object.freeze([
   ["lint", ["node_modules", "eslint", "bin", "eslint.js"], ["."]],
   ["hermetic-build", ["scripts", "test-hermetic-build.mjs"]],
-  ["business-logic", ["node_modules", "tsx", "dist", "cli.mjs"], [["scripts", "test-business-logic.mjs"]]],
+  ["business-logic", ["scripts", "business-logic-isolated-runner.mjs"]],
   ["security-followup", ["scripts", "check-security-followup.mjs"]],
   ["fetch-timeout", ["node_modules", "tsx", "dist", "cli.mjs"], [["scripts", "test-fetch-with-timeout.ts"]]],
   ["stored-number-parsing", ["node_modules", "tsx", "dist", "cli.mjs"], [["scripts", "test-stored-number-parsing.ts"]]],

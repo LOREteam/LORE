@@ -104,7 +104,9 @@ export async function runCheckLocalPolicyTests() {
     "next-typegen",
     "typescript",
   ]);
-  assert.equal(directPlan.steps.find(({ id }) => id === "business-logic")?.args[1], resolve("scripts", "test-business-logic.mjs"));
+  assert.deepEqual(directPlan.steps.find(({ id }) => id === "business-logic")?.args, [
+    resolve("scripts", "business-logic-isolated-runner.mjs"),
+  ]);
   assert.equal(directPlan.steps.some(({ id }) => id === "contract-v9-compatibility"), false);
   assert.equal(directPlan.steps.find(({ id }) => id === "contract-v10")?.args[0], resolve("scripts", "test-contract-v10-invariants.mjs"));
   assert.equal(directPlan.steps.find(({ id }) => id === "build")?.args[0], resolve("scripts", "run-hermetic-build.mjs"));

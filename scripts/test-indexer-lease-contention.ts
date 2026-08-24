@@ -367,6 +367,13 @@ async function runTest() {
       assert.match(blockedIndexer.output, /indexer lease.*(?:unavailable|held)/i);
       assert.doesNotMatch(blockedIndexer.output, /getBlockNumber|indexed log fetch|ECONNREFUSED/i);
       assert.ok(blockedIndexer.elapsedMs < 5_000, "blocked indexer must stop before RPC work");
+      const retainedHeartbeat = await sendWorkerCommand(holder.harness, {
+        id: randomUUID(),
+        op: "heartbeat",
+        ownerToken: holderOwnerToken,
+        ttlMs: LEASE_TTL_MS,
+      });
+      assert.equal(retainedHeartbeat.value, true, "the established owner must retain its lease across each blocked start probe");
     }
 
     const otherScope = await startWorker(dbPath, "testnet", SECONDARY_ADDRESS);

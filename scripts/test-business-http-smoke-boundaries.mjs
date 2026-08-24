@@ -494,9 +494,9 @@ async function testPageAndApiContracts() {
     findCheck("privacy-page").assert(new Response(`${privacyBody} We do not ask for your email`, { headers: { "content-type": "text/html" } }), `${privacyBody} We do not ask for your email`),
     /stale email-login disclosure/,
   );
-  const robotsBody = "User-agent: *\nSitemap: https://lore.example/sitemap.xml";
+  const robotsBody = "User-agent: *\nDisallow: /";
   await findCheck("robots").assert(new Response(robotsBody, { headers: { "content-type": "text/plain" } }), robotsBody);
-  const sitemapBody = "<urlset>/jackpot-win /privacy /terms</urlset>";
+  const sitemapBody = "<urlset>/faq /whitepaper /leaderboards /privacy /terms</urlset>";
   await findCheck("sitemap").assert(new Response(sitemapBody, { headers: { "content-type": "application/xml" } }), sitemapBody);
 
   const syncPayload = {
@@ -618,8 +618,8 @@ async function testSelectedRouteOrchestration() {
     },
   };
   const validText = {
-    "/robots.txt": "User-agent: *\nSitemap: https://lore.example/sitemap.xml",
-    "/sitemap.xml": "<urlset>/jackpot-win /privacy /terms</urlset>",
+    "/robots.txt": "User-agent: *\nDisallow: /",
+    "/sitemap.xml": "<urlset>/faq /whitepaper /leaderboards /privacy /terms</urlset>",
   };
   const selectedChecks = [
     "live-state",
@@ -665,8 +665,8 @@ async function testSelectedRouteOrchestration() {
     ["recent-wins", (payloads) => { payloads["/api/recent-wins"].wins[0].jackpotKind = "invalid"; }],
     ["deposits", (payloads) => { payloads["/api/deposits"].deposits[0].tileIds = [1, 1]; }],
     ["deposits-rewards", (payloads) => { payloads["/api/deposits?includeRewards=1"].rewards[10].winningTile = 26; }],
-    ["robots", (_payloads, text) => { text["/robots.txt"] = "User-agent: *"; }],
-    ["sitemap", (_payloads, text) => { text["/sitemap.xml"] = "<urlset>/jackpot-win /privacy</urlset>"; }],
+    ["robots", (_payloads, text) => { text["/robots.txt"] = "User-agent: *\nSitemap: https://lore.example/sitemap.xml"; }],
+    ["sitemap", (_payloads, text) => { text["/sitemap.xml"] = "<urlset>/faq /whitepaper /leaderboards /privacy /terms /jackpot-win</urlset>"; }],
   ];
   for (const [name, mutate] of adversarialMutations) {
     const result = await runWithMutation(mutate);

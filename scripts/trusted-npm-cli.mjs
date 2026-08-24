@@ -71,9 +71,15 @@ function trustedWindowsRuntime(launcher, sourceEnv) {
     const volumeRoot = parse(resolve(trustedRuntimePath)).root;
     if (/^[a-z]:\\$/i.test(volumeRoot)) osVolumeCandidates.add(volumeRoot.toLowerCase());
   }
-  const canonicalSystemRoots = [];
-  for (const volumeRoot of osVolumeCandidates) {
-    const expectedSystemRoot = resolve(volumeRoot, "Windows");
+  const expectedSystemRoots = new Set(
+    [...osVolumeCandidates].map((volumeRoot) => resolve(volumeRoot, "Windows")),
+  );
+  for (const candidate of [process.env.SystemRoot, process.env.WINDIR]) {
+    const value = String(candidate ?? "").trim();
+    if (value && sameCanonicalText(value, resolve(value))) expectedSystemRoots.add(value);
+  }
+  const canonicalSystemRoots = new Map();
+  for (const expectedSystemRoot of expectedSystemRoots) {
     try {
       const canonicalSystemRoot = canonicalDirectory(expectedSystemRoot, "Windows installation");
       const nativeKernel = canonicalRegularFile(
@@ -82,19 +88,18 @@ function trustedWindowsRuntime(launcher, sourceEnv) {
       );
       const relativeKernel = relative(canonicalSystemRoot, nativeKernel);
       if (
-        sameCanonicalText(canonicalSystemRoot, expectedSystemRoot) &&
         /^(?:System32[\\/])kernel32\.dll$/i.test(relativeKernel)
       ) {
-        canonicalSystemRoots.push(canonicalSystemRoot);
+        canonicalSystemRoots.set(canonicalSystemRoot.toLowerCase(), canonicalSystemRoot);
       }
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
     }
   }
-  if (canonicalSystemRoots.length !== 1) {
+  if (canonicalSystemRoots.size !== 1) {
     throw new Error("Unable to identify one canonical Windows installation from trusted runtime paths");
   }
-  const [canonicalSystemRoot] = canonicalSystemRoots;
+  const [canonicalSystemRoot] = canonicalSystemRoots.values();
 
   for (const [key, rawValue] of Object.entries(sourceEnv ?? {})) {
     const normalizedKey = key.toLowerCase();

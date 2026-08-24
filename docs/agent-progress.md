@@ -8,15 +8,25 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
-- Branch `codex/repo-cleanup`; current `HEAD` is
-  `13522de026b1d73bdd0cb0ded7c1348f2e6ff7a2`. The working tree is dirty and
-  the Preview/consent hardening packet is uncommitted. It is local mutable
-  evidence, not final immutable-SHA, sealed-provenance, clean-checkout,
-  deployment, or hosted proof.
-- The historical `318`-path snapshot is not the current commit scope; it grew
-  to an already-committed `320`-path candidate. The new HEAD-bound manifest has
-  `74` release paths, excludes and preserves `31` generated evidence paths, and
-  has `0` staged. Current local commit permission is not granted.
+- Branch `codex/repo-cleanup`; immutable baseline `HEAD` is
+  `63da5c4428d429ddda7e5d5a8fd7df56f01e5c73`. Its clean detached worktree
+  completed fresh `npm ci`, typecheck, hermetic build, and CI policy review.
+  This is not final hosted/external proof.
+- The former authorized 74-path packet is committed. The new uncommitted
+  candidate fixes two discovered release-gate root causes: trusted npm now
+  verifies canonical `C:\\WINDOWS` for a D:-drive checkout, and direct
+  `check-local` uses the mandatory isolated business runner. The Preview env
+  boundary runner is green twice (`30/30`); dependency audits are green under
+  their documented high-severity policy. A disposable full check exposed and
+  corrected its P1-runner 30-second timeout for this known 93-second boundary
+  runner; the new bound is 150 seconds. The following lease-contention failure
+  was a test liveness defect: the established owner now heartbeats after each
+  intentionally bounded blocked-start probe, with focused coverage green twice.
+  Local robots/sitemap smoke was also aligned to the deliberate noindex generic
+  jackpot policy, with focused coverage green twice.
+  Recompute its manifest before any
+  new commit request; no current staging, push, deployment, wallet/RPC, or
+  chain authority exists.
 - The current P1.10 audit is `5819/6345` behavioral (`91.71%`) with `526`
   source operands across `113` modules. Direct coordinator fan-out is `71`
   imports, `2` side-effect imports, and `71` calls; the audit self-test passes
@@ -640,6 +650,17 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Open local work
 
 - P1.10 behavior extraction remains partial.
+- A disposable detached code mirror completed `check-local --summary-only`
+  with exit `0` after fresh dependencies: lint, isolated business, P1,
+  performance self-test, V10/SQLite, hermetic build, TypeScript, HTTP, and
+  browser smoke. This remains local candidate evidence, not a final immutable
+  SHA, hosted CI, security scan, or authenticated-wallet result.
+- The unauthenticated local browser smoke no longer pretends to exercise
+  pending-bet recovery by writing the obsolete global `v1` storage key. Its
+  focused local browser boundary passed twice after the fixture began reporting
+  the authenticated-wallet requirement explicitly. Actor-scoped `v2` recovery
+  remains in isolated wallet/recovery tests; physical wallet recovery is still
+  an external HTTPS/Privy gate.
 - The current Preview/consent implementation packet is locally complete; only
   its live campaign, external topology, and authorization evidence remain open.
 - Real Redis/Valkey execution remains open for `RATE_LIMIT_SCRIPT`,
@@ -657,8 +678,9 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 - Final immutable-SHA detached `npm ci`, build/prelaunch, supported security
   scan, and hosted CI cycle is open; the dirty working tree invalidates older
   final-SHA/sealed claims.
-- Explicit permission for the current `74`-path local commit manifest remains
-  required. The historical 318/320 scope cannot authorize it.
+- The user has granted local-commit authority. Stage only the exact current
+  13-path manifest after its zero-omission audit; historical 74/318/320 scopes
+  do not widen that staging boundary or authorize external actions.
 - P1.17 needs a final canonical/profile sealed pair and a real physical
   native-hidden two-hour loopback run.
 - A new local campaign and supported security scan are blocked by disk and/or

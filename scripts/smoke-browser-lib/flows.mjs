@@ -684,50 +684,14 @@ export async function verifyAutoMinerFailureScenarios(page, options) {
   }
 }
 
-export async function verifyPendingBetReloadRecovery(page, options) {
-  const { baseUrl, contractAddress, chainId, pendingMiningTxKey, timeoutMs } = options;
-  const scenarioTimeoutMs = Math.min(timeoutMs, 15_000);
-  const fakeHash = `0x${"a".repeat(64)}`;
-
-  try {
-    await page.evaluate(({ chain, contract, hash, storageKey }) => {
-      window.localStorage.setItem(storageKey, JSON.stringify({
-        chainId: chain,
-        contract,
-        hash,
-        ts: Date.now(),
-      }));
-    }, {
-      chain: chainId,
-      contract: contractAddress,
-      hash: fakeHash,
-      storageKey: pendingMiningTxKey,
-    });
-    await safeReload(page, baseUrl, timeoutMs);
-    await expectVisible(page.getByText("Manual Bet", { exact: true }).first(), "manual bet panel after pending reload", scenarioTimeoutMs);
-    await page.waitForFunction(({ storageKey }) => {
-      const button = document.querySelector('[data-testid="manual-bet-action"]');
-      return Boolean(window.localStorage.getItem(storageKey)) && button instanceof HTMLButtonElement && button.disabled;
-    }, { storageKey: pendingMiningTxKey }, { timeout: scenarioTimeoutMs });
-    console.log("PASS pending bet remains blocked after reload");
-
-    const reopenedPage = await page.context().newPage();
-    try {
-      await reopenedPage.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: timeoutMs });
-      await expectVisible(reopenedPage.getByText("Manual Bet", { exact: true }).first(), "manual bet panel after tab reopen", scenarioTimeoutMs);
-      await reopenedPage.waitForFunction(({ storageKey }) => {
-        const button = document.querySelector('[data-testid="manual-bet-action"]');
-        return Boolean(window.localStorage.getItem(storageKey)) && button instanceof HTMLButtonElement && button.disabled;
-      }, { storageKey: pendingMiningTxKey }, { timeout: scenarioTimeoutMs });
-      console.log("PASS pending bet remains blocked after tab reopen");
-    } finally {
-      await reopenedPage.close();
-    }
-  } finally {
-    await page.evaluate((storageKey) => window.localStorage.removeItem(storageKey), pendingMiningTxKey).catch(() => {});
-    await safeReload(page, baseUrl, timeoutMs);
-    await expectVisible(page.getByText("Manual Bet", { exact: true }).first(), "manual bet panel after pending fixture cleanup", scenarioTimeoutMs);
-  }
+export async function verifyPendingBetReloadRecovery() {
+  // Pending mining state is scoped to the authenticated actor and reconciled
+  // against two independent RPC clients. An unauthenticated local browser smoke
+  // cannot create that state truthfully; its former v1 fixture could never
+  // exercise the v2 runtime path. Actor-scoped recovery is covered by the
+  // isolated wallet/recovery tests. A physical authenticated-wallet pass stays
+  // an explicit external release gate.
+  console.log("SKIP pending bet reload recovery browser fixture (requires an authenticated wallet; actor-scoped recovery is covered by isolated tests)");
 }
 
 export async function openDesktopTab(page, options) {

@@ -10,23 +10,37 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Current `HEAD`: `13522de026b1d73bdd0cb0ded7c1348f2e6ff7a2`.
-  The working tree is dirty and the current Preview/consent hardening packet is
-  uncommitted. It is local mutable-lineage evidence, not an immutable-SHA,
-  sealed-provenance, clean-checkout, deployment, or hosted result.
+- Current immutable baseline `HEAD`: `63da5c4428d429ddda7e5d5a8fd7df56f01e5c73`
+  (`chore: finalize release candidate hardening`). Its detached clean checkout
+  completed fresh `npm ci`, typecheck, hermetic build, and the CI policy check;
+  it remains local evidence, not sealed provenance, hosted, or external proof.
 - The goal's `318` paths describe a historical snapshot at `281c5fd02`; that
   candidate later grew to `320` paths and was committed in eight local commits.
   It is not the current permission scope. The current HEAD-bound permission
-  manifest is [`docs/release-candidate-current.md`](release-candidate-current.md):
-  `74` release paths (`57` tracked changes and `17` untracked files), `31`
-  generated campaign-evidence paths retained but excluded, and `0` staged.
-  Local permission was granted on 2026-08-24 to stage and create one commit of
-  exactly that verified manifest only. It does not authorize a push, deploy,
-  hosting change, signing, wallet/RPC use, Preview generation, or transactions.
-- Nothing was committed, pushed, deployed, hosted, signed, approved, bet,
-  claimed, submitted to a chain, or sent to a wallet/RPC in this cycle. The
-  only external read was the separately recorded guest HTTPS probe, which
-  stopped at the TLS interstitial.
+  manifest is [`docs/release-candidate-current.md`](release-candidate-current.md).
+  The prior authorized 74-path packet is now committed. The current candidate
+  fixes the D:-checkout trusted-npm resolver and direct local-check isolation;
+  it also gives the known 93-second Preview boundary regression a bounded
+  150-second P1 runner timeout and retains the test indexer lease through each
+  intentionally bounded blocked-start probe. It also aligns local robots/sitemap
+  smoke with the intentional noindex generic-jackpot policy. The next clean
+  composite run reached browser smoke after all earlier local gates passed, but
+  found that its pending-recovery fixture wrote the obsolete unauthenticated
+  global `v1` key while the runtime accepts only authenticated actor-scoped
+  `v2` state. The browser fixture now reports that boundary explicitly; real
+  wallet recovery remains an external gate and actor-scoped recovery stays
+  covered by isolated tests. It is not staged; the user has now granted local
+  commit authority, while this exact manifest remains the staging boundary.
+- A disposable detached checkout of the current code mirror completed fresh
+  local composite gates with exit `0`: lint, isolated business, P1 hardening,
+  performance self-test, V10 invariants, SQLite operations, hermetic build,
+  typegen/TypeScript, HTTP smoke, and browser smoke. This is reproducible local
+  candidate evidence only: the code mirror is dirty on top of the older
+  detached baseline and therefore is not an immutable final-SHA seal.
+- No push, deployment, hosting change, signing, approval, wallet/RPC, Preview,
+  or chain action occurred in this cycle. The only external dependency read was
+  npm's advisory audit; it passed production with no high/critical finding and
+  all dependencies with nine documented dev-toolchain high findings only.
 - The final cleanup dry-run passed with `0` matched targets and `0` would-delete
   targets; all `4` configured whole targets were absent/skipped, while protected
   `.tmp` recovery-prefix children were excluded from candidacy. Bounded exact-path cleanup
@@ -268,10 +282,9 @@ replacement needs another separately reviewed plan and exact approval.
    remains; do not treat a blind copy as restoration. First preserve a raw
    no-overwrite current-base snapshot after proving quiescence, then validate
    only disposable clones. Any in-place replacement needs separate approval.
-2. Use the explicit permission for the exact current `74`-path local commit
-   manifest only after a fresh zero-omission audit. It does not authorize push,
-   deploy, signing, wallet, RPC, or
-   chain actions.
+2. Use the user's local-commit authority only after a fresh zero-omission audit
+   of the exact current manifest. It does not authorize push, deploy, signing,
+   wallet, RPC, or chain actions.
 3. On a new immutable SHA, run a detached fresh `npm ci`, dependency/local
    prelaunch gates, clean-checkout reproduction, and the supported final
    security scan when disk and entitlement permit.

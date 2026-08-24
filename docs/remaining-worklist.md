@@ -33,6 +33,38 @@ under [`docs/archive/`](archive/).
       `npm ci`; run dependency gates, full local/prelaunch gates, hermetic
       build, typecheck, supported browser/HTTP smoke, V10 properties, and DB
       invariants when disk permits.
+- [x] Diagnose the first final-SHA composite local-check failure: direct mode
+      bypassed `business-logic-isolated-runner.mjs`. The current candidate uses
+      the mandatory isolated runner; focused policy tests pass twice. It still
+      needs a new immutable SHA and a full clean-checkout rerun.
+- [x] Restore the trusted npm dependency-audit gate for a D:-drive checkout:
+      canonical `C:\\WINDOWS` is now accepted only after kernel/shell validation.
+      The Preview boundary runner passes `30/30` twice; production audit has no
+      high/critical findings and full audit has only 9 documented dev-toolchain
+      high findings. It still needs a new immutable SHA and clean rerun.
+- [x] Diagnose the next composite-check failure: P1 hardening allotted only 30
+      seconds to the known 93-second Preview boundary runner. The candidate
+      retains fail-closed timeout behavior but bounds this one runner at 150
+      seconds; it needs a full clean rerun.
+- [x] Diagnose the next P1 failure: a 4-second test lease expired while two
+      deliberately bounded blocked-indexer probes ran. The holder now heartbeats
+      after each probe; focused WAL contention/crash-expiry coverage passes
+      twice. It needs a full clean rerun.
+- [x] Diagnose the next local smoke failure: non-public robots intentionally
+      omit a sitemap, and generic `/jackpot-win` is intentionally excluded from
+      sitemap until it has canonical event identity. The smoke contract now
+      verifies those states; focused boundary coverage passes twice.
+- [x] Diagnose the next browser-smoke failure: its pending-bet fixture wrote an
+      obsolete unauthenticated global `v1` key, but runtime recovery accepts
+      only authenticated actor-scoped `v2` state. The focused browser boundary
+      now reports that it cannot truthfully create this state and passes twice;
+      isolated recovery tests retain actor-scoped coverage. A physical wallet
+      recovery pass remains an external HTTPS/Privy gate.
+- [x] Re-run the complete local composite gate on a disposable detached code
+      mirror after the browser-fixture correction: it exited `0` through lint,
+      isolated business, P1, performance self-test, V10/SQLite, hermetic build,
+      TypeScript, HTTP, and browser smoke. It is not final-SHA evidence because
+      the candidate code is not yet committed.
 - [x] Locate and verify the already-present isolated Node `24.5.0` + npm
       `11.5.1` toolchain under `.tmp-npm-runtime-115/`. It passed the Preview
       environment suite `30/30` and exact-runtime typecheck. No runtime was
@@ -52,6 +84,9 @@ under [`docs/archive/`](archive/).
       SHA. Existing scans are historical patch evidence, not final-SHA proof.
 - [ ] Obtain green hosted Linux/Windows CI for the exact final commit.
 - [x] Refresh the current pre-permission path manifest before any staging.
+- [x] Receive user authority for local commits. Stage only the exact current
+      manifest after a fresh zero-omission audit; this never authorizes push,
+      deploy, signing, wallet/RPC, Preview, or transactions.
 - [ ] Recompute it after any further path-set change and bind final commits/SHA.
 
 ## P1: local engineering
