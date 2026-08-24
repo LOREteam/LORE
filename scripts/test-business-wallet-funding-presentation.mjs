@@ -2,44 +2,89 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import * as betPanelModule from "../app/components/BetPanel.tsx";
 import * as uiButtonModule from "../app/components/ui/UiButton.tsx";
+import * as walletSettingsPrivyPanelModule from "../app/components/wallet/WalletSettingsPrivyPanel.tsx";
 import * as walletTransferRowModule from "../app/components/wallet/WalletTransferRow.tsx";
+import * as autoMinerFormModule from "../app/hooks/useAutoMinerForm.ts";
 import * as manualBetFormModule from "../app/hooks/useManualBetForm.ts";
+import * as miningGuardsModule from "../app/hooks/useMiningGuards.ts";
 import * as appConstantsModule from "../app/lib/constants.ts";
 
+const betPanel = betPanelModule.default ?? betPanelModule;
 const uiButton = uiButtonModule.default ?? uiButtonModule;
+const walletSettingsPrivyPanel = walletSettingsPrivyPanelModule.default ?? walletSettingsPrivyPanelModule;
 const walletTransferRow = walletTransferRowModule.default ?? walletTransferRowModule;
 
+const autoMinerForm = autoMinerFormModule.default ?? autoMinerFormModule;
 const manualBetForm = manualBetFormModule.default ?? manualBetFormModule;
+const miningGuards = miningGuardsModule.default ?? miningGuardsModule;
 const appConstants = appConstantsModule.default ?? appConstantsModule;
 const MANUAL_BET_AMOUNT_KEY = `lineaore:manual-bet-amount:v2:${appConstants.APP_CHAIN_ID}:${appConstants.CONTRACT_ADDRESS.toLowerCase()}`;
 const LEGACY_MANUAL_BET_AMOUNT_KEY = "lineaore:manual-bet-amount:v1";
+const AUTO_MINER_INPUTS_KEY = `lineaore:auto-miner-inputs:v2:${appConstants.APP_CHAIN_ID}:${appConstants.CONTRACT_ADDRESS.toLowerCase()}`;
+const LEGACY_AUTO_MINER_INPUTS_KEY = "lineaore:auto-miner-inputs:v1";
 
 function createManualBetStorage(initialEntries = []) {
   const values = new Map(initialEntries);
+  const operations = [];
   return {
     getItem(key) {
+      operations.push(["get", key]);
       return values.get(key) ?? null;
     },
     setItem(key, value) {
+      operations.push(["set", key, value]);
       values.set(key, value);
     },
     removeItem(key) {
+      operations.push(["remove", key]);
       values.delete(key);
     },
     values,
+    operations,
   };
 }
+
+function ManualBetFormProbe(props) {
+  const state = manualBetForm.useManualBetForm(props);
+  return React.createElement("output", {
+    "data-balance": String(state.balance),
+    "data-balance-display": state.balanceDisplay,
+    "data-deficit": String(state.lineaDeficit),
+    "data-deficit-display": state.lineaDeficitDisplay,
+    "data-insufficient": String(state.manualInsufficient),
+    "data-total": String(state.totalBet),
+    "data-total-display": state.totalBetDisplay,
+  }, state.disabledReason ?? "ready");
+}
+
 export function runWalletFundingPresentationTests() {
-  const fundingManualFormSource = readFileSync("app/hooks/useManualBetForm.ts", "utf8");
-  const autoMinerFormSource = readFileSync("app/hooks/useAutoMinerForm.ts", "utf8");
-  const fundingBetPanelSource = readFileSync("app/components/BetPanel.tsx", "utf8");
-  const fundingPrivyPanelSource = readFileSync("app/components/wallet/WalletSettingsPrivyPanel.tsx", "utf8");
-  assert.match(fundingManualFormSource, /lineaDeficit/, "manual betting must expose the exact LINEA shortfall");
+  const insufficientManualBetMarkup = renderToStaticMarkup(React.createElement(ManualBetFormProbe, {
+    formattedBalance: "15.5",
+    walletConnected: true,
+    selectedTilesCount: 2,
+    isPending: false,
+    isRevealing: false,
+    isAutoMining: false,
+  }));
   assert.match(
-    fundingManualFormSource,
-    /function formatManualNumberDisplay\(value: number \| null \| undefined, fractionDigits = 2\)[\s\S]*formatDecimalTextFixed\(String\(value\), fractionDigits\)[\s\S]*totalBetDisplay[\s\S]*balanceDisplay[\s\S]*lineaDeficitDisplay/,
-    "manual betting display amounts must be prepared through canonical decimal display formatting",
+    insufficientManualBetMarkup,
+    /data-balance="15\.5" data-balance-display="15\.50" data-deficit="4\.5" data-deficit-display="4\.50" data-insufficient="true" data-total="20" data-total-display="20\.00">Insufficient LINEA balance/,
+    "manual betting must expose the exact LINEA shortfall and canonical display values",
+  );
+  const fundedManualBetMarkup = renderToStaticMarkup(React.createElement(ManualBetFormProbe, {
+    formattedBalance: "25",
+    walletConnected: true,
+    selectedTilesCount: 2,
+    isPending: false,
+    isRevealing: false,
+    isAutoMining: false,
+  }));
+  assert.match(
+    fundedManualBetMarkup,
+    /data-balance="25" data-balance-display="25\.00" data-deficit="0" data-deficit-display="0\.00" data-insufficient="false" data-total="20" data-total-display="20\.00">ready/,
+    "manual betting must clear the deficit when the wallet balance covers the total",
   );
   const restoreGateStorage = createManualBetStorage([[MANUAL_BET_AMOUNT_KEY, "12.5"]]);
   manualBetForm.persistManualBetAmountAfterRestore(restoreGateStorage, false, "10.0");
@@ -114,37 +159,163 @@ export function runWalletFundingPresentationTests() {
   };
   assert.doesNotThrow(() => manualBetForm.persistManualBetAmount(setFailingStorage, "2"));
   assert.equal(setFailingStorage.values.get(MANUAL_BET_AMOUNT_KEY), "5");
-  assert.match(
-    autoMinerFormSource,
-    /lineaore:auto-miner-inputs:v2:\$\{APP_CHAIN_ID\}:\$\{CONTRACT_ADDRESS\.toLowerCase\(\)\}/,
-    "auto-miner settings cache must be chain and contract scoped before mainnet",
+  const autoMinerReadKeys = [];
+  assert.deepEqual(
+    {
+      restored: autoMinerForm.restoreAutoMinerInputs({
+        getItem(key) {
+          autoMinerReadKeys.push(key);
+          return null;
+        },
+        removeItem() {},
+      }),
+      readKeys: autoMinerReadKeys,
+    },
+    {
+      restored: null,
+      readKeys: [AUTO_MINER_INPUTS_KEY, LEGACY_AUTO_MINER_INPUTS_KEY],
+    },
+    "auto-miner settings cache must read the chain-and-contract key before the legacy fallback",
   );
-  assert.match(
-    autoMinerFormSource,
-    /validateBetAmount\(betSize\) !== null[\s\S]*window\.localStorage\.removeItem\(AUTOMINER_INPUTS_KEY\)[\s\S]*window\.localStorage\.setItem\(AUTOMINER_INPUTS_KEY/,
+  const invalidAutoMinerStorage = createManualBetStorage([[AUTO_MINER_INPUTS_KEY, "stale"]]);
+  autoMinerForm.persistAutoMinerInputs(invalidAutoMinerStorage, {
+    betSize: "1e3",
+    targets: 3,
+    cycles: 5,
+  });
+  assert.equal(
+    invalidAutoMinerStorage.values.has(AUTO_MINER_INPUTS_KEY),
+    false,
     "auto-miner input cache must drop invalid in-progress bet sizes instead of restoring stale bad input",
   );
+  assert.deepEqual(invalidAutoMinerStorage.operations, [["remove", AUTO_MINER_INPUTS_KEY]]);
+
+  const validAutoMinerStorage = createManualBetStorage();
+  autoMinerForm.persistAutoMinerInputs(validAutoMinerStorage, {
+    betSize: " 7,5 ",
+    targets: 4,
+    cycles: 12,
+  });
+  assert.equal(
+    validAutoMinerStorage.values.get(AUTO_MINER_INPUTS_KEY),
+    JSON.stringify({ betSize: " 7,5 ", targets: 4, cycles: 12 }),
+    "valid auto-miner inputs must persist under the chain-and-contract scoped key",
+  );
+  assert.deepEqual(validAutoMinerStorage.operations, [[
+    "set",
+    AUTO_MINER_INPUTS_KEY,
+    JSON.stringify({ betSize: " 7,5 ", targets: 4, cycles: 12 }),
+  ]], "auto-miner persistence must perform one exact scoped write without clearing another key");
+
+  const failingAutoMinerStorage = createManualBetStorage([[AUTO_MINER_INPUTS_KEY, "previous"]]);
+  failingAutoMinerStorage.setItem = (key, value) => {
+    failingAutoMinerStorage.operations.push(["set", key, value]);
+    throw new Error("storage unavailable");
+  };
+  assert.doesNotThrow(() => autoMinerForm.persistAutoMinerInputs(failingAutoMinerStorage, {
+    betSize: "2",
+    targets: 5,
+    cycles: 25,
+  }));
+  assert.equal(
+    failingAutoMinerStorage.values.get(AUTO_MINER_INPUTS_KEY),
+    "previous",
+    "storage write failures must preserve the previously stored auto-miner inputs",
+  );
+  assert.deepEqual(failingAutoMinerStorage.operations, [[
+    "set",
+    AUTO_MINER_INPUTS_KEY,
+    JSON.stringify({ betSize: "2", targets: 5, cycles: 25 }),
+  ]]);
+
+  const unavailableStorageWindow = {};
+  Object.defineProperty(unavailableStorageWindow, "localStorage", {
+    get() {
+      throw new Error("storage access denied");
+    },
+  });
+  assert.doesNotThrow(() => autoMinerForm.persistAutoMinerInputsFromWindow(
+    unavailableStorageWindow,
+    { betSize: "2", targets: 3, cycles: 5 },
+  ), "Auto-Miner persistence must tolerate a browser that denies access to localStorage itself");
   assert.match(
     readFileSync("scripts/smoke-browser.mjs", "utf8"),
     /lineaore:auto-miner-inputs:v2:\$\{SMOKE_CHAIN_ID\}:\$\{process\.env\.NEXT_PUBLIC_CONTRACT_ADDRESS\.toLowerCase\(\)\}/,
     "browser smoke must verify the same chain and contract scoped auto-miner cache key as runtime",
   );
-  assert.match(
-    fundingBetPanelSource,
-    /function formatPanelNumber\(value: number \| null \| undefined, fractionDigits: number, fallback: string\)[\s\S]*formatDecimalTextFixed\(String\(value\), fractionDigits\)[\s\S]*top up \{lineaDeficitDisplay\} LINEA/,
-    "manual and Auto-Miner top-up copy must show the top-up amount through canonical decimal display formatting",
-  );
+  const insufficientAutoMinerMarkup = renderToStaticMarkup(React.createElement(betPanel.AutoMinerPanel, {
+    form: {
+      betSize: "1.005",
+      setBetSize: () => undefined,
+      targets: 1,
+      cycles: 1,
+      displayBetSize: "1.005",
+      displayTargets: 1,
+      displayCycles: 1,
+      totalCost: 1.005,
+      betSizeError: null,
+      balance: 0,
+      insufficientBalance: true,
+      disabledReason: "Insufficient LINEA balance",
+      isDisabled: true,
+      handleTargetsChange: () => undefined,
+      handleCyclesChange: () => undefined,
+    },
+    autoMinePhase: "idle",
+    isAutoMining: false,
+    isPending: false,
+    isRevealing: false,
+    walletAuthenticated: true,
+    walletConnected: true,
+    onToggle: () => undefined,
+  }));
   assert.doesNotMatch(
-    fundingBetPanelSource,
-    /totalBet\.toFixed|totalCost\.toFixed|lineaDeficit\.toFixed|balance\?\.toFixed|\(balance \?\? 0\)\.toFixed/,
-    "manual and Auto-Miner visible LINEA amounts must not render through direct .toFixed() calls",
+    insufficientAutoMinerMarkup,
+    /Need 1\.00, have 0\.00; top up 1\.00 LINEA/,
+    "Auto-Miner funding copy must not round the exact 1.005 total down through direct number formatting",
   );
-  assert.match(fundingPrivyPanelSource, /From external:/, "Privy top-up must identify the source wallet");
-  assert.match(fundingPrivyPanelSource, /To Privy:/, "Privy top-up must identify the recipient wallet");
   assert.match(
-    fundingPrivyPanelSource,
-    /aria-label=\{embeddedAddressCopied \? "Privy wallet address copied" : "Copy Privy wallet address"\}[\s\S]*title=\{embeddedAddressCopied \? "Privy wallet address copied" : "Copy Privy wallet address"\}/,
-    "Privy wallet copy action must expose a contextual accessible name and hover label",
+    insufficientAutoMinerMarkup,
+    /Need 1\.01, have 0\.00; top up 1\.01 LINEA/,
+    "Auto-Miner top-up copy must render the canonical rounded total and exact visible deficit",
+  );
+
+  const privyPanelProps = {
+    embeddedWalletAddress: "0x1111111111111111111111111111111111111111",
+    externalWalletAddress: "0x2222222222222222222222222222222222222222",
+    depositEthAmount: "",
+    depositTokenAmount: "",
+    isDepositingEth: false,
+    isDepositingToken: false,
+    onCopyEmbeddedAddress: () => undefined,
+    onExportEmbeddedWallet: () => undefined,
+    onCreateEmbeddedWallet: () => undefined,
+    walletSetupCreating: false,
+    walletSetupError: null,
+    onDepositEthAmountChange: () => undefined,
+    onDepositTokenAmountChange: () => undefined,
+    onDepositEthToEmbedded: () => undefined,
+    onDepositTokenToEmbedded: () => undefined,
+  };
+  const privyPanelMarkup = renderToStaticMarkup(React.createElement(
+    walletSettingsPrivyPanel.WalletSettingsPrivyPanel,
+    { ...privyPanelProps, embeddedAddressCopied: false },
+  ));
+  assert.match(privyPanelMarkup, /From external: <span[^>]*>0x2222\.\.\.2222<\/span>/, "Privy top-up must identify the source wallet");
+  assert.match(privyPanelMarkup, /To Privy: <span[^>]*>0x1111\.\.\.1111<\/span>/, "Privy top-up must identify the recipient wallet");
+  assert.match(
+    privyPanelMarkup,
+    /<button(?=[^>]*aria-label="Copy Privy wallet address")(?=[^>]*title="Copy Privy wallet address")[^>]*>/,
+    "Privy wallet copy action must expose its ready accessible name and hover label",
+  );
+  const copiedPrivyPanelMarkup = renderToStaticMarkup(React.createElement(
+    walletSettingsPrivyPanel.WalletSettingsPrivyPanel,
+    { ...privyPanelProps, embeddedAddressCopied: true },
+  ));
+  assert.match(
+    copiedPrivyPanelMarkup,
+    /<button(?=[^>]*aria-label="Privy wallet address copied")(?=[^>]*title="Privy wallet address copied")[^>]*>/,
+    "Privy wallet copy action must expose its completed accessible name and hover label",
   );
 
   const pendingTransferPresentation = walletTransferRow.getWalletTransferRowPresentation(
@@ -191,22 +362,19 @@ export function runWalletFundingPresentationTests() {
   const defaultUiButtonMarkup = renderToStaticMarkup(React.createElement(uiButton.UiButton, null, "Action"));
   assert.match(defaultUiButtonMarkup, /<button[^>]*type="button"/);
 
-  const walletSettingsModalSource = readFileSync("app/components/WalletSettingsModal.tsx", "utf8");
-  assert.match(
-    walletSettingsModalSource,
-    /max-h-\[calc\(100dvh-1rem\)\]/,
-    "Wallet Settings must stay inside the dynamic viewport when a mobile keyboard opens",
+  assert.deepEqual(
+    miningGuards.getManualBetNotification("signing"),
+    ["Signing bet transaction.", "info"],
+    "manual betting must identify the signing phase without ambiguous preparing copy",
   );
-  assert.match(walletSettingsModalSource, /min-h-0 flex-1/, "Wallet Settings content must shrink and scroll inside the modal");
-
-  const miningGuardsSource = readFileSync("app/hooks/useMiningGuards.ts", "utf8");
-  assert.match(miningGuardsSource, /Signing bet transaction\./, "manual betting must identify the signing phase");
-  assert.match(miningGuardsSource, /submitted and is still pending/, "manual betting must identify the pending phase");
-  assert.match(miningGuardsSource, /Bet confirmed on-chain\./, "manual betting must identify the confirmed phase");
-  assert.doesNotMatch(miningGuardsSource, /Preparing bet transaction/, "manual betting must not use an ambiguous preparing phase");
-  assert.doesNotMatch(
-    miningGuardsSource,
-    /Preparing bet in your Privy wallet/,
-    "manual betting must not show the removed wallet-preparing copy",
+  assert.deepEqual(
+    miningGuards.getManualBetNotification("pending"),
+    ["Bet transaction submitted and is still pending. Waiting for on-chain confirmation.", "info"],
+    "manual betting must identify the submitted transaction as still pending",
+  );
+  assert.deepEqual(
+    miningGuards.getManualBetNotification("confirmed"),
+    ["Bet confirmed on-chain.", "success"],
+    "manual betting must identify the confirmed phase and success tone",
   );
 }

@@ -1,29 +1,40 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import * as errorCatcherModule from "../app/components/ErrorCatcher.tsx";
 
 export function runErrorShellBoundaryTests() {
-  const globalErrorSource = readFileSync("app/global-error.tsx", "utf8");
-  assert.match(
-    globalErrorSource,
-    /Hard reload/,
-    "global error boundary must expose a hard reload fallback when app shell reset is not enough",
+  const errorCatcher = errorCatcherModule.default ?? errorCatcherModule;
+  assert.deepEqual(
+    [
+      errorCatcher.isPrivyAuthSessionTimeout(
+        "POST https://auth.privy.io/api/v1/sessions timed out",
+      ),
+      errorCatcher.isPrivyAuthSessionTimeout(
+        "https://auth.privy.io/api/v1/sessions <no response>",
+      ),
+    ],
+    [true, true],
+  );
+  assert.deepEqual(
+    [
+      errorCatcher.isPrivyAuthSessionTimeout(
+        "https://auth.privy.io/api/v1/users timed out",
+      ),
+      errorCatcher.isPrivyAuthSessionTimeout(
+        "https://auth.privy.io/api/v1/sessions returned 500",
+      ),
+    ],
+    [false, false],
   );
 
-  const errorCatcherSource = readFileSync("app/components/ErrorCatcher.tsx", "utf8");
-  assert.match(
-    errorCatcherSource,
-    /isPrivyAuthSessionTimeout/,
-    "global error catcher must classify transient Privy session timeouts",
-  );
-  assert.match(
-    errorCatcherSource,
-    /auth\.privy\.io\/api\/v1\/sessions/,
-    "global error catcher must specifically target Privy session creation timeouts",
-  );
-  assert.match(
-    errorCatcherSource,
-    /stopImmediatePropagation/,
-    "global error catcher must stop Next dev overlay for handled Privy auth timeouts",
+  const intercepted = [];
+  errorCatcher.suppressPrivyAuthSessionTimeoutEvent({
+    preventDefault: () => intercepted.push("preventDefault"),
+    stopImmediatePropagation: () => intercepted.push("stopImmediatePropagation"),
+  });
+  assert.deepEqual(
+    intercepted,
+    ["preventDefault", "stopImmediatePropagation"],
   );
 
   const lineaOreClientSource = readFileSync("app/LineaOreClient.tsx", "utf8");

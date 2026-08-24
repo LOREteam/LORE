@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-08-23.
+Last updated: 2026-08-24.
 
 This file is the current repository truth. Historical detail is retained under
 [`docs/archive/`](archive/). The active queue is
@@ -10,57 +10,104 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Latest code/test source commit: `d3916c37d`
-  (`refactor(tests): shrink release evidence coordinator`). This is
-  pre-document local-verification lineage only, not final immutable-SHA,
-  sealed-provenance, clean-checkout, deployment, or hosted evidence.
-- Before this docs refresh, tracked files were clean. The intentionally
-  untracked final-SHA local-gate artifact and local campaign records are
-  generated evidence; they are not staged.
-- Nothing was pushed, hosted, signed, approved, bet, claimed, or submitted to a
-  chain in this local cycle.
+- Current `HEAD`: `13522de026b1d73bdd0cb0ded7c1348f2e6ff7a2`.
+  The working tree is dirty and the current Preview/consent hardening packet is
+  uncommitted. It is local mutable-lineage evidence, not an immutable-SHA,
+  sealed-provenance, clean-checkout, deployment, or hosted result.
+- The goal's `318` paths describe a historical snapshot at `281c5fd02`; that
+  candidate later grew to `320` paths and was committed in eight local commits.
+  It is not the current permission scope. The current HEAD-bound permission
+  manifest is [`docs/release-candidate-current.md`](release-candidate-current.md):
+  `74` release paths (`57` tracked changes and `17` untracked files), `31`
+  generated campaign-evidence paths retained but excluded, and `0` staged.
+  Local permission was granted on 2026-08-24 to stage and create one commit of
+  exactly that verified manifest only. It does not authorize a push, deploy,
+  hosting change, signing, wallet/RPC use, Preview generation, or transactions.
+- Nothing was committed, pushed, deployed, hosted, signed, approved, bet,
+  claimed, submitted to a chain, or sent to a wallet/RPC in this cycle. The
+  only external read was the separately recorded guest HTTPS probe, which
+  stopped at the TLS interstitial.
+- The final cleanup dry-run passed with `0` matched targets and `0` would-delete
+  targets; all `4` configured whole targets were absent/skipped, while protected
+  `.tmp` recovery-prefix children were excluded from candidacy. Bounded exact-path cleanup
+  removed `2092` ignored cache/debug files (`286147895` bytes) from
+  `.tmp-npm-runtime-115/npm-cache`, `output/playwright`, and five old root debug
+  files, plus an empty `logs/` directory. Four exact TypeScript runs each
+  regenerated ordinary `.next` output (`3` files, `21423` bytes); all copies
+  were removed. A final pass removed five old `.serena/cache` and `.serena/logs` files (`73911`
+  bytes), six unreferenced 2026-08-04 ignored summary/console files (`10998`
+  bytes), and an empty `output/` directory. Cumulative exact removal in this
+  packet is `2115` files and `286318496` bytes. The exact runtime, its
+  dependencies, current test/release evidence, project data, recovery assets,
+  browser state, and SQLite files were retained.
+- A subsequent bounded cleanup apply removed `0 B`: the active
+  `.tmp-npm-runtime-115` Node runtime was retained, protected `.tmp` recovery
+  children and historical `artifacts/` evidence stayed in place, and the
+  protected `data/lore-v10.sqlite` base remained unchanged with no WAL/SHM
+  sidecars present.
 - V9 remains a compatibility baseline. Routine gates are V10-oriented, but V9
   source/manifests/commands remain until independently evidenced V10 cutover.
 
 ## Protected database state
 
-The protected base remains exact:
+The turn began with an exact hash check of this protected trio:
 
-- `data/lore-v10.sqlite`
-- SHA-256 `C6EB88E635C4B3A978AF77CE7B50736D6A6A92CC7A481E166118A66D0EC2B482`
-- `258048` bytes
-- mtime `2026-08-13T12:18:50.8015294Z`
-
-A local UI-only browser smoke on 2026-08-23 opened the configured runtime DB
-before the hazard was detected. The server is stopped. The current
-protected-path sidecars are:
-
-- `data/lore-v10.sqlite-wal`: `280192` bytes, SHA-256
+- base: `258048` bytes, SHA-256
+  `C6EB88E635C4B3A978AF77CE7B50736D6A6A92CC7A481E166118A66D0EC2B482`,
+  mtime `2026-08-13T12:18:50.8015294Z`;
+- WAL: `280192` bytes, SHA-256
   `5E841C8D75E63E3CC32087435DB3C31312D7919015A53FC0315DF08679CF015A`,
   mtime `2026-08-23T17:05:06.5621389Z`;
-- `data/lore-v10.sqlite-shm`: `32768` bytes, SHA-256
+- SHM: `32768` bytes, SHA-256
   `D23741B73941D310CBB480BFC1DA78342414F458AF06DEDC6E5CC915451FF4A3`,
   mtime `2026-08-23T17:03:27.9843266Z`.
 
-The first `90672` bytes of the current WAL still have the exact pre-incident
-SHA-256
-`F5E02ACCB60DDCFAFDE9E591E8A5F7934A198400DFB87163C461E65DDDE5B1F5`.
-A coherent exact recovery trio is staged only under
-`.tmp/protected-db-recovery-exact-20260823/`; its base, WAL, and SHM match
-the required hashes below. No protected file has been truncated, replaced,
-checkpointed, deleted, or opened during recovery.
+A diagnostic import of the common business suite was mistakenly run without an
+explicit owned temporary `LORE_DB_PATH`. Import-time storage initialization
+opened the configured protected path. The final read-only identity check was
+stable across two samples but no longer matched the starting trio:
 
-The required pre-incident identities remain:
+- current base: `319488` bytes, SHA-256
+  `4EA3ECB92D5EFD081030F1C10E84C444E75460E628BB216FD063E72941BF38F7`,
+  mtime `2026-08-23T22:25:17.0450020Z`;
+- `data/lore-v10.sqlite-wal`: absent;
+- `data/lore-v10.sqlite-shm`: absent.
 
-- WAL: `90672` bytes,
-  `F5E02ACCB60DDCFAFDE9E591E8A5F7934A198400DFB87163C461E65DDDE5B1F5`;
-- SHM: `32768` bytes,
-  `00E17C02AE1597CBFF1CF1417BDD098D3AB3776A2DD9CFA9B9E8436D21981AEE`.
+This shape is consistent with a checkpoint, but no claim is made that the exact
+turn-start logical state or identities were preserved. The later full business
+suite used an owned OS-temp database and protected only this post-incident
+snapshot; it does not prove that the starting trio remained unchanged.
 
-Never delete, checkpoint, replace, or vacuum any of these three protected files
-without a new exact destructive approval. Until the coherent trio is restored
-and rehashed, do not run DB-adjacent gates or start a server against this path.
-Every local runtime must use an explicit owned OS-temp SQLite path.
+The staged directory `.tmp/protected-db-recovery-exact-20260823/` was not
+modified. Its base matches the starting base, but its WAL (`90672` bytes,
+`F5E02ACCB60DDCFAFDE9E591E8A5F7934A198400DFB87163C461E65DDDE5B1F5`) and
+SHM (`32768` bytes,
+`00E17C02AE1597CBFF1CF1417BDD098D3AB3776A2DD9CFA9B9E8436D21981AEE`) are an
+older pair and do not reproduce the turn-start WAL/SHM. Do not restore, delete,
+checkpoint, replace, or vacuum any protected or recovery file without a new
+exact approval and a separately reviewed recovery plan. Until then, run no
+DB-adjacent gate and start no server against this path; every local runtime must
+use an explicit owned OS-temp SQLite path.
+
+A forensic comparison opened only exact-verified disposable copies in an owned
+OS-temp directory; the originals remained byte-identical and the temp directory
+was removed. Both copied logical states passed `quick_check` and
+`integrity_check`. The current copy has `78` pages, schema version `72`, and
+`37` rows; the staged base plus its older WAL has `74` pages, schema version
+`66`, and `35` rows. All older `meta` rows are unchanged in current, which adds
+two rows; shared data is otherwise identical. Current also adds an empty
+`scoped_user_activity` table and newer empty `scoped_jackpots` columns. The
+current base is therefore a logical superset of the available older recovery
+state, so a blind rollback would discard newer state and schema. This comparison
+still cannot reconstruct or prove equality with the lost `280192`-byte
+turn-start WAL.
+
+Existing backup tooling opens its SQLite source and no exact lost-WAL or safe
+in-place protected-path recovery tool exists. The first safe recovery step is
+permission-gated: prove quiescence, then make a raw no-overwrite byte snapshot
+of the current base outside the repository with exact pre/post identity checks.
+All SQLite validation must then use disposable clones. Any protected-path
+replacement needs another separately reviewed plan and exact approval.
 
 ## Recent local progress
 
@@ -87,18 +134,96 @@ Every local runtime must use an explicit owned OS-temp SQLite path.
   mobile rewards, canonical jackpot-share identity, direct public routes,
   indexing defaults, and opt-in Web Vitals received focused local hardening.
   The later `7905dc764` change is a recovery assertion only.
-- Removed only measured rebuildable artifacts: old Node/npm caches (about
+- Historical cleanup before the current packet removed only measured
+  rebuildable artifacts: old Node/npm caches (about
   `1.00 GiB`), `.next`, `tsconfig.tsbuildinfo`, and eleven aged `.tmp` outputs
   (`4.4 MiB`). Dependencies, active runtime, campaign records, project data,
   browser/session data, the protected SQLite trio, and staged recovery assets were retained.
   Workspace cleanup now excludes recovery-prefix directories and fails closed on
   symlink/junction paths that resolve outside the repository.
-- P1.10 AST audit at `d3916c37d` is `5387/6166` behavioral assertions (`87.37%`)
-  across `106` modules. The V10 Preview packet now has 25 isolated runtime cases
-  for bounded/canonical log binding, redacted output, timeout/freshness, and
-  fail-closed dry-run boundaries. The release-evidence grouping reduces direct
-  coordinator fan-out to `95` runner imports, `2` side-effect imports, and `95`
-  direct calls; extraction remains partial.
+- The current uncommitted P1.10 schema-v2 audit is `5819/6345` behavioral
+  assertions (`91.71%`) with `526` source operands across `113` modules.
+  Coordinator fan-out is `71` runner imports, `2` side-effect imports, and
+  `71` direct calls; the audit self-test passes `17/17`. Schema v2 counts the
+  full Node 24 assert surface, fails closed on unknown assert methods, resolves
+  lexical bindings, and conservatively follows `readFileSync` data through
+  transparent projections. It added `30` previously omitted assertions,
+  removed one property-key false positive, and reclassified `31` confirmed
+  transitive source-derived assertions; therefore its percentage is not
+  directly comparable to the earlier schema-v1 `5775/6314` snapshot.
+  Review of the `24` static release-operations source assertions found that
+  they guard a Windows-only local-campaign fixture; Linux deliberately returns
+  before that fixture, so no equivalent Linux behavior seam exists and the
+  assertions remain fail-closed structural coverage.
+  Extraction remains partial. The
+  latest seams execute public deposits/rebates/jackpots failure responses,
+  normal/exact rebate limiter responses, bounded all-or-fail rebate-history
+  reads, rewards-route and reward-summary checksum-address normalization,
+  deposits limiter/normalization/corrupt-storage behavior, public read-model
+  revision/cache-key propagation, Wallet Settings focus-trap wiring, funded
+  auto-resolve ordering, and wallet-transfer dedupe/address/precision/decode-failure behavior,
+  SSR rebate freshness without network access, corrupt sound-storage cleanup,
+  ErrorCatcher/global-error console sanitization, lazy tab fallback semantics, inert browser auto-resolve
+  configuration, bounded retry parsing, Auto-Miner persistence, manual-bet notification phases,
+  runtime-health route/auth wiring, BackupGate recovery copy, funding/bet panel
+  SSR, Wallet Settings dialog/mobile/export/resolver presentation, truthful
+  AdminOps read-only `on`/`off`/`unknown` state, sanitized wallet-signature
+  fallback warnings, and all six current bounded AdminOps JSON-reading seams
+  instead of source matching. The direct-route seam now executes real LorePage
+  and LineaOreClient default/explicit tab propagation into runtime and renders a
+  distinct runtime-returned tab, also without source matching. The Preview boundary
+  fixtures now use uniquely named, extracted artifact-mutation callbacks, which
+  removed `24` audit false positives without reclassifying the two intentional
+  startup-order source assertions. Six fixture restoration/marker reads now remain
+  behaviorally classified through a byte-identical helper rather than being
+  mistaken for source inspection. Root metadata/indexing and canonical jackpot
+  share/CTA behavior now run through isolated environment probes, exported policy,
+  and SSR; wallet-scoped rebate/deposit/achievement/chat cache tests now exercise
+  valid normalization plus malformed-address rejection. The health probe compares only boolean environment
+  identity so assertion failures cannot dump `process.env`. Earlier seams cover the exact Share-on-X
+  intent, client runtime/content order, Privy timeout
+  suppression, chat/reduced-motion/resolver state,
+  runtime-health redaction/SSR, and import-safe Preview environment behavior. The exact
+  isolated Node `24.5.0` / npm `11.5.1` runtime passed the complete Preview
+  environment suite, exact npm typecheck, the full release-operations runner,
+  and the full isolated business suite. The latter two used owned OS-temp
+  SQLite paths. The newest focused seams execute the real route error effect,
+  wallet-transfer partial-coverage propagation, bigint-safe page/game balance
+  formatting, and live-canary role/integer validation. The wallet-boundary
+  wrapper now preserves action/external/error/dialog/funding order while
+  reducing coordinator fan-out from `74/2/74` to `71/2/71`. No runtime was
+  downloaded or installed in this packet. The newest exact probes add bigint-
+  safe rebate route cache/watermark behavior and inspection-only release CLI
+  range/canonical-integer validation.
+- Three CLI modules (`monitor-runtime-health.mjs`, `smoke-browser.mjs`, and
+  `check-sqlite-startup.mjs`) now load combined dotenv only on direct execution,
+  so ordinary read-only imports no longer inject signing variables. A synthetic
+  dotenv regression and the full isolated suite pass.
+- The local V10 Preview/consent implementation is complete. Its exact canonical
+  envelope binds the Sepolia target, provenance, role set, wallet set, caps,
+  UUID challenge, matrix admission, canonical log, and one-shot authorization.
+  The current plan with `rounds=6` caps `3` approvals, `12` bets, and `5`
+  resolves (`20` writes total), `maxAffectedEpochs=11`,
+  `34600000000000000` wei maximum native gas, and `maxFailures=1`.
+- Preview publication is atomic and bounded; it stably rereads the canonical
+  log and uses fence-aware exact Markdown parsing. A repository-local one-shot
+  tombstone and single-flight
+  lease are acquired before RPC; provenance and a second strict checker run
+  before the first write. These local controls do not replace a transactional
+  cross-host ledger, and a coherent local attacker can still rewrite local
+  artifacts; this is not a cryptographic authorization boundary.
+- Final review also made RPC labels short, context-bearing, and
+  credential-hostile before any JSONL write; resolver nonce state is reread at
+  the write sink, and the V10-only consent path no longer disables the separate
+  managed-soak profile.
+- The read-only Preview environment inspector now returns a fixed public schema,
+  including both network names, contract/token, deploy/indexer blocks, and the
+  epoch-bound flag, while omitting RPC URLs and credentials. The local public
+  file proves `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1`, a valid
+  `linea-sepolia-public-fallback` label, and disabled execute gates. Explicit
+  network/address/token/block bindings are absent, so only the canonical source
+  defaults plus offline manifest are confirmed; strict runtime configuration is
+  still open.
 
 ## Verification state
 
@@ -106,45 +231,76 @@ Every local runtime must use an explicit owned OS-temp SQLite path.
 | --- | --- | --- |
 | Wallet unavailable/error UI | Focused SSR/pure tests, TypeScript, and diff hygiene passed for `603`, `7a`, and `466`; Header now renders unavailable balances explicitly; protected DB snapshot unchanged | Pass locally |
 | Wallet-model regression | Direct targeted test and full isolated business runner passed after `ef0359c95`; protected DB snapshot unchanged | Pass locally for that pre-`7a` lineage |
-| Manual bet persistence | Focused wallet-funding presentation test proves restore-before-persist and scoped storage behavior; TypeScript passed | Pass locally |
+| Bet input persistence | Focused wallet-funding presentation tests prove manual restore-before-persist plus Auto-Miner scoped read/write/removal and denied-storage behavior; TypeScript passed | Pass locally |
 | Campaign runner hardening | PowerShell script parses, diff hygiene passed, child commands run with `TSX_DISABLE_CACHE=1`, environment restoration is fail-closed, and launch anomalies fail closed | Pass locally without rerunning full campaign |
 | Local campaign | Iterations 1–3 completed all seven isolated gates. Iteration 4 stopped at `business-logic-isolated` because its old model assertion expected fake zero strings while code correctly returned `null`. The protected snapshot did not change and the campaign process exited. | Historical regression evidence only; not current-SHA/final evidence |
-| Pre-doc local business suite | The isolated business suite passed at `786b8692b` after stale-fixture fixes. `7905dc764` adds a later test-only recovery-identity assertion; this is not represented as a current-SHA final-suite rerun. | Pass locally for the stated mutable lineage only |
+| Current local business suite | The full isolated suite passed on the current dirty worktree after correcting a synchronous negative assertion and removing three dotenv import-time signing-environment side effects. It used an owned OS-temp SQLite path; it does not repair or validate the pre-run protected DB trio. | Pass locally; mutable worktree evidence only |
 | Pre-doc local gate packet | At `7905dc764`: P1 hardening `42/42` in `139491ms`; TypeScript `typegen` plus `tsc`, standalone V10 and V9 local invariants, global-stats `10000+`, leaderboard `110003`, and the hermetic wrapper passed. | Pass locally only; not final immutable-SHA evidence |
 | Read-only browser smoke | Local read-only Playwright smoke passed; screenshot: `artifacts/smoke-browser/sha7905-current-readonly.png`. It did not sign, create a wallet, approve, bet, claim, or send a transaction. | Local UI evidence only, not launch, hosted, or live-wallet proof |
-| P1.10 audit | At `d3916c37d`, Preview boundary tests passed 25/25 through both Node test and the P1 `tsx` path; inert import and exported coordinator runner passed. `scripts/audit-p1-behavior.mjs` reports `5387/6166` behavioral assertions (`87.37%`) across `106` modules; the release-evidence suite was inert-imported only. | Pass locally; partial objective |
-| P1.17 mechanism | Current self-tests at `7905dc764` passed: collector `85` cases (schema `3`) and verifier `55` cases (schema `3`). No two-hour run, build, browser, or DB gate is represented here. | Open: final immutable clean SHA, sealed canonical/profile pair, headed native-hidden two-hour run, and strict verification |
-| Sepolia V10 target | Canonical target is `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` at block `31678224`; managed runtime must set `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1` and require the epoch-bound selector. Offline manifest/provenance verification at `7905dc764` is local only. | Deployed-bytecode, hosted frontend/indexer, and independent external evidence remain open |
-| Production HTTPS | `https://playlore.xyz/` previously presented `ERR_CERT_COMMON_NAME_INVALID` | External hosting/domain remediation |
+| P1.10 audit | On the uncommitted working tree, schema v2 reports `5819/6345` behavioral assertions (`91.71%`) and `526` source operands across `113` modules; coordinator fan-out is `71/2/71`, and the self-test passes `17/17`. Focused same-parent x2 passed for error-boundary, wallet-model, wallet-boundary, jackpot/rebate, release-CLI configuration, and reward-scanner runners; audit x2, syntax, diff hygiene, temp/poison checks, and an isolated full business summary also passed. The new probes execute real production components/hooks/CLI validation in fresh children with fetch poison, owned or deliberately absent DB paths, and no wallet, signing, RPC, network, or chain action. The reward-scanner hook probe uses a synthetic synchronous React primitive runtime, so it does not prove browser scheduler/lifecycle behavior. | Pass locally; partial objective and not committed |
+| Latest P1.10 fee-policy seam | The standalone runner removes one redundant direct-approval source assertion only after existing builder behavior covers bounded legacy/EIP-1559 requests, fixed gas, legacy-field preservation, ignored caller gas override, and invalid-fee rejection. Focused x2, audit x2, and self-test `17/17` pass; the current official coordinator audit is `5819/6345` with `526` source operands. | Local test-only progress; partial and uncommitted |
+| Latest P1.10 fee-policy review | The remaining source assertions bind pre-wallet/signer fee validation, guarded submission sinks, or live-write helpers. No equivalent safe public behavior seam exists without simulating risky signing paths, so they remain fail-closed structural coverage. Focused x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Reviewed; no removal justified |
+| Latest P1.10 fee-policy review | The remaining source assertions bind pre-wallet/signer fee validation, guarded submission sinks, or live-write helpers. No equivalent safe public behavior seam exists without simulating risky signing paths, so they remain fail-closed structural coverage. Focused x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Reviewed; no removal justified |
+| Latest P1.10 mobile-mining seam | The standalone mobile-mining runner removes one redundant `walletSetup` source assertion only after its stale-settlement behavior scenario proves reset invalidates the old rejected attempt without unlocking or overwriting the new retry. Module `69/21/48 -> 68/20/48`; focused x2, audit x2, and self-test `17/17` pass. It is outside the coordinator graph, so the current official totals are `5819/6345` with `526` source operands. | Local test-only progress; partial and uncommitted |
+| Latest P1.10 rebate-history seam | The request-boundary runner removes two static pagination assertions only after the existing isolated child executes the real route: `limit=65` returns `400` before any DB read, while `limit=64` reaches the page read with exact `{ beforeEpoch: null, limit: 64 }` and fails closed on its mocked multicall. Focused API and route-child runners passed x2; audit x2 and self-test `17/17` pass. | Local test-only progress; partial and uncommitted |
+| Latest P1.10 claim-candidates seam | The integer-query runner replaces two static pagination assertions with a fresh child that executes the real handler: `limit=401` returns `400` without opening its poisoned DB path, while `limit=400` reaches the page read with exact `{ beforeEpoch: null, limit: 400 }`. Focused x2, audit x2, and self-test `17/17` pass. | Local test-only progress; partial and uncommitted |
+| Latest P1.10 auth-content-type seam | The request-boundary runner removes two redundant admin/chat auth source assertions because the independent API matrix executes both real routes with `text/plain` and proves exact JSON `415`, `no-store`, and `Vary: Cookie` handling. Focused domain and matrix runners x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Local test-only progress; partial and uncommitted |
+| Latest P1.10 process-content-type seam | A dedicated fresh child in the request-boundary runner mocks only a valid admin session, executes the real process route with `text/plain`, and proves the exact JSON `415`, `no-store`, and `Vary: Cookie` refusal. The redundant source assertion is removed. Focused x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Local test-only progress; partial and uncommitted |
+| Latest P1.10 Vary-normalization seam | Existing direct response-header behavior covers case-insensitive Cookie dedupe, wildcard preservation, and rejection of an invalid `Vary` token while preserving valid tokens. The redundant internal-regex assertion is removed. Focused x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Local test-only progress; partial and uncommitted |
+| Latest P1.10 Retry-After seam | The existing rate-limit boundary now directly proves zero clamps to one second, fractional values round up, and values above a day clamp to `86400`; the redundant implementation-regex assertion is removed. Focused x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Local test-only progress; partial and uncommitted |
+| Latest P1.10 OpenGraph query seam | The real API matrix renders the same canonical jackpot event with malicious `amount`, `kind`, `tile`, and `epoch` inputs and proves an identical PNG. The redundant static URL-parameter assertion is removed. Public-presentation and API-matrix runners x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Local test-only progress; partial and uncommitted |
+| Transactional-ledger design | [`transactional-ledgers-design.md`](transactional-ledgers-design.md) specifies the external transactional consent state machine, idempotent intent/outbox/reconciliation protocol, immutable audit chain, and canonical activity/reorg model. It is an unimplemented design: no external PostgreSQL-compatible store, cross-host writer, migration, or restore evidence exists. | Design complete; implementation and external verification remain open |
+| Valkey REST-parity selection | [`valkey-upstash-parity-plan.md`](valkey-upstash-parity-plan.md) records the Valkey `8.1.9` candidate and immutable official manifest digest, plus the required Upstash-compatible HTTPS REST façade. The local Docker daemon is unavailable, so no image was pulled and no Lua `EVAL` evidence exists. | Selection/design only; runtime evidence remains open |
+| V10 Preview/consent | Preview environment `30/30`, canonical envelope `9/9`, analyzer `10/10`, one-shot store `10/10`, runtime enforcement `2/2`, fee policy, the full release-operations runner, TypeScript, targeted syntax checks, and diff hygiene passed on the verified isolated Node `24.5.0` / npm `11.5.1` runtime. No actual Preview was generated because the tree is dirty and exact public runtime configuration was not confirmed; `authorizationReady` and all live actions remain false. | Local implementation pass only; no live authorization or campaign evidence |
+| P1.17 mechanism | Self-tests passed on the current working tree: collector `87/87` (schema `4`, maximum duration `7200000`) and verifier `85/85` (schema `4`). The headed preflight now records one raw `setInterval(100)` chain across 15s visible, 90s native-hidden, and 15s visible recovery, plus trusted visibility transitions, foreground-witness snapshots, normalized Chromium switch names, bounded Long Task evidence, fail-closed cadence thresholds, and a separately reconciled hidden API request count. Schema `3`, truncated/non-monotonic raw data, missing command-line evidence, hidden-state interruption, weak controls, hidden-task saturation, frozen/unthrottled timers, forbidden switches, count mismatches, or a tampered derived summary are rejected. Zero hidden API requests remain a truthful measured count, not a claim that polling occurred. The cadence packet is operational evidence, not causal proof of browser scheduler internals. No two-hour run, build, browser, or DB gate is represented here. | Open: final immutable clean SHA, sealed canonical/profile pair, real headed native-hidden two-hour run, captured timer-cadence evidence, and strict verification |
+| Sepolia V10 target | Canonical target is `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` at block `31678224`; managed runtime must set `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1` and require the epoch-bound selector. The offline manifest/provenance verifier passed at local `HEAD` `13522de026b1d73bdd0cb0ded7c1348f2e6ff7a2`; no network or wallet was used. | Deployed-bytecode, hosted frontend/indexer, and independent external evidence remain open |
+| Production HTTPS | A fresh guest in-app browser navigation on 2026-08-23 failed at TLS with `ERR_CERT_COMMON_NAME_INVALID`; the safety interstitial was not bypassed. | External hosting/domain remediation; Privy/modal QA remains blocked |
+| Privy embedded modal | `@privy-io/react-auth` remains locked/installed at `3.27.2`; the `Submit` accessible name and 24x24 provider close target are formally accepted only as the upstream exception recorded in [`docs/privy-upstream-accessibility-boundary.md`](privy-upstream-accessibility-boundary.md). The focused app-owned boundary test passes `17` cases without DOM/CSS or `node_modules` overrides. | Upstream exception accepted; real public-HTTPS keyboard/mobile/connect/recovery QA remains open |
 | Supported Standard security scan | Supported entitlement remains unavailable locally | External entitlement blocker |
 
 ## Objective status
 
 ### P0
 
-1. Restore and recheck the coherent exact base/WAL/SHM trio with a new explicit
-   approval before every DB-adjacent gate. Do not delete or checkpoint the
-   sidecars as a prerequisite.
-2. On a new immutable SHA, run a detached fresh `npm ci`, dependency/local
+1. Resolve the protected DB incident under separately reviewed, permission-gated
+   stages before every DB-adjacent gate. The current base is a valid logical
+   superset of the available older recovery state, while no exact turn-start WAL
+   remains; do not treat a blind copy as restoration. First preserve a raw
+   no-overwrite current-base snapshot after proving quiescence, then validate
+   only disposable clones. Any in-place replacement needs separate approval.
+2. Use the explicit permission for the exact current `74`-path local commit
+   manifest only after a fresh zero-omission audit. It does not authorize push,
+   deploy, signing, wallet, RPC, or
+   chain actions.
+3. On a new immutable SHA, run a detached fresh `npm ci`, dependency/local
    prelaunch gates, clean-checkout reproduction, and the supported final
    security scan when disk and entitlement permit.
-3. Obtain green hosted Linux/Windows CI and real public HTTPS/Privy evidence.
-4. Keep the known block-context randomness risk open; the user explicitly
+4. Obtain green hosted Linux/Windows CI and real public HTTPS/Privy evidence.
+5. Keep the known block-context randomness risk open; the user explicitly
    deferred the redesign.
 
 ### P1
 
 - Continue P1.10 only at real public behavior seams.
+- Treat the current Preview/consent implementation packet as locally complete;
+  do not promote it to an authorization or checked live campaign.
 - Collect and strictly verify the final two-hour P1.17 native-hidden evidence.
-- Keep global-stat, leaderboard, and wallet data states truthful; next local UX
-  follow-up is an explicit Header error/stale/last-updated state rather than
-  inferring offline from any RPC failure.
+  Schema `4` is headed/raw-native and cadence fail-closed, but the actual
+  browser timer distribution still requires a real final-SHA collection.
+- Keep global-stat, leaderboard, and wallet data states truthful. Header
+  error/stale/last-updated provenance is implemented and its focused wallet
+  presentation test passes locally; hosted/browser evidence remains open.
 - Restart a new SHA-bound local campaign only after its starting commit is
   captured and sufficient free disk is available. Do not reuse the stopped
   campaign as final evidence.
-- Real Redis/Valkey Lua, two replicas, external DB restore, hosted HTTPS/Privy,
-  physical mobile wallets, signed canary, and 24–48 hour topology evidence
-  remain external.
+- Real execution remains open for `RATE_LIMIT_SCRIPT`,
+  `KEEPER_DAILY_BUDGET_SCRIPT`, and `ROTATE_SESSION_SCRIPT`. The production
+  Redis/Valkey engine, exact version, immutable image digest, and
+  Upstash-compatible REST parity are not pinned. A read-only host audit found no
+  Redis/Valkey binary, process, or service; only Docker client `29.5.2` exists,
+  while its service/engine is stopped. No real `EVAL` was claimed. Two replicas, a transactional cross-host consent ledger, external
+  DB restore, hosted HTTPS/Privy, physical mobile wallets, signed canary, and
+  24–48 hour topology evidence also remain external.
 
 ## External and live blockers
 
@@ -152,9 +308,14 @@ Every local runtime must use an explicit owned OS-temp SQLite path.
 - The release record still has `25` external/status blockers; mainnet
   environment validation still has `41` recorded failures until refreshed
   evidence says otherwise.
-- No current Preview authorizes a transaction. Any signing, approval, bet,
-  claim, canary, soak, deployment, push, or hosted rollout needs its own fresh
-  explicit authority and, for chain writes, a bounded consent.
+- No current Preview exists or authorizes a transaction. A clean immutable SHA,
+  detached fresh `npm ci`, supported security scan/CI, confirmed exact public
+  configuration, and a fresh exact consent are still required. Any signing,
+  approval, bet, claim, canary, soak, deployment, push, or hosted rollout needs
+  its own fresh explicit authority and, for chain writes, bounded consent.
+- Production HTTPS still fails with `ERR_CERT_COMMON_NAME_INVALID`; real
+  Redis/Valkey plus two replicas, the P1.17 headed two-hour/mobile/Privy run,
+  and a shared transactional cross-host consent ledger remain unchecked.
 
 ## Safety boundaries
 

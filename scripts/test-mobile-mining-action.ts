@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   deriveAutoMinerAction,
   deriveManualMiningAction,
@@ -7,6 +9,7 @@ import {
 } from "../app/components/BetPanel";
 import {
   formatExactMobileBetTotal,
+  HubSidePanel,
   summarizeMobileTileSelection,
 } from "../app/components/HubSidePanel";
 import { createWalletSetupGuard, runWalletSetupAttempt } from "../app/lib/walletSetup";
@@ -157,10 +160,105 @@ assert.deepEqual(
   { disabled: true, label: "RESUME PENDING", variant: "pending" },
 );
 
+const baseManualBetForm = {
+  betAmount: "1.0",
+  setBetAmount: () => undefined,
+  totalBet: 3,
+  totalBetDisplay: "3.00",
+  betAmountError: null,
+  balance: 10,
+  balanceDisplay: "10.00",
+  lineaDeficit: 0,
+  lineaDeficitDisplay: "0.00",
+  manualInsufficient: false,
+  disabledReason: null,
+  isDisabled: false,
+};
+const baseSidePanelProps: React.ComponentProps<typeof HubSidePanel> = {
+  chatOpen: false,
+  coldBootDefaults: false,
+  formattedBalance: "100",
+  walletAuthenticated: true,
+  walletConnected: true,
+  embeddedWalletSyncing: false,
+  walletSetupCreating: false,
+  walletSetupError: null,
+  onCreateEmbeddedWallet: async () => undefined,
+  liveStateReady: true,
+  readOnlyReason: null,
+  gridSelectedTiles: [1, 2, 3],
+  selectedTilesCount: 3,
+  feeEstimate: null,
+  feeEstimateUnavailable: false,
+  isPending: false,
+  isRevealing: false,
+  isAnalyzing: false,
+  isAutoMining: false,
+  manualBetForm: baseManualBetForm,
+  handleManualMineWithGuard: async () => undefined,
+  onQuickPickTiles: () => undefined,
+  autoMinePhase: "idle",
+  autoMineProgress: null,
+  runningParams: null,
+  lowEthBalance: false,
+  handleAutoMineWithGuard: async () => undefined,
+};
+const renderSidePanel = (overrides: Partial<React.ComponentProps<typeof HubSidePanel>> = {}) =>
+  renderToStaticMarkup(React.createElement(HubSidePanel, { ...baseSidePanelProps, ...overrides }));
+const getOpeningTag = (markup: string, attribute: string) => {
+  const attributeIndex = markup.indexOf(attribute);
+  if (attributeIndex < 0) return "";
+  const openingIndex = markup.lastIndexOf("<", attributeIndex);
+  const closingIndex = markup.indexOf(">", attributeIndex);
+  return openingIndex >= 0 && closingIndex >= 0 ? markup.slice(openingIndex, closingIndex + 1) : "";
+};
+const getClassName = (openingTag: string) => openingTag.match(/class="([^"]*)"/)?.[1] ?? "";
+
+const mobileActionMarkup = renderSidePanel();
+const mobileManualActionTag = getOpeningTag(mobileActionMarkup, 'data-testid="mobile-manual-bet-action"');
+const mobileAutoActionTag = getOpeningTag(mobileActionMarkup, 'data-testid="mobile-auto-miner-action"');
+assert.notEqual(mobileManualActionTag, "", "the rendered mobile manual action must exist");
+assert.notEqual(mobileAutoActionTag, "", "the rendered mobile Auto-Miner action must exist");
+assert.match(getClassName(mobileManualActionTag), /(?:^|\s)h-11(?:\s|$)/, "the mobile manual action must render a 44px touch target");
+assert.match(getClassName(mobileAutoActionTag), /(?:^|\s)h-11(?:\s|$)/, "the mobile Auto-Miner action must render a 44px touch target");
+
+const manualErrorMarkup = renderSidePanel({
+  manualBetForm: {
+    ...baseManualBetForm,
+    betAmount: "0",
+    betAmountError: "Amount must be greater than zero",
+    disabledReason: "Amount must be greater than zero",
+    isDisabled: true,
+  },
+});
+const invalidAmountInputTag = getOpeningTag(manualErrorMarkup, 'id="mobile-bet-amount-per-tile"');
+assert.match(invalidAmountInputTag, /aria-describedby="mobile-bet-amount-error"/, "an invalid mobile amount must describe its rendered validation message");
+assert.doesNotMatch(
+  getOpeningTag(mobileActionMarkup, 'id="mobile-bet-amount-per-tile"'),
+  /aria-describedby=/,
+  "a valid mobile amount must not retain a validation-message description",
+);
+
+const walletCreatingMarkup = renderSidePanel({ walletConnected: false, walletSetupCreating: true });
+const walletCreatingStatusTag = getOpeningTag(walletCreatingMarkup, 'id="mobile-wallet-setup-status"');
+assert.match(walletCreatingStatusTag, /role="status"/, "wallet creation must render a status live region");
+assert.match(walletCreatingStatusTag, /aria-live="polite"/, "wallet creation updates must be announced politely");
+assert.match(walletCreatingStatusTag, /aria-busy="true"/, "the rendered wallet status must remain busy during creation");
+assert.match(walletCreatingMarkup, />Creating wallet\.\.\.<\/span>/, "the wallet status must expose the creating state text");
+const walletErrorMarkup = renderSidePanel({ walletConnected: false, walletSetupError: "Wallet setup failed" });
+assert.match(
+  getOpeningTag(walletErrorMarkup, 'id="mobile-wallet-setup-status"'),
+  /role="alert"/,
+  "a rendered wallet setup failure must promote the separate live region to an alert",
+);
+assert.match(walletErrorMarkup, />Wallet setup failed<\/span>/, "the separate wallet status must expose the failure text");
+
+const chatOpenMarkup = renderSidePanel({ chatOpen: true });
+assert.doesNotMatch(chatOpenMarkup, /data-testid="mobile-mining-action-bar"/, "chat must replace, not overlap, the rendered sticky action bar");
+
 const sidePanelSource = readFileSync("app/components/HubSidePanel.tsx", "utf8");
 const betPanelSource = readFileSync("app/components/BetPanel.tsx", "utf8");
 const hubSource = readFileSync("app/components/HubContent.tsx", "utf8");
-const walletSetupSource = readFileSync("app/lib/walletSetup.ts", "utf8");
 const walletRuntimeSource = readFileSync("app/hooks/useLineaOreClientRuntime.ts", "utf8");
 const gameplayStageClass = hubSource.match(/className="([^"]*gameplay-stage[^"]*)"/)?.[1] ?? "";
 
@@ -183,22 +281,16 @@ assert.match(sidePanelSource, /manualWalletCta === "login"[\s\S]*requestWalletLo
 assert.match(sidePanelSource, /autoWalletCta === "login"[\s\S]*requestWalletLogin\(\)[\s\S]*autoWalletCta === "create"[\s\S]*onWalletSetup\(\)/, "mobile Auto-Miner CTA must separate guest login from authenticated wallet setup");
 assert.match(betPanelSource, /walletCta === "login"[\s\S]*requestWalletLogin\(\)[\s\S]*walletCta === "create"[\s\S]*onWalletSetup/, "desktop CTA must separate guest login from authenticated wallet setup");
 assert.match(sidePanelSource, /handleWalletSetup[\s\S]*actionInFlightRef\.current[\s\S]*onCreateEmbeddedWallet\(\)/, "manual and Auto-Miner wallet setup must delegate to the shared duplicate-action guard");
-assert.match(walletSetupSource, /let generation = 0;[\s\S]*attemptGeneration !== generation/, "wallet setup reset must invalidate stale attempt settlement");
 assert.match(walletRuntimeSource, /walletSetupIdentityRef[\s\S]*!wallet\.authenticated \|\| identityChanged/, "wallet setup must invalidate its guard on logout or wallet identity change");
 assert.match(sidePanelSource, /onCreateEmbeddedWallet: \(\) => Promise<void>/, "wallet setup must retain the async creation contract");
-assert.match(sidePanelSource, /aria-describedby=\{manualBetForm\.betAmountError \? "mobile-bet-amount-error" : undefined\}/, "the mobile amount input must describe only its validation message");
-assert.match(sidePanelSource, /id="mobile-wallet-setup-status"[\s\S]*role=\{walletSetupError \? "alert" : "status"\}[\s\S]*aria-live="polite"[\s\S]*aria-busy=\{walletSetupCreating \|\| undefined\}/, "wallet setup creation must expose a separate live busy status");
 assert.equal(
   (sidePanelSource.match(/mobileActionDocked/g) ?? []).length,
   2,
   "the mobile dock must replace both in-panel primary buttons instead of exposing duplicate mobile sends",
 );
 assert.match(betPanelSource, /mobileActionDocked && "max-\[899px\]:hidden"/);
-assert.match(sidePanelSource, /data-testid="mobile-manual-bet-action"[\s\S]*?className="h-11/);
-assert.match(sidePanelSource, /data-testid="mobile-auto-miner-action"[\s\S]*?className="h-11/);
 assert.match(sidePanelSource, /window\.visualViewport/);
 assert.match(sidePanelSource, /env\(safe-area-inset-bottom\)/);
-assert.match(sidePanelSource, /if \(chatOpen\) return null;/, "chat must replace, not overlap, the sticky action bar");
 assert.match(
   gameplayStageClass,
   /min-\[900px\]:backdrop-blur-md/,

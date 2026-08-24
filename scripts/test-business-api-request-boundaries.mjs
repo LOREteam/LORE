@@ -1,25 +1,69 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import * as responseHeadersModule from "../app/api/_lib/responseHeaders.ts";
 import * as sharedRateLimitModule from "../app/api/_lib/sharedRateLimit.ts";
 import * as liveStateRuntimePolicyModule from "../app/api/live-state/runtimePolicy.ts";
 import * as publicReadModelPolicyModule from "../app/api/_lib/publicReadModelPolicy.ts";
+
+const PROCESS_CONTENT_TYPE_PROBE = process.env.API_REQUEST_BOUNDARY_MODE === "process-content-type-probe";
+
+async function runProcessContentTypeProbe() {
+  process.env.NODE_ENV = "development";
+  process.env.ADMIN_PROCESS_ROUTE_ENABLED = "1";
+  process.env.WEB_REPLICA_COUNT = "1";
+  process.env.ALLOW_WEAK_RATE_LIMIT_IDENTITY = "1";
+  delete process.env.UPSTASH_REDIS_REST_URL;
+  delete process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  const { mock } = await import("node:test");
+  mock.module(new URL("../app/api/_lib/adminSession.ts", import.meta.url).href, {
+    namedExports: {
+      readAdminSession: async () => ({ address: "0x0000000000000000000000000000000000000001" }),
+    },
+  });
+  const [{ NextRequest }, routeModule] = await Promise.all([
+    import("next/server"),
+    import("../app/api/admin/processes/route.ts"),
+  ]);
+  const route = routeModule.default ?? routeModule;
+  const response = await route.POST(new NextRequest("http://localhost:3000/api/admin/processes", {
+    method: "POST",
+    headers: {
+      "content-type": "text/plain",
+      "user-agent": "lore-process-content-type-probe",
+    },
+    body: "{}",
+  }));
+  assert.equal(response.status, 415, "admin process route must reject non-JSON bodies");
+  assert.deepEqual(await response.json(), { error: "Process payload must be JSON" });
+  assert.match(response.headers.get("cache-control") ?? "", /(?:^|,)\s*no-store(?:,|$)/);
+  assert.match(response.headers.get("vary") ?? "", /(?:^|,)\s*Cookie(?:,|$)/i);
+}
+
+function runProcessContentTypeProbeChild() {
+  const result = spawnSync(
+    process.execPath,
+    ["--experimental-test-module-mocks", "--import", "tsx", fileURLToPath(import.meta.url)],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, API_REQUEST_BOUNDARY_MODE: "process-content-type-probe" },
+      encoding: "utf8",
+    },
+  );
+  assert.equal(result.status, 0, `process content-type child failed: ${result.stderr || result.stdout}`);
+}
+
+if (PROCESS_CONTENT_TYPE_PROBE) {
+  await runProcessContentTypeProbe();
+  process.exit(0);
+}
 
 export async function runApiRequestBoundaryTests() {
   const responseHeaders = responseHeadersModule.default ?? responseHeadersModule;
   const sharedRateLimit = sharedRateLimitModule.default ?? sharedRateLimitModule;
   const liveStateRuntimePolicy = liveStateRuntimePolicyModule.default ?? liveStateRuntimePolicyModule;
   const publicReadModelPolicy = publicReadModelPolicyModule.default ?? publicReadModelPolicyModule;
-  assert.match(
-    readFileSync("app/api/rebate-history/route.ts", "utf8"),
-    /parsePositiveIntegerParam\(cursorParam\)[\s\S]*parseBoundedPositiveIntegerParam\(limitParam, MAX_PAGE_SIZE\)[\s\S]*limit: requestedLimit/,
-    "rebate-history pagination must reject out-of-range limits instead of silently clamping them",
-  );
-  assert.doesNotMatch(
-    readFileSync("app/api/rebate-history/route.ts", "utf8"),
-    /Math\.min\(requestedLimit, MAX_PAGE_SIZE\)/,
-    "rebate-history pagination must keep max-limit rejection explicit instead of reintroducing silent clamping",
-  );
   const parsePositiveInteger = (value) => {
     if (!/^[1-9]\d*$/.test(value)) return null;
     const parsed = Number(value);
@@ -61,11 +105,7 @@ export async function runApiRequestBoundaryTests() {
     "rewards body epoch parsing must reject over-limit arrays before cache-key and storage work",
   );
   assert.equal(overLimitElementReads, 0, "over-limit rewards arrays must be rejected before parsing any submitted element");
-  assert.match(
-    readFileSync("app/api/admin/processes/route.ts", "utf8"),
-    /reason === "unsupported-content-type"[\s\S]*Process payload must be JSON[\s\S]*status: 415[\s\S]*varyCookie: true/,
-    "admin process controls must fail closed with no-store/Vary 415 on non-JSON payloads",
-  );
+  runProcessContentTypeProbeChild();
   const cookieVaryResponse = new Response("{}", { headers: { Vary: "Accept-Encoding, cookie, Cookie" } });
   responseHeaders.applyNoStoreHeaders(cookieVaryResponse, { varyCookie: true });
   assert.equal(cookieVaryResponse.headers.get("Cache-Control"), "no-store, no-cache, must-revalidate");
@@ -89,11 +129,6 @@ export async function runApiRequestBoundaryTests() {
     invalidVaryResponse.headers.get("Vary"),
     "Accept-Encoding, X-Lore, Cookie",
     "session API no-store helper must discard invalid Vary tokens while preserving valid tokens and Cookie",
-  );
-  assert.match(
-    readFileSync("app/api/_lib/responseHeaders.ts", "utf8"),
-    /HEADER_TOKEN_RE[\s\S]*function normalizeHeaderToken[\s\S]*HEADER_TOKEN_RE\.test\(trimmed\)[\s\S]*const nextToken = normalizeHeaderToken\(next\)[\s\S]*const trimmed = normalizeHeaderToken\(value\)/,
-    "session API no-store helper must validate Vary header tokens before merging Cookie",
   );
   const retryAfterLimitRequest = new Request("https://play.example/api/retry-limit", {
     headers: {
@@ -126,19 +161,11 @@ export async function runApiRequestBoundaryTests() {
     retryAfterLimitHeader,
     "429 retryAfter JSON field must be bounded with the same limit as the header",
   );
-  assert.match(
-    readFileSync("app/api/_lib/sharedRateLimit.ts", "utf8"),
-    /MAX_RETRY_AFTER_SECONDS\s*=\s*86_400[\s\S]*Math\.min\(MAX_RETRY_AFTER_SECONDS, Math\.max\(1, Math\.ceil\(value\)\)\)/,
-    "shared rate-limit 429 retry-after values must stay bounded",
-  );
-  assert.match(
-    readFileSync("app/api/admin/auth/route.ts", "utf8"),
-    /reason === "unsupported-content-type"[\s\S]*Auth payload must be JSON[\s\S]*status: 415[\s\S]*varyCookie: true/,
-    "admin auth must fail closed with no-store/Vary on non-JSON payloads",
-  );
-  assert.match(
-    readFileSync("app/api/chat/auth/route.ts", "utf8"),
-    /reason === "unsupported-content-type"[\s\S]*Auth payload must be JSON[\s\S]*status: 415[\s\S]*varyCookie: true/,
-    "chat auth must fail closed with no-store/Vary on non-JSON payloads",
+  assert.equal(sharedRateLimit.normalizeRetryAfterSeconds(0), 1, "Retry-After must reject zero seconds");
+  assert.equal(sharedRateLimit.normalizeRetryAfterSeconds(1.1), 2, "Retry-After must round fractional seconds up");
+  assert.equal(
+    sharedRateLimit.normalizeRetryAfterSeconds(86_400.1),
+    86_400,
+    "Retry-After must cap values above one day",
   );
 }

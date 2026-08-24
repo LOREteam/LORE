@@ -83,6 +83,16 @@ assert.doesNotMatch(
   "White Paper must not imply unlimited Auto-Miner cycles",
 );
 assert.match(whitePaper, /Total rounds to auto-bet \(1-5000\)/, "White Paper Auto-Miner cycle copy must match the runtime 5000-cycle cap");
+assert.match(
+  whitePaper,
+  /Login with email or an existing external wallet[\s\S]*Email sign-in normally creates the embedded wallet[\s\S]*Wallet Settings[\s\S]*same enabled method[\s\S]*private key/,
+  "White Paper must render the documented entry, Settings fallback, restoration, and backup model",
+);
+assert.doesNotMatch(
+  whitePaper,
+  /Login with email, social, or existing wallet/,
+  "White Paper must not render unsupported social login",
+);
 assert.doesNotMatch(
   `${whitePaper}\n${faq}`,
   /(?:tested on|During) Sepolia\b/,

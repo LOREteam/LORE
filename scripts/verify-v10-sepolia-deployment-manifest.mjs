@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import { lstatSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveTrustedGitExecutable } from "./build-provenance.mjs";
 
 const DEFAULT_MANIFEST_PATH = "config/lineaV10SepoliaDeploymentManifest.json";
 const COMPILATION_MANIFEST_PATH = "contracts/LineaOreV10.compilation.json";
@@ -22,6 +23,7 @@ const EXPECTED_KEYS = [
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const ADDRESS_RE = /^0x[a-f0-9]{40}$/;
 const TX_HASH_RE = /^0x[a-f0-9]{64}$/;
+const MAX_GIT_OUTPUT_BYTES = 1024 * 1024;
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -72,12 +74,54 @@ export function parseV10SepoliaDeploymentManifest(raw) {
   return value;
 }
 
-function git(root, args) {
-  return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+function gitEnvironment(sourceEnv = process.env) {
+  const environment = {
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_PAGER: "cat",
+    GIT_TERMINAL_PROMPT: "0",
+    LANG: "C",
+    LC_ALL: "C",
+  };
+  for (const key of ["SystemRoot", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR"]) {
+    if (typeof sourceEnv[key] === "string") environment[key] = sourceEnv[key];
+  }
+  return environment;
+}
+
+function git(root, args, { allowDifference = false } = {}) {
+  const executable = resolveTrustedGitExecutable();
+  const result = spawnSync(executable, [
+    "--no-pager",
+    "-c", `safe.directory=${root.replaceAll("\\", "/")}`,
+    "-c", "core.fsmonitor=false",
+    "-c", "core.untrackedCache=false",
+    "-c", "core.preloadIndex=false",
+    "-c", "core.hooksPath=",
+    "-c", "diff.external=",
+    "-C", root,
+    ...args,
+  ], {
+    cwd: root,
+    encoding: "utf8",
+    env: gitEnvironment(),
+    maxBuffer: MAX_GIT_OUTPUT_BYTES,
+    timeout: 10_000,
+    windowsHide: true,
+  });
+  if (result.error?.code === "ETIMEDOUT") throw new Error("V10 deployment manifest Git verification timed out");
+  if (result.error?.code === "ENOBUFS") throw new Error("V10 deployment manifest Git verification exceeded its output bound");
+  if (result.error || result.signal || (result.status !== 0 && !(allowDifference && result.status === 1))) {
+    throw new Error("V10 deployment manifest trusted Git verification failed");
+  }
+  return { different: result.status === 1, output: String(result.stdout ?? "").trim() };
 }
 
 export function verifyV10SepoliaDeploymentManifest({ projectRoot = process.cwd(), manifestPath = DEFAULT_MANIFEST_PATH, verifyGitArtifact = true } = {}) {
-  const root = path.resolve(projectRoot);
+  const root = realpathSync(path.resolve(projectRoot));
   const manifestAbsolutePath = path.resolve(root, manifestPath);
   const relativeManifestPath = path.relative(root, manifestAbsolutePath);
   if (relativeManifestPath.startsWith("..") || path.isAbsolute(relativeManifestPath)) {
@@ -100,13 +144,20 @@ export function verifyV10SepoliaDeploymentManifest({ projectRoot = process.cwd()
   }
   let verifierGitSha = null;
   if (verifyGitArtifact) {
-    verifierGitSha = git(root, ["rev-parse", "HEAD"]);
+    verifierGitSha = git(root, ["rev-parse", "--verify", "HEAD^{commit}"]).output.toLowerCase();
     git(root, ["rev-parse", "--verify", `${manifest.sourceArtifactGitSha}^{commit}`]);
-    try {
-      execFileSync("git", ["-C", root, "diff", "--quiet", manifest.sourceArtifactGitSha, "--", ...CONTRACT_ARTIFACT_PATHS], { stdio: "ignore" });
-    } catch (error) {
-      if (error && error.status === 1) throw new Error("current V10 contract artifacts drifted from the immutable deployment artifact SHA");
-      throw error;
+    const artifactDiff = git(root, [
+      "diff",
+      "--quiet",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--ignore-submodules=none",
+      manifest.sourceArtifactGitSha,
+      "--",
+      ...CONTRACT_ARTIFACT_PATHS,
+    ], { allowDifference: true });
+    if (artifactDiff.different) {
+      throw new Error("current V10 contract artifacts drifted from the immutable deployment artifact SHA");
     }
   }
   return {

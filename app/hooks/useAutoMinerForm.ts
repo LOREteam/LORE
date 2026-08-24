@@ -13,7 +13,13 @@ const DEFAULT_AUTO_MINER_INPUTS = {
   cycles: 5,
 };
 
-type AutoMinerInputsStorage = Pick<Storage, "getItem" | "removeItem">;
+type AutoMinerInputsStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+interface AutoMinerInputs {
+  betSize: string;
+  targets: number;
+  cycles: number;
+}
 
 interface RunningParams {
   betStr: string;
@@ -52,7 +58,7 @@ export function sanitizeAutoMinerInputs(value: unknown) {
   };
 }
 
-export function restoreAutoMinerInputs(storage: AutoMinerInputsStorage) {
+export function restoreAutoMinerInputs(storage: Pick<AutoMinerInputsStorage, "getItem" | "removeItem">) {
   try {
     const raw = storage.getItem(AUTOMINER_INPUTS_KEY);
     const legacyRaw = raw == null ? storage.getItem(LEGACY_AUTOMINER_INPUTS_KEY) : null;
@@ -69,6 +75,32 @@ export function restoreAutoMinerInputs(storage: AutoMinerInputsStorage) {
       // ignore storage failures
     }
     return null;
+  }
+}
+
+export function persistAutoMinerInputs(
+  storage: Pick<AutoMinerInputsStorage, "setItem" | "removeItem">,
+  inputs: AutoMinerInputs,
+) {
+  try {
+    if (validateBetAmount(inputs.betSize) !== null) {
+      storage.removeItem(AUTOMINER_INPUTS_KEY);
+      return;
+    }
+    storage.setItem(AUTOMINER_INPUTS_KEY, JSON.stringify(inputs));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+export function persistAutoMinerInputsFromWindow(
+  browserWindow: Pick<Window, "localStorage">,
+  inputs: AutoMinerInputs,
+) {
+  try {
+    persistAutoMinerInputs(browserWindow.localStorage, inputs);
+  } catch {
+    // ignore unavailable browser storage
   }
 }
 
@@ -101,15 +133,8 @@ export function useAutoMinerForm({
   }, []);
 
   useEffect(() => {
-    try {
-      if (typeof window !== "undefined") {
-        if (validateBetAmount(betSize) !== null) {
-          window.localStorage.removeItem(AUTOMINER_INPUTS_KEY);
-          return;
-        }
-        window.localStorage.setItem(AUTOMINER_INPUTS_KEY, JSON.stringify({ betSize, targets, cycles }));
-      }
-    } catch {}
+    if (typeof window === "undefined") return;
+    persistAutoMinerInputsFromWindow(window, { betSize, targets, cycles });
   }, [betSize, targets, cycles]);
 
   useEffect(() => {

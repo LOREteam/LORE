@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import * as routeErrorModule from "../app/api/_lib/routeError.ts";
 
 const routeError = routeErrorModule.default ?? routeErrorModule;
 const LOGGER_STORAGE_KEY = "lineaore:logs";
-const LOGGER_SANITIZER_FAULT_PROBE = process.env.ERROR_BOUNDARY_TEST_MODE === "logger-sanitizer-fault-probe";
+const ERROR_BOUNDARY_TEST_MODE = process.env.ERROR_BOUNDARY_TEST_MODE;
+const LOGGER_SANITIZER_FAULT_PROBE = ERROR_BOUNDARY_TEST_MODE === "logger-sanitizer-fault-probe";
 
 function createMemoryStorage() {
   const values = new Map();
@@ -80,7 +83,317 @@ async function runLoggerSanitizerFaultProbe() {
   }
 }
 
-if (LOGGER_SANITIZER_FAULT_PROBE) {
+async function runSoundStorageProbe() {
+  const { mock } = await import("node:test");
+  let stateIndex = 0;
+  mock.module("react", {
+    namedExports: {
+      useRef: (value) => ({ current: value }),
+      useState: (value) => {
+        stateIndex += 1;
+        return [value, (next) => {
+          if (typeof next === "function") next(value);
+        }];
+      },
+      useEffect: (effect) => {
+        effect();
+      },
+      useCallback: (callback) => callback,
+    },
+  });
+
+  const storage = createMemoryStorage();
+  storage.values.set("lore:sound-muted", "invalid");
+  storage.values.set("lore:sound-settings", "{not-json");
+  const restoreStorage = installTemporaryGlobal("localStorage", storage);
+  try {
+    const imported = await import("../app/hooks/useSound.ts?sound-storage-probe");
+    const soundModule = imported.default ?? imported;
+    soundModule.useSound();
+    process.stdout.write(`${JSON.stringify({ removals: storage.removals, stateCount: stateIndex })}\n`);
+  } finally {
+    restoreStorage();
+  }
+}
+
+async function runErrorCatcherConsoleProbe() {
+  const { mock } = await import("node:test");
+  const cleanups = [];
+  mock.module("react", {
+    namedExports: {
+      useEffect: (effect) => {
+        const cleanup = effect();
+        if (typeof cleanup === "function") cleanups.push(cleanup);
+      },
+    },
+  });
+
+  const storage = createMemoryStorage();
+  const listeners = new Map();
+  const restoreStorage = installTemporaryGlobal("localStorage", storage);
+  const restoreSessionStorage = installTemporaryGlobal("sessionStorage", storage);
+  const restoreWindow = installTemporaryGlobal("window", {
+    location: { href: "https://app.invalid/", reload() {}, replace() {} },
+    history: { state: null, replaceState() {} },
+    localStorage: storage,
+    addEventListener(type, listener) {
+      listeners.set(type, listener);
+    },
+    removeEventListener(type) {
+      listeners.delete(type);
+    },
+    setTimeout() {
+      return 1;
+    },
+    clearTimeout() {},
+  });
+  const originalConsoleError = console.error;
+  const forwarded = [];
+  console.error = (...args) => {
+    if (args.length === 1 && String(args[0]).includes("ExperimentalWarning: Module mocking")) return;
+    forwarded.push(args);
+  };
+
+  let payload;
+  try {
+    const imported = await import("../app/components/ErrorCatcher.tsx?error-catcher-console-probe");
+    const errorCatcherModule = imported.default ?? imported;
+    errorCatcherModule.ErrorCatcher();
+    const error = new Error(
+      `Bearer catcher-secret https://rpc.catcher.invalid/private wallet=0x${"12".repeat(20)}`,
+    );
+    console.error(error, { privateKey: `0x${"ab".repeat(32)}`, amount: 42n });
+    const record = forwarded[0];
+    payload = {
+      forwarding: {
+        count: forwarded.length,
+        argCount: record?.length,
+        errorName: record?.[0]?.name,
+        amount: record?.[1]?.amount,
+        stackBounded: typeof record?.[0]?.stack === "string" && record[0].stack.length <= 400,
+      },
+      serialized: JSON.stringify(record),
+    };
+  } finally {
+    for (const cleanup of cleanups.reverse()) cleanup();
+    console.error = originalConsoleError;
+    restoreWindow();
+    restoreSessionStorage();
+    restoreStorage();
+  }
+  process.stdout.write(`${JSON.stringify(payload)}\n`);
+}
+
+async function runGlobalErrorConsoleProbe() {
+  const { mock } = await import("node:test");
+  mock.module("react", {
+    namedExports: {
+      useEffect: (effect) => {
+        effect();
+      },
+    },
+  });
+  mock.module("react/jsx-runtime", {
+    namedExports: {
+      Fragment: Symbol.for("error-boundary-probe.fragment"),
+      jsx: (type, props) => ({ type, props }),
+      jsxs: (type, props) => ({ type, props }),
+    },
+  });
+  mock.module("@sentry/nextjs", {
+    namedExports: {
+      captureException() {},
+    },
+  });
+
+  const storage = createMemoryStorage();
+  const restoreSessionStorage = installTemporaryGlobal("sessionStorage", storage);
+  const restoreWindow = installTemporaryGlobal("window", {
+    location: { href: "https://app.invalid/", reload() {}, replace() {} },
+    history: { state: null, replaceState() {} },
+  });
+  const originalConsoleError = console.error;
+  const forwarded = [];
+  console.error = (...args) => {
+    if (args.length === 1 && String(args[0]).includes("ExperimentalWarning: Module mocking")) return;
+    forwarded.push(args);
+  };
+
+  let payload;
+  try {
+    const imported = await import("../app/global-error.tsx?global-error-console-probe");
+    const globalErrorModule = imported.default ?? imported;
+    const GlobalError = typeof globalErrorModule === "function" ? globalErrorModule : globalErrorModule.default;
+    const error = Object.assign(
+      new Error(
+        `Bearer global-probe-secret https://rpc.global-probe.invalid/private wallet=0x${"34".repeat(20)}`,
+      ),
+      { digest: "Bearer global-digest-secret" },
+    );
+    GlobalError({ error, reset() {} });
+    payload = {
+      forwardedCount: forwarded.length,
+      args: forwarded[0],
+      serialized: JSON.stringify(forwarded),
+    };
+  } finally {
+    console.error = originalConsoleError;
+    restoreWindow();
+    restoreSessionStorage();
+  }
+  process.stdout.write(`${JSON.stringify(payload)}\n`);
+}
+
+async function runRouteErrorEffectProbe() {
+  const { mock } = await import("node:test");
+  const routeErrorUrl = new URL("../app/error.tsx", import.meta.url).href;
+  const loggerUrl = new URL("../app/lib/logger.ts", import.meta.url).href;
+  const chunkRecoveryUrl = new URL("../app/lib/chunkReloadRecovery.ts", import.meta.url).href;
+  const effects = [];
+  const sentryCaptures = [];
+  const errorCalls = [];
+  const warningCalls = [];
+  let stripCalls = 0;
+  let reloadCalls = 0;
+  let networkCalls = 0;
+
+  const reactMock = mock.module("react", {
+    namedExports: {
+      useEffect: (effect) => {
+        effects.push(effect);
+        effect();
+      },
+    },
+  });
+  const jsxRuntimeMock = mock.module("react/jsx-runtime", {
+    namedExports: {
+      Fragment: Symbol.for("route-error-effect-probe.fragment"),
+      jsx: (type, props) => ({ type, props }),
+      jsxs: (type, props) => ({ type, props }),
+    },
+  });
+  const sentryMock = mock.module("@sentry/nextjs", {
+    namedExports: {
+      captureException: (...args) => sentryCaptures.push(args),
+    },
+  });
+  const loggerMock = mock.module(loggerUrl, {
+    namedExports: {
+      log: {
+        error: (...args) => errorCalls.push(args),
+        warn: (...args) => warningCalls.push(args),
+      },
+    },
+  });
+  const chunkRecoveryMock = mock.module(chunkRecoveryUrl, {
+    namedExports: {
+      isChunkLoadLikeErrorMessage: (message) => message.startsWith("ChunkLoadError"),
+      reloadWithCacheBust: () => {
+        reloadCalls += 1;
+      },
+      shouldAttemptChunkReloadOnce: () => true,
+      stripChunkReloadCacheParam: () => {
+        stripCalls += 1;
+      },
+    },
+  });
+
+  const restoreWindow = installTemporaryGlobal("window", {
+    location: {},
+    history: {},
+  });
+  const restoreSessionStorage = installTemporaryGlobal("sessionStorage", {});
+  const restoreFetch = installTemporaryGlobal("fetch", async () => {
+    networkCalls += 1;
+    throw new Error("route error effect probe forbids network access");
+  });
+
+  let payload;
+  try {
+    const imported = await import(`${routeErrorUrl}?route-error-effect-probe=${process.pid}`);
+    const candidate = imported.default ?? imported;
+    const ErrorPage = typeof candidate === "function" ? candidate : candidate.default;
+    ErrorPage({
+      error: Object.assign(
+        new Error("Bearer route-effect-secret https://private-route-effect.invalid/path"),
+        { digest: "Bearer route-digest-secret" },
+      ),
+      reset() {},
+    });
+    ErrorPage({
+      error: Object.assign(
+        new Error(
+          `ChunkLoadError Loading chunk failed Bearer chunk-effect-secret ${"x".repeat(500)}`,
+        ),
+        { digest: "Bearer chunk-digest-secret" },
+      ),
+      reset() {},
+    });
+
+    const sensitiveData =
+      /route-effect-secret|route-digest-secret|chunk-effect-secret|chunk-digest-secret|private-route-effect\.invalid/i;
+    const serializedErrorCalls = JSON.stringify(errorCalls);
+    const warningCall = warningCalls[0];
+    const warningData = warningCall?.[2];
+    payload = {
+      effects: effects.length,
+      sentryCaptures: sentryCaptures.length,
+      errorCallCount: errorCalls.length,
+      warningCallCount: warningCalls.length,
+      stripCalls,
+      reloadCalls,
+      networkCalls,
+      errorCalls: errorCalls.map(([scope, event, data]) => ({
+        scope,
+        event,
+        dataKeys: data && typeof data === "object" ? Object.keys(data).sort() : [],
+      })),
+      errorSafety: {
+        leaked: sensitiveData.test(serializedErrorCalls),
+        stacksBounded:
+          errorCalls.length === 2 &&
+          errorCalls.every(([, , data]) =>
+            typeof data?.stack === "string" && data.stack.length <= 400
+          ),
+      },
+      chunkWarning: {
+        scope: warningCall?.[0] ?? null,
+        event: warningCall?.[1] ?? null,
+        dataKeys:
+          warningData && typeof warningData === "object"
+            ? Object.keys(warningData).sort()
+            : [],
+        leaked: sensitiveData.test(JSON.stringify(warningCalls)),
+        messageBounded:
+          typeof warningData?.message === "string" && warningData.message.length <= 180,
+      },
+    };
+  } finally {
+    restoreFetch();
+    restoreSessionStorage();
+    restoreWindow();
+    chunkRecoveryMock.restore();
+    loggerMock.restore();
+    sentryMock.restore();
+    jsxRuntimeMock.restore();
+    reactMock.restore();
+  }
+  process.stdout.write(`${JSON.stringify(payload)}\n`);
+}
+
+if (ERROR_BOUNDARY_TEST_MODE === "sound-storage-probe") {
+  await runSoundStorageProbe();
+  process.exit(0);
+} else if (ERROR_BOUNDARY_TEST_MODE === "error-catcher-console-probe") {
+  await runErrorCatcherConsoleProbe();
+  process.exit(0);
+} else if (ERROR_BOUNDARY_TEST_MODE === "global-error-console-probe") {
+  await runGlobalErrorConsoleProbe();
+  process.exit(0);
+} else if (ERROR_BOUNDARY_TEST_MODE === "route-error-effect-probe") {
+  await runRouteErrorEffectProbe();
+  process.exit(0);
+} else if (LOGGER_SANITIZER_FAULT_PROBE) {
   await runLoggerSanitizerFaultProbe();
   process.exit(0);
 }
@@ -104,6 +417,35 @@ function assertLoggerSanitizerFaultIsCaught() {
     `${result.stdout}\n${result.stderr}`,
     /logger sanitizer fault probe must reject an identity-sanitizer mutant/,
   );
+}
+
+function runIsolatedErrorBoundaryProbe(mode) {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--no-warnings",
+      "--experimental-test-module-mocks",
+      "--import",
+      "tsx",
+      fileURLToPath(import.meta.url),
+    ],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, ERROR_BOUNDARY_TEST_MODE: mode },
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 512 * 1024,
+      windowsHide: true,
+    },
+  );
+  if (result.error || result.signal || result.status !== 0) {
+    throw new Error(
+      `isolated error-boundary probe ${mode} failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+  }
+  const output = result.stdout.trim().split(/\r?\n/).at(-1);
+  if (!output) throw new Error(`isolated error-boundary probe ${mode} returned no output`);
+  return JSON.parse(output);
 }
 
 async function runSupportLoggerBehaviorTests() {
@@ -246,14 +588,15 @@ async function runSupportLoggerBehaviorTests() {
 export async function runErrorBoundaryAndJsonTests() {
   assertLoggerSanitizerFaultIsCaught();
   await runSupportLoggerBehaviorTests();
-  assert.match(
-    readFileSync("app/hooks/useSound.ts", "utf8"),
-    /const raw = localStorage\.getItem\(SOUND_SETTINGS_KEY\)[\s\S]*localStorage\.removeItem\(SOUND_SETTINGS_KEY\)/,
+  const soundStorageProbe = runIsolatedErrorBoundaryProbe("sound-storage-probe");
+  assert.equal(
+    soundStorageProbe.removals.filter((key) => key === "lore:sound-settings").length,
+    1,
     "sound settings loader must clear corrupt or invalid localStorage entries",
   );
-  assert.match(
-    readFileSync("app/hooks/useSound.ts", "utf8"),
-    /const stored = localStorage\.getItem\(STORAGE_KEY\)[\s\S]*stored !== null && stored !== "true"[\s\S]*localStorage\.removeItem\(STORAGE_KEY\)/,
+  assert.equal(
+    soundStorageProbe.removals.filter((key) => key === "lore:sound-muted").length,
+    1,
     "sound muted restore must clear invalid localStorage values",
   );
   const safePublicRouteError = routeError.describeSafeRouteError(
@@ -293,19 +636,95 @@ export async function runErrorBoundaryAndJsonTests() {
     );
     assert.match(serializedRouteLog, /pending/);
   }
-  const redactedErrorCatcherSource = readFileSync("app/components/ErrorCatcher.tsx", "utf8");
-  assert.match(redactedErrorCatcherSource, /sanitizeSupportLogPayload\(normalizeConsoleArg\(value\)\)/);
-  assert.match(redactedErrorCatcherSource, /originalConsoleError\(\.\.\.args\.map\(sanitizeConsoleArg\)\)/);
-  const redactedGlobalErrorSource = readFileSync("app/global-error.tsx", "utf8");
-  const errorBoundarySource = readFileSync("app/error.tsx", "utf8");
-  assert.match(redactedGlobalErrorSource, /safeError\s*=\s*sanitizeSupportLogPayload\(\{/);
-  assert.match(redactedGlobalErrorSource, /console\.error\("\[GlobalError\]", safeError\.name, safeError\.message, safeError\.digest\)/);
-  assert.match(errorBoundarySource, /safeError\s*=\s*sanitizeSupportLogPayload\(\{[\s\S]*stack: error\.stack\?\.slice\(0, 400\)/);
-  assert.match(errorBoundarySource, /log\.error\("ErrorBoundary", "route render error", safeError\)/);
-  assert.match(errorBoundarySource, /safeChunkError\s*=\s*sanitizeSupportLogPayload\(\{ message: error\.message\.slice\(0, 180\) \}\)/);
+  const errorCatcherProbe = runIsolatedErrorBoundaryProbe("error-catcher-console-probe");
+  assert.deepEqual(
+    errorCatcherProbe.forwarding,
+    {
+      count: 1,
+      argCount: 2,
+      errorName: "Error",
+      amount: "42",
+      stackBounded: true,
+    },
+    "ErrorCatcher must forward every console argument only after normalization and sanitization",
+  );
   assert.doesNotMatch(
-    errorBoundarySource,
-    /log\.error\("ErrorBoundary", "route render error", \{[\s\S]*message: error\.message/,
+    errorCatcherProbe.serialized,
+    /catcher-secret|catcher\.invalid|0x(?:12){20}|0x(?:ab){32}/i,
+    "ErrorCatcher console forwarding must redact tokens, provider URLs, addresses, and private keys",
+  );
+  const globalErrorProbe = runIsolatedErrorBoundaryProbe("global-error-console-probe");
+  assert.deepEqual(
+    { count: globalErrorProbe.forwardedCount, args: globalErrorProbe.args },
+    {
+      count: 1,
+      args: [
+        "[GlobalError]",
+        "Error",
+        "<redacted> <redacted> wallet=<redacted>",
+        "<redacted>",
+      ],
+    },
+    "global error logging must emit only the sanitized error name, message, and digest",
+  );
+  assert.doesNotMatch(
+    globalErrorProbe.serialized,
+    /global-probe-secret|global-digest-secret|global-probe\.invalid|0x(?:34){20}/i,
+    "global error logging must not expose tokens, provider URLs, wallet addresses, or digest secrets",
+  );
+  const routeErrorEffectProbe = runIsolatedErrorBoundaryProbe("route-error-effect-probe");
+  assert.deepEqual(
+    {
+      effects: routeErrorEffectProbe.effects,
+      sentryCaptures: routeErrorEffectProbe.sentryCaptures,
+      errorCallCount: routeErrorEffectProbe.errorCallCount,
+      warningCallCount: routeErrorEffectProbe.warningCallCount,
+      stripCalls: routeErrorEffectProbe.stripCalls,
+      reloadCalls: routeErrorEffectProbe.reloadCalls,
+      networkCalls: routeErrorEffectProbe.networkCalls,
+    },
+    {
+      effects: 2,
+      sentryCaptures: 2,
+      errorCallCount: 2,
+      warningCallCount: 1,
+      stripCalls: 2,
+      reloadCalls: 1,
+      networkCalls: 0,
+    },
+    "route error effects must execute once per error without external network access",
+  );
+  assert.deepEqual(
+    routeErrorEffectProbe.errorCalls,
+    [
+      {
+        scope: "ErrorBoundary",
+        event: "route render error",
+        dataKeys: ["digest", "message", "name", "stack"],
+      },
+      {
+        scope: "ErrorBoundary",
+        event: "route render error",
+        dataKeys: ["digest", "message", "name", "stack"],
+      },
+    ],
+    "route error effects must send the bounded support payload through the intended logger event",
+  );
+  assert.deepEqual(
+    routeErrorEffectProbe.errorSafety,
+    { leaked: false, stacksBounded: true },
+    "route error logs must redact hostile error fields and bound stacks before logging",
+  );
+  assert.deepEqual(
+    routeErrorEffectProbe.chunkWarning,
+    {
+      scope: "ErrorBoundary",
+      event: "chunk route error detected, reloading page once",
+      dataKeys: ["message"],
+      leaked: false,
+      messageBounded: true,
+    },
+    "chunk route warnings must expose only a sanitized message bounded to 180 characters",
   );
   const adminOpsRouteSource = readFileSync("app/api/admin/ops/route.ts", "utf8");
   assert.doesNotMatch(
@@ -313,16 +732,43 @@ export async function runErrorBoundaryAndJsonTests() {
     /type LogSourceSummary = \{[\s\S]*\n\s*file:\s*string;/,
     "admin ops log source responses must not expose absolute server log paths",
   );
-  assert.match(
-    errorBoundarySource,
-    /min-h-11[\s\S]*Try again[\s\S]*min-h-11[\s\S]*Hard reload/,
-    "route error boundary actions must keep 44px touch targets",
+  const hostileRenderError = Object.assign(
+    new Error("Bearer render-secret https://private-render.invalid/path"),
+    { digest: "private-render-digest" },
   );
-  assert.match(
-    redactedGlobalErrorSource,
-    /minHeight:\s*"44px"[\s\S]*Try again[\s\S]*minHeight:\s*"44px"[\s\S]*Hard reload/,
-    "global error boundary actions must keep 44px touch targets",
+  const routeErrorPageModule = await import("../app/error.tsx");
+  const globalErrorPageModule = await import("../app/global-error.tsx");
+  const RouteErrorPage = routeErrorPageModule.default ?? routeErrorPageModule;
+  const GlobalErrorPage = globalErrorPageModule.default ?? globalErrorPageModule;
+  const routeErrorMarkup = renderToStaticMarkup(React.createElement(RouteErrorPage, {
+    error: hostileRenderError,
+    reset: () => undefined,
+  }));
+  const routeErrorButtons = [...routeErrorMarkup.matchAll(/<button\b[^>]*>/g)].map(([tag]) => tag);
+  assert.equal(routeErrorButtons.length, 2, "route error boundary must render two recovery actions");
+  assert.equal(
+    routeErrorButtons.filter((tag) => /\bmin-h-11\b/.test(tag)).length,
+    2,
+    "route error boundary recovery actions must keep 44px touch targets",
   );
+  assert.match(routeErrorMarkup, />Try again<\/button>/);
+  assert.match(routeErrorMarkup, />Hard reload<\/button>/);
+  assert.doesNotMatch(routeErrorMarkup, /render-secret|private-render|private-render-digest/i);
+
+  const globalErrorMarkup = renderToStaticMarkup(React.createElement(GlobalErrorPage, {
+    error: hostileRenderError,
+    reset: () => undefined,
+  }));
+  const globalErrorButtons = [...globalErrorMarkup.matchAll(/<button\b[^>]*>/g)].map(([tag]) => tag);
+  assert.equal(globalErrorButtons.length, 2, "global error boundary must render two recovery actions");
+  assert.equal(
+    globalErrorButtons.filter((tag) => /min-height:44px/.test(tag)).length,
+    2,
+    "global error boundary recovery actions must keep 44px touch targets",
+  );
+  assert.match(globalErrorMarkup, />Try again<\/button>/);
+  assert.match(globalErrorMarkup, />Hard reload<\/button>/);
+  assert.doesNotMatch(globalErrorMarkup, /render-secret|private-render|private-render-digest/i);
   const { readJsonResponse } = await import("../app/lib/readJsonResponse.ts");
   assert.deepEqual(
     await readJsonResponse(new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } })),

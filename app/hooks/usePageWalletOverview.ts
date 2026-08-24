@@ -19,6 +19,8 @@ type CachedPrivyBalanceEntry = {
   balances: CachedPrivyBalances;
 };
 
+type CachedPrivyBalanceStorage = Pick<Storage, "getItem" | "removeItem">;
+
 const EMPTY_CACHED_BALANCES: CachedPrivyBalances = {
   token: null,
   tokenUpdatedAt: null,
@@ -58,6 +60,31 @@ export function getCachedPrivyBalancesForKey(
 ): CachedPrivyBalances {
   return cacheKey && entry.cacheKey === cacheKey ? entry.balances : EMPTY_CACHED_BALANCES;
 }
+
+export function readCachedPrivyBalanceEntry(
+  storage: CachedPrivyBalanceStorage,
+  cacheKey: string,
+): CachedPrivyBalanceEntry {
+  try {
+    const raw = storage.getItem(cacheKey);
+    if (!raw) return { cacheKey, balances: EMPTY_CACHED_BALANCES };
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object") {
+      return { cacheKey, balances: normalizeCachedPrivyBalances(parsed) };
+    }
+  } catch {
+    // Invalid or unreadable cache entries are removed below.
+  }
+
+  try {
+    storage.removeItem(cacheKey);
+  } catch {
+    // Ignore storage cleanup failures.
+  }
+  return { cacheKey, balances: EMPTY_CACHED_BALANCES };
+}
+
 export function isHeaderLineaBalanceLoading(
   embeddedTokenPending: boolean,
 ) {
@@ -78,6 +105,19 @@ export function getPrivyBalanceCacheKey(address?: `0x${string}`) {
   return normalizedAddress
     ? `lore:privy-balances:v1:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}:${normalizedAddress}`
     : null;
+}
+
+export function isEmbeddedWalletActive(
+  activeAddress: string | null | undefined,
+  embeddedAddress: string | null | undefined,
+) {
+  const normalizedActiveAddress = normalizePageWalletAddress(activeAddress);
+  const normalizedEmbeddedWalletAddress = normalizePageWalletAddress(embeddedAddress);
+  return Boolean(
+    normalizedActiveAddress &&
+    normalizedEmbeddedWalletAddress &&
+    normalizedActiveAddress === normalizedEmbeddedWalletAddress,
+  );
 }
 
 interface UsePageWalletOverviewOptions {
@@ -115,27 +155,7 @@ export function usePageWalletOverview({
       return;
     }
 
-    try {
-      const raw = window.localStorage.getItem(balanceCacheKey);
-      if (!raw) {
-        setCachedBalanceEntry({ cacheKey: balanceCacheKey, balances: EMPTY_CACHED_BALANCES });
-        return;
-      }
-      const parsed = JSON.parse(raw) as unknown;
-      if (!parsed || typeof parsed !== "object") {
-        window.localStorage.removeItem(balanceCacheKey);
-        setCachedBalanceEntry({ cacheKey: balanceCacheKey, balances: EMPTY_CACHED_BALANCES });
-        return;
-      }
-      setCachedBalanceEntry({ cacheKey: balanceCacheKey, balances: normalizeCachedPrivyBalances(parsed) });
-    } catch {
-      try {
-        window.localStorage.removeItem(balanceCacheKey);
-      } catch {
-        // Ignore storage cleanup failures.
-      }
-      setCachedBalanceEntry({ cacheKey: balanceCacheKey, balances: EMPTY_CACHED_BALANCES });
-    }
+    setCachedBalanceEntry(readCachedPrivyBalanceEntry(window.localStorage, balanceCacheKey));
   }, [balanceCacheKey]);
 
   const {
@@ -215,13 +235,7 @@ export function usePageWalletOverview({
     [cachedBalances.eth, cachedBalances.ethUpdatedAt, embeddedEthError, embeddedEthFetching, embeddedEthStale, embeddedEthUpdatedAt, livePrivyEthBalance],
   );
 
-  const normalizedActiveAddress = normalizePageWalletAddress(address);
-  const normalizedEmbeddedWalletAddress = normalizePageWalletAddress(normalizedEmbeddedAddress);
-  const isEmbeddedActive = Boolean(
-    normalizedActiveAddress &&
-    normalizedEmbeddedWalletAddress &&
-    normalizedActiveAddress === normalizedEmbeddedWalletAddress,
-  );
+  const isEmbeddedActive = isEmbeddedWalletActive(address, normalizedEmbeddedAddress);
 
   const headerLineaBalance =
     (isEmbeddedActive && formattedLineaBalance != null ? formattedLineaBalance : formattedPrivyBalance) ?? "—";

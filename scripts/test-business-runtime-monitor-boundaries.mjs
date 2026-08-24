@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import * as runtimeMonitor from "./monitor-runtime-health.mjs";
 import * as runtimeMonitorLib from "./runtime-monitor-lib.mjs";
 import { runRuntimeMonitorAlertTests } from "./test-business-runtime-monitor-alerts.mjs";
+import { runHttpSmokeBoundaryTests } from "./test-business-http-smoke-boundaries.mjs";
 
 function createBodyResponse(body, { contentLength = null, ok = true, status = 200 } = {}) {
   const bytes = typeof body === "string" ? new TextEncoder().encode(body) : body;
@@ -395,4 +396,5 @@ export async function runRuntimeMonitorBoundaryTests() {
   assert.equal(broadNumericMutant("1e3"), 1_000, "numeric vector must kill broad Number coercion mutants");
   const broadDateMutant = (value) => Date.parse(String(value));
   assert.equal(Number.isFinite(broadDateMutant("2026-08-13 09:59:59Z")), true, "timestamp vector must kill broad Date.parse mutants");
+  runHttpSmokeBoundaryTests();
 }

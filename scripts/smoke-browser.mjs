@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import "dotenv/config";
 import { chromium } from "playwright-core";
 import { parsePositiveIntegerEnv } from "./env-parsing.mjs";
 import {
@@ -44,6 +43,10 @@ import {
   verifyChatProfileModal,
   verifyReadOnlyMode,
 } from "./smoke-browser-lib/flows.mjs";
+
+const directEntryUrl = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
+const directExecution = import.meta.url === directEntryUrl;
+if (directExecution) await import("dotenv/config");
 
 const BASE_URL = process.env.SMOKE_BASE_URL || "http://localhost:3000";
 const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "smoke-browser");
@@ -908,7 +911,6 @@ export function runSmokeBrowserEntrypoint(options = {}) {
   return runBrowserSmokeCli({ mainFn, ...cliOptions });
 }
 
-const directEntryUrl = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
-if (import.meta.url === directEntryUrl) {
+if (directExecution) {
   await runSmokeBrowserEntrypoint();
 }

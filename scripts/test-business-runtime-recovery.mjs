@@ -44,17 +44,29 @@ export async function runRuntimeRecoveryTests() {
       `invalid network retry delay args ${JSON.stringify(args)} must fail closed to zero wait`,
     );
   }
-  const networkRetrySource = readFileSync("app/lib/mining/networkRetry.ts", "utf8");
-  assert.match(
-    networkRetrySource,
-    /function normalizeNonNegativeSafeInteger[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*function normalizePositiveSafeInteger[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*export function formatRetryWaitSeconds\(waitMs: number\)[\s\S]*Number\.MAX_SAFE_INTEGER[\s\S]*Math\.round\(waitMs \/ 1000\)[\s\S]*normalizedAttempt === null[\s\S]*normalizedMaxMs < normalizedInitialMs[\s\S]*return 0[\s\S]*const maxAttemptLimit = normalizeNonNegativeSafeInteger\(params\.maxAttempts\) \?\? 0/,
-    "shared network retry helper must validate retry timing and attempt counts before waiting",
-  );
-  assert.doesNotMatch(
-    networkRetrySource,
-    /const exponent = maxExponent == null \? attempt|initialMs \* 2 \*\* exponent|for \(let attempt = 0; attempt < maxAttempts;|\(wait \/ 1000\)\.toFixed\(0\)/,
-    "shared network retry helper must not use raw retry timing, attempt limits, or raw wait toFixed display",
-  );
+  for (const maxAttempts of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.POSITIVE_INFINITY]) {
+    let reads = 0;
+    await assert.rejects(
+      () => networkRetry.readWithNetworkRetry({
+        actionLabel: "validating retry bounds",
+        initialMs: 1,
+        isActive: () => true,
+        maxAttempts,
+        maxMs: 2,
+        onProgress: () => {
+          throw new Error("invalid retry limit must not schedule progress");
+        },
+        read: async () => {
+          reads += 1;
+          return "unexpected";
+        },
+        shouldRetry: () => true,
+      }),
+      { name: "NetworkRetryExhaustedError" },
+      `invalid retry attempt limit ${String(maxAttempts)} must fail closed without a read`,
+    );
+    assert.equal(reads, 0);
+  }
 
   const diagnosticsStorage = (() => {
     const map = new Map();
@@ -174,22 +186,6 @@ export async function runRuntimeRecoveryTests() {
       `invalid Auto-Miner diagnostics updatedAt ${String(updatedAt)} must be discarded`,
     );
   }
-  const autoMineDiagnosticsSource = readFileSync("app/lib/mining/autoMineDiagnostics.ts", "utf8");
-  assert.match(
-    autoMineDiagnosticsSource,
-    /function normalizeAutoMineDiagnosticsCounter[\s\S]*typeof value === "number"[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*value >= 0[\s\S]*retryCount: normalizeAutoMineDiagnosticsCounter\(candidate\.retryCount\)/,
-    "Auto-Miner diagnostics retry counters must use safe non-negative integer normalization",
-  );
-  assert.match(
-    autoMineDiagnosticsSource,
-    /function normalizeAutoMineDiagnosticsUpdatedAt[\s\S]*typeof value === "number"[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*value >= 0[\s\S]*updatedAt: normalizeAutoMineDiagnosticsUpdatedAt\(candidate\.updatedAt\)/,
-    "Auto-Miner diagnostics timestamps must use safe non-negative integer normalization",
-  );
-  assert.doesNotMatch(
-    autoMineDiagnosticsSource,
-    /Number\.isInteger\(candidate\.retryCount\)|Number\(candidate\.retryCount\)|Number\.isFinite\(candidate\.updatedAt\)|Number\(candidate\.updatedAt\)/,
-    "Auto-Miner diagnostics must not return to broad retry/timestamp coercion",
-  );
   autoMineDiagnostics.clearAutoMineDiagnostics(diagnosticsStorage);
   assert.equal(autoMineDiagnostics.readAutoMineDiagnostics(diagnosticsStorage), null);
 
@@ -233,17 +229,6 @@ export async function runRuntimeRecoveryTests() {
       `invalid Auto-Miner debug override updatedAt ${String(updatedAt)} must be discarded`,
     );
   }
-  const autoMineDebugOverrideSource = readFileSync("app/lib/mining/autoMineDebugOverride.ts", "utf8");
-  assert.match(
-    autoMineDebugOverrideSource,
-    /function normalizeAutoMineDebugUpdatedAt[\s\S]*typeof value === "number"[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*value >= 0[\s\S]*updatedAt: normalizeAutoMineDebugUpdatedAt\(candidate\.updatedAt\)[\s\S]*updatedAt: normalizeAutoMineDebugUpdatedAt\(options\?\.now \?\? Date\.now\(\)\)/,
-    "Auto-Miner debug overrides must normalize stored and newly written timestamps",
-  );
-  assert.doesNotMatch(
-    autoMineDebugOverrideSource,
-    /Number\.isFinite\(candidate\.updatedAt\)|Number\(candidate\.updatedAt\)|updatedAt:\s*options\?\.now \?\? Date\.now\(\)/,
-    "Auto-Miner debug overrides must not return to broad timestamp coercion",
-  );
   diagnosticsStorage.setItem(autoMineDebugOverride.AUTO_MINE_DEBUG_OVERRIDE_STORAGE_KEY, "{bad json");
   assert.equal(autoMineDebugOverride.readAutoMineDebugOverride(diagnosticsStorage), null);
   assert.equal(
@@ -384,18 +369,6 @@ export async function runRuntimeRecoveryTests() {
       `invalid Auto-Miner restore cooldown ${String(cooldownMs)} must not suppress recovery`,
     );
   }
-  const autoMineRestoreDeduperSource = readFileSync("app/lib/mining/autoMineRestoreDeduper.ts", "utf8");
-  assert.match(
-    autoMineRestoreDeduperSource,
-    /const previousRestoreAt = previousAt[\s\S]*typeof previousRestoreAt !== "number"[\s\S]*Number\.isSafeInteger\(previousRestoreAt\)[\s\S]*Number\.isSafeInteger\(now\)[\s\S]*Number\.isSafeInteger\(cooldownMs\)[\s\S]*previousRestoreAt > now[\s\S]*return now - previousRestoreAt < cooldownMs/,
-    "Auto-Miner restore dedupe must suppress only for safe non-future timestamps inside a valid cooldown",
-  );
-  assert.doesNotMatch(
-    autoMineRestoreDeduperSource,
-    /Number\(previousAt\)|Number\.isFinite\(previousAt\)/,
-    "Auto-Miner restore dedupe must not rely on broad timestamp coercion",
-  );
-
   const chunkStorage = (() => {
     const map = new Map();
     return {
@@ -479,17 +452,6 @@ export async function runRuntimeRecoveryTests() {
     },
   }, Number.NaN);
   assert.match(replacedUrl, /^http:\/\/localhost:3000\/\?tab=hub&__lore_reload=\d+$/);
-  const chunkReloadRecoverySource = readFileSync("app/lib/chunkReloadRecovery.ts", "utf8");
-  assert.match(
-    chunkReloadRecoverySource,
-    /function parseStoredChunkReloadAt[\s\S]*\/\^\(\?:0\|\[1-9\]\\d\{0,15\}\)\$\/[\s\S]*Number\.parseInt\(trimmed, 10\)[\s\S]*parsed > now[\s\S]*const lastAt = parseStoredChunkReloadAt\(raw, currentNow\)/,
-    "chunk reload recovery must canonical-parse stored retry timestamps and reject future evidence",
-  );
-  assert.doesNotMatch(
-    chunkReloadRecoverySource,
-    /Number\(raw\)|Number\.isFinite\(lastAt\)/,
-    "chunk reload recovery must not rely on broad localStorage timestamp coercion",
-  );
   const historyCalls = [];
   assert.equal(
     chunkReloadRecovery.stripChunkReloadCacheParam(

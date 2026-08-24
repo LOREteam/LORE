@@ -29,6 +29,7 @@ import {
   runHermeticBuild,
   snapshotProtectedDatabaseFiles,
 } from "./run-hermetic-build.mjs";
+import { runBuildSummary } from "./run-build-summary.mjs";
 import { resolveNextDistDir } from "./next-dist-dir.mjs";
 
 const systemTempRoot = realpathSync(tmpdir());
@@ -1156,12 +1157,75 @@ assert.equal(packageJson.scripts.build, "node scripts/run-hermetic-build.mjs");
 assert.equal(packageJson.scripts["build:sealed"], "node scripts/run-hermetic-build.mjs --seal-provenance");
 assert.equal(packageJson.scripts["test:build-hermetic"], "node scripts/test-hermetic-build.mjs");
 
-const summarySource = readFileSync(resolve("scripts", "run-build-summary.mjs"), "utf8");
-assert.match(summarySource, /"run", "build"/);
+{
+  const calls = [];
+  const output = [];
+  const npmExecPath = join(systemTempRoot, "fixture-npm-cli.js");
+  const cwd = join(systemTempRoot, "fixture-build-summary-root");
+  const result = runBuildSummary({
+    cwd,
+    env: { npm_execpath: npmExecPath },
+    execPath: process.execPath,
+    spawn(command, args, options) {
+      calls.push({ command, args, options });
+      return {
+        status: 0,
+        stdout: "Compiled successfully\nProxy (Middleware)\n",
+        stderr: "",
+      };
+    },
+    writeLine(line) {
+      output.push(line);
+    },
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.summary.status, "pass");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, process.execPath);
+  assert.deepEqual(calls[0].args, [npmExecPath, "--silent", "run", "build"]);
+  assert.equal(calls[0].options.cwd, cwd);
+  assert.equal(calls[0].options.env.NO_UPDATE_NOTIFIER, "1");
+  assert.deepEqual(JSON.parse(output[0]), result.summary);
+}
 
-const isolatedSource = readFileSync(resolve("scripts", "run-isolated-build.mjs"), "utf8");
-assert.match(isolatedSource, /run-hermetic-build\.mjs/);
-assert.doesNotMatch(isolatedSource, /next["']?,\s*"dist"[\s\S]*"build"/);
+{
+  const root = createFixture();
+  const markerPath = join(root, "isolated-wrapper.json");
+  try {
+    mkdirSync(join(root, "scripts"));
+    writeFileSync(join(root, "scripts", "run-hermetic-build.mjs"), `
+      import { writeFileSync } from "node:fs";
+      writeFileSync(process.env.HERMETIC_BUILD_TEST_MARKER, JSON.stringify({
+        argv: process.argv.slice(2),
+        cwd: process.cwd(),
+        distDir: process.env.NEXT_DIST_DIR,
+        tsconfigPath: process.env.NEXT_TSCONFIG_PATH,
+      }));
+    `, "utf8");
+    const isolated = spawnSync(process.execPath, [resolve("scripts", "run-isolated-build.mjs")], {
+      cwd: root,
+      env: {
+        ...process.env,
+        HERMETIC_BUILD_TEST_MARKER: markerPath,
+        NEXT_DIST_DIR: ".next-spoofed",
+        NEXT_ISOLATED_DIST_DIR: ".next-behavior-probe",
+        NEXT_TSCONFIG_PATH: "tsconfig.spoofed.json",
+      },
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    assert.equal(isolated.error, undefined, isolated.error?.message);
+    assert.equal(isolated.status, 0, `${isolated.stdout ?? ""}${isolated.stderr ?? ""}`);
+    assert.deepEqual(readMarker(markerPath), {
+      argv: [],
+      cwd: root,
+      distDir: ".next-behavior-probe",
+      tsconfigPath: "tsconfig.build.json",
+    });
+  } finally {
+    removeFixture(root);
+  }
+}
 
 const ciSource = readFileSync(resolve(".github", "workflows", "ci.yml"), "utf8");
 assert.doesNotMatch(ciSource, /run:\s+(?:npx\s+)?next build/);

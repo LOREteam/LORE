@@ -10,8 +10,10 @@ import {
   runLaunchProofRunnerBehaviorTests,
   runLocalProofPreflightBehaviorTests,
 } from "./test-business-local-proof-preflight.mjs";
+import { runV10PreviewEnvBoundaryTests } from "./test-v10-preview-env-boundary.mjs";
 
 export async function runReleaseEvidenceSuite() {
+  await runV10PreviewEnvBoundaryTests();
   runReleaseOperationsTests();
   await runLiveCanaryHealthBehaviorTests();
   await runPlaytestWalletPolicyTests();

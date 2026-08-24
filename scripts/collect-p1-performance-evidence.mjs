@@ -25,6 +25,7 @@ import {
 } from "./build-provenance.mjs";
 import {
   assessStrictPerformanceEvidence,
+  analyzeNativeBackgroundAudit,
   createArtifactRevisionBinding,
   createBuildDerivation,
   createDualBuildBinding,
@@ -32,6 +33,12 @@ import {
   MARKER_FILE_DIGEST_DOMAIN,
   MIN_NATIVE_HIDDEN_EVIDENCE_MS,
   MIN_SIMULATED_AUTO_MINER_EVIDENCE_MS,
+  NATIVE_TIMER_HEARTBEAT_INTERVAL_MS,
+  NATIVE_TIMER_HEARTBEAT_LIMIT,
+  NATIVE_TIMER_HIDDEN_PHASE_MS,
+  NATIVE_TIMER_LONG_TASK_LIMIT,
+  NATIVE_TIMER_TRANSITION_LIMIT,
+  NATIVE_TIMER_VISIBLE_CONTROL_MS,
   REACT_PROFILING_BUILD_ROLE,
   summarizePorcelainStatus,
   TWO_HOURS_MS,
@@ -130,7 +137,7 @@ function printUsage() {
   console.log([
     "Usage: node scripts/collect-p1-performance-evidence.mjs [options]",
     "",
-    "Final schema-3 flow (run from one clean immutable checkout):",
+    "Final schema-4 flow (run from one clean immutable checkout):",
     "  1. $env:NEXT_DIST_DIR=''; $env:LORE_P1_REACT_PROFILING='0'; npm run build:sealed",
     "  2. $env:NEXT_DIST_DIR='.next-p1-profile'; $env:LORE_P1_REACT_PROFILING='1'; node scripts/run-hermetic-build.mjs --seal-react-profiling-provenance",
     "  3. node scripts/collect-p1-performance-evidence.mjs --require-sealed --profiling-dist-dir .next-p1-profile --duration 2h --sample-interval 60s --headed-native-hidden --simulate-auto-miner",
@@ -1025,7 +1032,7 @@ function allocatePhases(durationMs) {
 
 function nativeHiddenEvidenceDuration(durationMs, nativeHiddenObserved) {
   return nativeHiddenObserved === true && durationMs >= MIN_NATIVE_HIDDEN_EVIDENCE_MS
-    ? MIN_NATIVE_HIDDEN_EVIDENCE_MS
+    ? NATIVE_TIMER_HIDDEN_PHASE_MS
     : 0;
 }
 
@@ -1048,6 +1055,59 @@ function browserLaunchOptions(executablePath, headless) {
       "--no-first-run",
     ],
   };
+}
+
+function normalizeBrowserSwitchMetadata(commandLineArguments) {
+  const effectiveSwitchNames = new Set();
+  const disabledFeatures = new Set();
+  for (const argument of Array.isArray(commandLineArguments) ? commandLineArguments : []) {
+    if (typeof argument !== "string" || !argument.startsWith("--")) continue;
+    const separatorIndex = argument.indexOf("=");
+    const switchName = separatorIndex === -1 ? argument : argument.slice(0, separatorIndex);
+    effectiveSwitchNames.add(switchName);
+    if (switchName === "--disable-features" && separatorIndex !== -1) {
+      for (const feature of argument.slice(separatorIndex + 1).split(",")) {
+        const normalized = feature.trim().split(/[<:]/, 1)[0];
+        if (normalized) disabledFeatures.add(normalized);
+      }
+    }
+  }
+  return {
+    effectiveSwitchNames: [...effectiveSwitchNames].sort(),
+    disabledFeatures: [...disabledFeatures].sort(),
+  };
+}
+
+async function collectBrowserRuntimeMetadata(browser) {
+  let session;
+  try {
+    session = await browser.newBrowserCDPSession();
+    const version = await session.send("Browser.getVersion");
+    let commandLineArguments = [];
+    let commandLineObserved = false;
+    try {
+      commandLineArguments = (await session.send("Browser.getBrowserCommandLine")).arguments ?? [];
+      commandLineObserved = Array.isArray(commandLineArguments);
+    } catch {
+      // Missing command-line evidence must remain fail-closed in the strict model.
+    }
+    return {
+      product: typeof version.product === "string" ? version.product : "",
+      version: typeof version.revision === "string" ? version.revision : "",
+      commandLineObserved,
+      ...normalizeBrowserSwitchMetadata(commandLineArguments),
+    };
+  } catch {
+    return {
+      product: "",
+      version: "",
+      commandLineObserved: false,
+      effectiveSwitchNames: [],
+      disabledFeatures: [],
+    };
+  } finally {
+    if (session) await session.detach().catch(() => {});
+  }
 }
 
 function createSimulatedAutoMineOverride(tick, now = Date.now()) {
@@ -1115,6 +1175,7 @@ async function collectRuntimeEvidence(options, routePaths) {
     ].filter(Boolean);
     const executablePath = await findExecutablePath(browserCandidates);
     browser = await chromium.launch(browserLaunchOptions(executablePath, options.headless));
+    const browserRuntimeMetadata = await collectBrowserRuntimeMetadata(browser);
     const context = await browser.newContext({
       viewport: { width: 1440, height: 900 },
       serviceWorkers: "block",
@@ -1269,6 +1330,16 @@ async function collectRuntimeEvidence(options, routePaths) {
       const nativeHiddenDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, "hidden");
       let syntheticState = "visible";
       let overrideInstalled = false;
+      let auditActive = false;
+      let auditHeartbeatId = null;
+      let auditHeartbeatLimit = 0;
+      let auditTransitionLimit = 0;
+      let auditHeartbeatSeq = 0;
+      let auditTransitionSeq = 0;
+      let auditHeartbeats = [];
+      let auditTransitions = [];
+      let auditHeartbeatsTruncated = false;
+      let auditTransitionsTruncated = false;
       const readNative = (descriptor, fallback) => {
         try {
           return descriptor?.get?.call(document) ?? fallback;
@@ -1276,6 +1347,39 @@ async function collectRuntimeEvidence(options, routePaths) {
           return fallback;
         }
       };
+      const nativeAuditObservation = () => ({
+        atMs: performance.now(),
+        timeOriginMs: performance.timeOrigin,
+        nativeState: readNative(nativeVisibilityDescriptor, "unknown"),
+        nativeHidden: readNative(nativeHiddenDescriptor, null),
+        exposedState: document.visibilityState,
+        exposedHidden: document.hidden,
+        ownVisibilityState: Object.prototype.hasOwnProperty.call(document, "visibilityState"),
+        ownHidden: Object.prototype.hasOwnProperty.call(document, "hidden"),
+      });
+      const recordAuditHeartbeat = () => {
+        if (!auditActive) return;
+        if (auditHeartbeats.length >= auditHeartbeatLimit) {
+          auditHeartbeatsTruncated = true;
+          return;
+        }
+        auditHeartbeats.push({ seq: auditHeartbeatSeq, ...nativeAuditObservation() });
+        auditHeartbeatSeq += 1;
+      };
+      const recordAuditTransition = (event) => {
+        if (!auditActive) return;
+        if (auditTransitions.length >= auditTransitionLimit) {
+          auditTransitionsTruncated = true;
+          return;
+        }
+        auditTransitions.push({
+          seq: auditTransitionSeq,
+          ...nativeAuditObservation(),
+          isTrusted: event.isTrusted === true,
+        });
+        auditTransitionSeq += 1;
+      };
+      document.addEventListener("visibilitychange", recordAuditTransition, true);
       const installSyntheticOverride = () => {
         try {
           Object.defineProperty(document, "visibilityState", {
@@ -1308,6 +1412,35 @@ async function collectRuntimeEvidence(options, routePaths) {
           }
           document.dispatchEvent(new Event("visibilitychange"));
         },
+        startNativeAudit({ intervalMs, heartbeatLimit, transitionLimit }) {
+          if (auditHeartbeatId !== null) clearInterval(auditHeartbeatId);
+          auditActive = false;
+          auditHeartbeatLimit = heartbeatLimit;
+          auditTransitionLimit = transitionLimit;
+          auditHeartbeatSeq = 0;
+          auditTransitionSeq = 0;
+          auditHeartbeats = [];
+          auditTransitions = [];
+          auditHeartbeatsTruncated = false;
+          auditTransitionsTruncated = false;
+          auditActive = true;
+          recordAuditHeartbeat();
+          auditHeartbeatId = setInterval(recordAuditHeartbeat, intervalMs);
+        },
+        nativeAuditPhaseSnapshot() {
+          return nativeAuditObservation();
+        },
+        stopNativeAudit() {
+          if (auditHeartbeatId !== null) clearInterval(auditHeartbeatId);
+          auditHeartbeatId = null;
+          auditActive = false;
+          return {
+            heartbeats: auditHeartbeats.map((heartbeat) => ({ ...heartbeat })),
+            transitions: auditTransitions.map((transition) => ({ ...transition })),
+            heartbeatsTruncated: auditHeartbeatsTruncated,
+            transitionsTruncated: auditTransitionsTruncated,
+          };
+        },
         snapshot() {
           return {
             overrideInstalled,
@@ -1319,11 +1452,15 @@ async function collectRuntimeEvidence(options, routePaths) {
         },
       };
       window.__p1PerfLongTasks = [];
+      window.__p1PerfLongTasksTruncated = false;
       window.__p1PerfLongTaskSupported = PerformanceObserver.supportedEntryTypes?.includes("longtask") ?? false;
       if (window.__p1PerfLongTaskSupported) {
         new PerformanceObserver((list) => {
           for (const entry of list.getEntries()) {
-            if (window.__p1PerfLongTasks.length >= 10_000) break;
+            if (window.__p1PerfLongTasks.length >= 10_000) {
+              window.__p1PerfLongTasksTruncated = true;
+              break;
+            }
             window.__p1PerfLongTasks.push({ startTime: entry.startTime, duration: entry.duration });
           }
         }).observe({ type: "longtask", buffered: true });
@@ -1339,39 +1476,157 @@ async function collectRuntimeEvidence(options, routePaths) {
     await page.waitForTimeout(2_000);
     const reactCommitsAtStart = await page.evaluate(() => window.__p1PerfReactCommits.snapshot());
 
-    const nativeBeforeBackground = await page.evaluate(() => window.__p1PerfVisibility.snapshot());
+    const syntheticVisibilityCapability = await page.evaluate(() => window.__p1PerfVisibility.snapshot());
+    await page.bringToFront();
+    await page.evaluate(() => window.__p1PerfVisibility.useNative());
+    await page.waitForTimeout(100);
+    let nativeBeforeBackground = await page.evaluate(() => window.__p1PerfVisibility.snapshot());
+    let nativeWhileBackgrounded = nativeBeforeBackground;
+    let nativeHiddenPhase = null;
+    let nativeAudit = null;
+    let nativeAuditAnalysis = analyzeNativeBackgroundAudit(null);
+    const shouldRunNativeAudit = !options.headless
+      && nativeHiddenEvidenceDuration(options.durationMs, true) > 0;
     const backgroundProbe = await context.newPage();
     await backgroundProbe.goto("data:text/html,<title>background-probe</title>");
-    await backgroundProbe.bringToFront();
-    await page.waitForTimeout(100);
-    let nativeWhileBackgrounded = await page.evaluate(() => window.__p1PerfVisibility.snapshot());
-    const nativeHiddenObservedDuringProbe =
-      nativeWhileBackgrounded.nativeState === "hidden" || nativeWhileBackgrounded.nativeHidden === true;
-    const requestedNativeHiddenMs = nativeHiddenEvidenceDuration(options.durationMs, nativeHiddenObservedDuringProbe);
-    let nativeHiddenPhase = null;
-    if (requestedNativeHiddenMs > 0) {
-      await page.evaluate(() => window.__p1PerfVisibility.useNative());
+    if (shouldRunNativeAudit) {
+      await page.bringToFront();
+      await page.waitForTimeout(100);
+      await page.evaluate((config) => window.__p1PerfVisibility.startNativeAudit(config), {
+        intervalMs: NATIVE_TIMER_HEARTBEAT_INTERVAL_MS,
+        heartbeatLimit: NATIVE_TIMER_HEARTBEAT_LIMIT,
+        transitionLimit: NATIVE_TIMER_TRANSITION_LIMIT,
+      });
+
+      currentPhase = "native-visible-before";
+      const visibleBeforeStartSnapshot = await page.evaluate(() =>
+        window.__p1PerfVisibility.nativeAuditPhaseSnapshot());
+      const visibleBeforeStartWall = Date.now();
+      await page.waitForTimeout(NATIVE_TIMER_VISIBLE_CONTROL_MS);
+      const visibleBeforeEndSnapshot = await page.evaluate(() =>
+        window.__p1PerfVisibility.nativeAuditPhaseSnapshot());
+      const visibleBeforeControllerDurationMs = Date.now() - visibleBeforeStartWall;
+      nativeBeforeBackground = await page.evaluate(() => window.__p1PerfVisibility.snapshot());
+      const visibleBeforePhase = {
+        requestedMs: NATIVE_TIMER_VISIBLE_CONTROL_MS,
+        controllerDurationMs: visibleBeforeControllerDurationMs,
+        timeOriginMs: visibleBeforeStartSnapshot.timeOriginMs,
+        startPerformanceMs: visibleBeforeStartSnapshot.atMs,
+        endPerformanceMs: visibleBeforeEndSnapshot.atMs,
+        startSnapshot: visibleBeforeStartSnapshot,
+        endSnapshot: visibleBeforeEndSnapshot,
+      };
+
       await backgroundProbe.bringToFront();
       await page.waitForTimeout(100);
+      const hiddenStartSnapshot = await page.evaluate(() =>
+        window.__p1PerfVisibility.nativeAuditPhaseSnapshot());
+      const witnessSnapshot = () => ({
+        atMs: performance.now(),
+        timeOriginMs: performance.timeOrigin,
+        nativeState: Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState")?.get?.call(document)
+          ?? document.visibilityState,
+        nativeHidden: Object.getOwnPropertyDescriptor(Document.prototype, "hidden")?.get?.call(document)
+          ?? document.hidden,
+        exposedState: document.visibilityState,
+        exposedHidden: document.hidden,
+        ownVisibilityState: Object.prototype.hasOwnProperty.call(document, "visibilityState"),
+        ownHidden: Object.prototype.hasOwnProperty.call(document, "hidden"),
+      });
+      const hiddenWitnessStart = await backgroundProbe.evaluate(witnessSnapshot);
+      const nativeHiddenAtStart = hiddenStartSnapshot.nativeState === "hidden"
+        && hiddenStartSnapshot.nativeHidden === true;
+      currentPhase = "native-hidden";
+      const hiddenStartWall = Date.now();
+      if (nativeHiddenAtStart) {
+        while (Date.now() - hiddenStartWall < NATIVE_TIMER_HIDDEN_PHASE_MS) {
+          const remaining = NATIVE_TIMER_HIDDEN_PHASE_MS - (Date.now() - hiddenStartWall);
+          await page.waitForTimeout(Math.min(options.sampleIntervalMs, Math.max(1, remaining)));
+        }
+      }
+      const hiddenEndSnapshot = await page.evaluate(() =>
+        window.__p1PerfVisibility.nativeAuditPhaseSnapshot());
+      const hiddenControllerDurationMs = Date.now() - hiddenStartWall;
+      const hiddenWitnessEnd = await backgroundProbe.evaluate(witnessSnapshot);
       nativeWhileBackgrounded = await page.evaluate(() => window.__p1PerfVisibility.snapshot());
-      const nativeStillHidden =
-        nativeWhileBackgrounded.nativeState === "hidden" || nativeWhileBackgrounded.nativeHidden === true;
-      if (nativeStillHidden) {
-        currentPhase = "native-hidden";
-        const phaseStartWall = Date.now();
+      const hiddenPhase = {
+        requestedMs: NATIVE_TIMER_HIDDEN_PHASE_MS,
+        controllerDurationMs: hiddenControllerDurationMs,
+        timeOriginMs: hiddenStartSnapshot.timeOriginMs,
+        startPerformanceMs: hiddenStartSnapshot.atMs,
+        endPerformanceMs: hiddenEndSnapshot.atMs,
+        startSnapshot: hiddenStartSnapshot,
+        endSnapshot: hiddenEndSnapshot,
+        witnessStart: hiddenWitnessStart,
+        witnessEnd: hiddenWitnessEnd,
+      };
+      if (nativeHiddenAtStart) {
         nativeHiddenPhase = {
           name: "native-hidden",
           visibility: "native-hidden",
-          requestedMs: requestedNativeHiddenMs,
-          startPerformanceMs: await page.evaluate(() => performance.now()),
+          requestedMs: NATIVE_TIMER_HIDDEN_PHASE_MS,
+          actualMs: hiddenControllerDurationMs,
+          startPerformanceMs: hiddenStartSnapshot.atMs,
+          endPerformanceMs: hiddenEndSnapshot.atMs,
         };
-        while (Date.now() - phaseStartWall < requestedNativeHiddenMs) {
-          const remaining = requestedNativeHiddenMs - (Date.now() - phaseStartWall);
-          await page.waitForTimeout(Math.min(options.sampleIntervalMs, Math.max(1, remaining)));
-        }
-        nativeHiddenPhase.actualMs = Date.now() - phaseStartWall;
-        nativeHiddenPhase.endPerformanceMs = await page.evaluate(() => performance.now());
       }
+
+      await page.bringToFront();
+      await page.waitForTimeout(100);
+      currentPhase = "native-visible-after";
+      const visibleAfterStartSnapshot = await page.evaluate(() =>
+        window.__p1PerfVisibility.nativeAuditPhaseSnapshot());
+      const visibleAfterStartWall = Date.now();
+      await page.waitForTimeout(NATIVE_TIMER_VISIBLE_CONTROL_MS);
+      const visibleAfterEndSnapshot = await page.evaluate(() =>
+        window.__p1PerfVisibility.nativeAuditPhaseSnapshot());
+      const visibleAfterControllerDurationMs = Date.now() - visibleAfterStartWall;
+      const visibleAfterPhase = {
+        requestedMs: NATIVE_TIMER_VISIBLE_CONTROL_MS,
+        controllerDurationMs: visibleAfterControllerDurationMs,
+        timeOriginMs: visibleAfterStartSnapshot.timeOriginMs,
+        startPerformanceMs: visibleAfterStartSnapshot.atMs,
+        endPerformanceMs: visibleAfterEndSnapshot.atMs,
+        startSnapshot: visibleAfterStartSnapshot,
+        endSnapshot: visibleAfterEndSnapshot,
+      };
+      const rawAudit = await page.evaluate(() => window.__p1PerfVisibility.stopNativeAudit());
+      const rawAuditLongTasks = await page.evaluate(({ startMs, endMs, limit }) => {
+        const matching = window.__p1PerfLongTasks
+          .filter((entry) => entry.startTime < endMs && entry.startTime + entry.duration > startMs)
+          .sort((left, right) => left.startTime - right.startTime);
+        return {
+          longTasks: matching.slice(0, limit).map((entry) => ({
+            startTime: entry.startTime,
+            duration: entry.duration,
+          })),
+          longTasksTruncated: window.__p1PerfLongTasksTruncated === true || matching.length > limit,
+        };
+      }, {
+        startMs: visibleBeforePhase.startPerformanceMs,
+        endMs: visibleAfterPhase.endPerformanceMs,
+        limit: NATIVE_TIMER_LONG_TASK_LIMIT,
+      });
+      nativeAudit = {
+        clock: "performance.now",
+        heartbeatIntervalMs: NATIVE_TIMER_HEARTBEAT_INTERVAL_MS,
+        heartbeatLimit: NATIVE_TIMER_HEARTBEAT_LIMIT,
+        transitionLimit: NATIVE_TIMER_TRANSITION_LIMIT,
+        longTaskLimit: NATIVE_TIMER_LONG_TASK_LIMIT,
+        browser: browserRuntimeMetadata,
+        phases: {
+          "native-visible-before": visibleBeforePhase,
+          "native-hidden": hiddenPhase,
+          "native-visible-after": visibleAfterPhase,
+        },
+        ...rawAudit,
+        ...rawAuditLongTasks,
+      };
+      nativeAuditAnalysis = analyzeNativeBackgroundAudit(nativeAudit);
+    } else {
+      await backgroundProbe.bringToFront();
+      await page.waitForTimeout(100);
+      nativeWhileBackgrounded = await page.evaluate(() => window.__p1PerfVisibility.snapshot());
     }
     await backgroundProbe.close();
     await page.bringToFront();
@@ -1524,6 +1779,8 @@ async function collectRuntimeEvidence(options, routePaths) {
       .filter((component) => component.commitCount > 0 || component.actualDurationMs > 0)
       .sort((left, right) => right.actualDurationMs - left.actualDurationMs || left.name.localeCompare(right.name));
     const nativeHiddenObserved = nativeWhileBackgrounded.nativeState === "hidden" || nativeWhileBackgrounded.nativeHidden === true;
+    const nativeHiddenApiRequestCount = [...(phaseApiCounts.get("native-hidden") ?? new Map()).values()]
+      .reduce((total, count) => total + count, 0);
     const runtimeApplicability = createRuntimeApplicability({
       requestedDurationMs: options.durationMs,
       actualDurationMs,
@@ -1532,9 +1789,12 @@ async function collectRuntimeEvidence(options, routePaths) {
       sampleIntervalMs: options.sampleIntervalMs,
       firstFiniteHeapElapsedMs: finiteHeapSamples[0]?.elapsedMs ?? null,
       lastFiniteHeapElapsedMs: finiteHeapSamples.at(-1)?.elapsedMs ?? null,
-      syntheticVisibilityOverrideInstalled: nativeBeforeBackground.overrideInstalled,
+      syntheticVisibilityOverrideInstalled: syntheticVisibilityCapability.overrideInstalled,
       nativeHiddenObserved,
       nativeHiddenMeasurementDurationMs: nativeHiddenPhase?.actualMs ?? 0,
+      nativeHiddenContinuityMeasured: nativeAuditAnalysis.continuityMeasured,
+      browserTimerThrottlingMeasured: nativeAuditAnalysis.timerThrottlingMeasured,
+      nativeHiddenApiRequestCount,
       reactCommitObserverInstalled: finalPageMetrics.reactCommits.installed,
       reactRendererCount: finalPageMetrics.reactCommits.rendererCount,
       reactExperimentCommitCount: Math.max(
@@ -1581,15 +1841,18 @@ async function collectRuntimeEvidence(options, routePaths) {
       navigation: { wallMsToSettledStart: experimentStartedAt - navigationStartedAt, ...finalPageMetrics.navigation },
       routeFirstLoad,
       visibility: {
+        syntheticCapability: syntheticVisibilityCapability,
         nativeBeforeBackground,
         nativeWhileBackgrounded,
         nativeHiddenObserved,
+        nativeAudit,
+        timerThrottling: nativeAuditAnalysis.timerThrottling,
         coverage: runtimeApplicability.visibility,
         measurementMode: nativeHiddenPhase
-          ? "timed native browser background phase plus deterministic synthetic visibility phases"
+          ? "continuous raw native visibility/timer audit plus deterministic synthetic visibility phases"
           : "deterministic synthetic visibility phases plus an unqualified native background probe",
         caveat: nativeHiddenPhase
-          ? "Native hidden polling is reported only for the timed phase with the synthetic override removed."
+          ? "Native hidden continuity and timer throttling pass only when the raw headed audit satisfies schema 4."
           : "The browser did not sustain a qualifying native hidden state; no native hidden polling conclusion is claimed.",
       },
       polling: {
@@ -1763,7 +2026,7 @@ async function runSelfTest() {
   assert.equal(phases.reduce((sum, phase) => sum + phase.requestedMs, 0), 9_001);
   assert.equal(nativeHiddenEvidenceDuration(30_000, true), 0);
   assert.equal(nativeHiddenEvidenceDuration(TWO_HOURS_MS, false), 0);
-  assert.equal(nativeHiddenEvidenceDuration(TWO_HOURS_MS, true), MIN_NATIVE_HIDDEN_EVIDENCE_MS);
+  assert.equal(nativeHiddenEvidenceDuration(TWO_HOURS_MS, true), NATIVE_TIMER_HIDDEN_PHASE_MS);
   const headedLaunch = browserLaunchOptions("fixture-browser", false);
   assert.equal(headedLaunch.executablePath, "fixture-browser");
   assert.equal(headedLaunch.headless, false);
@@ -1772,6 +2035,19 @@ async function runSelfTest() {
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",
   ]);
+  assert.deepEqual(normalizeBrowserSwitchMetadata([
+    "fixture-browser.exe",
+    "--enable-automation",
+    "--disable-features=FixtureA,FixtureB",
+    "--enable-automation=1",
+  ]), {
+    effectiveSwitchNames: ["--disable-features", "--enable-automation"],
+    disabledFeatures: ["FixtureA", "FixtureB"],
+  });
+  assert.deepEqual(normalizeBrowserSwitchMetadata(null), {
+    effectiveSwitchNames: [],
+    disabledFeatures: [],
+  });
   assert.deepEqual(createSimulatedAutoMineOverride(3, 1234), {
     phase: "running",
     progress: "Read-only performance simulation tick 3",
@@ -1798,7 +2074,7 @@ async function runSelfTest() {
     derivation: { status: "sealed" },
   }), "partial");
   const structurallyIncompleteReport = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     status: "partial",
     provenance: {
       artifactRevisionBinding: { releaseCandidateEligible: true },
@@ -2360,13 +2636,13 @@ async function runSelfTest() {
   assert.equal(applicability.duration.autoMinerTwoHourMemoryObservationCompleted, false);
   assert.equal(applicability.duration.fullTwoHourSoakCompleted, false);
   assert.equal(applicability.visibility.nativeBrowserBackground.status, "probe-only");
-  assert.equal(applicability.visibility.nativeBrowserBackground.pollingMeasured, false);
+  assert.equal(applicability.visibility.nativeBrowserBackground.timerCadenceMeasured, false);
   assert.equal(applicability.reactRerenders.status, "root-commits-measured");
   assert.equal(applicability.reactRerenders.componentProfilerCollected, false);
   assert.equal(applicability.autoMiner.status, "measured");
   assert.equal(applicability.autoMiner.uiStateObserved, true);
   assert.equal(applicability.autoMiner.twoHourApplicable, false);
-  assert.equal(applicability.blockers.some((value) => value.includes("native hidden polling")), true);
+  assert.equal(applicability.blockers.some((value) => value.includes("continuous raw visibility")), true);
   assert.equal(applicability.blockers.some((value) => value.includes("production React renderer")), true);
   const profiledApplicability = createRuntimeApplicability({
     requestedDurationMs: 9_000,
@@ -2403,7 +2679,7 @@ async function runSelfTest() {
   });
   assert.equal(noHeapApplicability.duration.idleTwoHourDurationCompleted, true);
   assert.equal(noHeapApplicability.duration.idleTwoHourMemoryObservationCompleted, false);
-  assert.equal(noHeapApplicability.visibility.nativeBrowserBackground.pollingMeasured, false);
+  assert.equal(noHeapApplicability.visibility.nativeBrowserBackground.timerCadenceMeasured, false);
   const clusteredHeapApplicability = createRuntimeApplicability({
     requestedDurationMs: TWO_HOURS_MS,
     actualDurationMs: TWO_HOURS_MS + 1,
@@ -2420,9 +2696,9 @@ async function runSelfTest() {
   assert.equal(clusteredHeapApplicability.duration.idleTwoHourDurationCompleted, true);
   assert.equal(clusteredHeapApplicability.duration.idleTwoHourMemoryObservationCompleted, false);
   assert.equal(clusteredHeapApplicability.duration.memoryCoverage.finiteHeapWindowMs, 5 * 60_000);
-  assert.equal(clusteredHeapApplicability.visibility.nativeBrowserBackground.pollingMeasured, false);
+  assert.equal(clusteredHeapApplicability.visibility.nativeBrowserBackground.timerCadenceMeasured, false);
   assert.equal(clusteredHeapApplicability.visibility.nativeBrowserBackground.measuredDurationMs, 0);
-  console.log(JSON.stringify({ status: "pass", cases: 85, schemaVersion: 3, maxDurationMs: MAX_DURATION_MS }));
+  console.log(JSON.stringify({ status: "pass", cases: 87, schemaVersion: 4, maxDurationMs: MAX_DURATION_MS }));
 }
 
 async function main() {
@@ -2547,7 +2823,7 @@ async function main() {
     throw new Error("--require-sealed rejected repository, canonical build, profiling build, or provenance drift during collection");
   }
   const report = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     generatedAt: new Date().toISOString(),
     scope: "local-only P1 performance evidence; no wallet or chain writes",
     status: "partial",

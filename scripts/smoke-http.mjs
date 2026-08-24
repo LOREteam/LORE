@@ -161,6 +161,85 @@ export async function readBoundedResponseText(response, { signal } = {}) {
   }
 }
 
+export function assertRuntimeHealthResponse(
+  response,
+  body,
+  {
+    expectedChainId = EXPECTED_CHAIN_ID,
+    expectedChainIdIssues = EXPECTED_CHAIN_ID_ISSUES,
+    expectEpochBoundBets = EXPECT_EPOCH_BOUND_BETS,
+  } = {},
+) {
+  if (!response.headers.get("content-type")?.includes("application/json")) {
+    throw new Error("expected json");
+  }
+  if (!response.headers.get("cache-control")?.includes("no-store")) {
+    throw new Error("health-runtime public responses must be no-store");
+  }
+  const json = JSON.parse(body);
+  if (json.status !== "ok" || json.visibility !== "public" || json.redacted !== true) {
+    throw new Error("health-runtime public response must be redacted");
+  }
+  if (!json.metrics || typeof json.metrics !== "object" || Object.keys(json.metrics).length !== 0) {
+    throw new Error("health-runtime public metrics must be redacted");
+  }
+  assertNonNegativeSafeInteger(json.ts, "health-runtime timestamp");
+  if (!json.publicConfig || typeof json.publicConfig !== "object") {
+    throw new Error("health-runtime must include public config diagnostics");
+  }
+  if (expectedChainIdIssues.length > 0) {
+    throw new Error(`health-runtime configured chain id is invalid: ${expectedChainIdIssues[0]}`);
+  }
+  if (!Number.isSafeInteger(json.publicConfig.chainId) || json.publicConfig.chainId <= 0) {
+    throw new Error("health-runtime public config must include chain id");
+  }
+  if (expectedChainId !== null && json.publicConfig.chainId !== expectedChainId) {
+    throw new Error("health-runtime public config chain id must match configured Linea chain id");
+  }
+  if (typeof json.publicConfig.chainName !== "string" || json.publicConfig.chainName.length === 0) {
+    throw new Error("health-runtime public config must include chain name");
+  }
+  if (typeof json.publicConfig.privyAppIdConfigured !== "boolean") {
+    throw new Error("health-runtime public config must include Privy app id status");
+  }
+  if (typeof json.publicConfig.privyFallbackActive !== "boolean") {
+    throw new Error("health-runtime public config must include Privy fallback status");
+  }
+  if (typeof json.publicConfig.readOnlyMode !== "boolean") {
+    throw new Error("health-runtime public config must include read-only mode diagnostics");
+  }
+  if (typeof json.publicConfig.contractRequiresEpochBoundBets !== "boolean") {
+    throw new Error("health-runtime public config must include protected-bet mode diagnostics");
+  }
+  if (typeof json.publicConfig.productionLikeMonitoring !== "boolean") {
+    throw new Error("health-runtime public config must include production-like monitoring diagnostics");
+  }
+  if (typeof json.publicConfig.backupMonitorConfigured !== "boolean") {
+    throw new Error("health-runtime public config must include backup monitoring diagnostics");
+  }
+  if (typeof json.publicConfig.backupMonitorMaxAgeConfigured !== "boolean") {
+    throw new Error("health-runtime public config must include backup freshness diagnostics");
+  }
+  if (typeof json.publicConfig.emailAlertConfigured !== "boolean") {
+    throw new Error("health-runtime public config must include email alert diagnostics");
+  }
+  if (typeof json.publicConfig.multiReplicaWeb !== "boolean") {
+    throw new Error("health-runtime public config must include multi-replica diagnostics");
+  }
+  if (typeof json.publicConfig.externalRateLimitConfigured !== "boolean") {
+    throw new Error("health-runtime public config must include external rate-limit diagnostics");
+  }
+  if (typeof json.publicConfig.trustedProxyConfigured !== "boolean") {
+    throw new Error("health-runtime public config must include trusted proxy diagnostics");
+  }
+  if (typeof json.publicConfig.weakRateLimitIdentityAllowed !== "boolean") {
+    throw new Error("health-runtime public config must include weak identity diagnostics");
+  }
+  if (expectEpochBoundBets && json.publicConfig.contractRequiresEpochBoundBets !== true) {
+    throw new Error("health-runtime reports a stale build without required protected V10 bets");
+  }
+}
+
 export const HTTP_SMOKE_CHECKS = [
   {
     name: "home",
@@ -630,76 +709,7 @@ export const HTTP_SMOKE_CHECKS = [
   {
     name: "health-runtime",
     path: "/api/health/runtime",
-    assert: async (response, body) => {
-      if (!response.headers.get("content-type")?.includes("application/json")) {
-        throw new Error("expected json");
-      }
-      if (!response.headers.get("cache-control")?.includes("no-store")) {
-        throw new Error("health-runtime public responses must be no-store");
-      }
-      const json = JSON.parse(body);
-      if (json.status !== "ok" || json.visibility !== "public" || json.redacted !== true) {
-        throw new Error("health-runtime public response must be redacted");
-      }
-      if (!json.metrics || typeof json.metrics !== "object" || Object.keys(json.metrics).length !== 0) {
-        throw new Error("health-runtime public metrics must be redacted");
-      }
-      assertNonNegativeSafeInteger(json.ts, "health-runtime timestamp");
-      if (!json.publicConfig || typeof json.publicConfig !== "object") {
-        throw new Error("health-runtime must include public config diagnostics");
-      }
-      if (EXPECTED_CHAIN_ID_ISSUES.length > 0) {
-        throw new Error(`health-runtime configured chain id is invalid: ${EXPECTED_CHAIN_ID_ISSUES[0]}`);
-      }
-      if (!Number.isSafeInteger(json.publicConfig.chainId) || json.publicConfig.chainId <= 0) {
-        throw new Error("health-runtime public config must include chain id");
-      }
-      if (EXPECTED_CHAIN_ID !== null && json.publicConfig.chainId !== EXPECTED_CHAIN_ID) {
-        throw new Error("health-runtime public config chain id must match configured Linea chain id");
-      }
-      if (typeof json.publicConfig.chainName !== "string" || json.publicConfig.chainName.length === 0) {
-        throw new Error("health-runtime public config must include chain name");
-      }
-      if (typeof json.publicConfig.privyAppIdConfigured !== "boolean") {
-        throw new Error("health-runtime public config must include Privy app id status");
-      }
-      if (typeof json.publicConfig.privyFallbackActive !== "boolean") {
-        throw new Error("health-runtime public config must include Privy fallback status");
-      }
-      if (typeof json.publicConfig.readOnlyMode !== "boolean") {
-        throw new Error("health-runtime public config must include read-only mode diagnostics");
-      }
-      if (typeof json.publicConfig.contractRequiresEpochBoundBets !== "boolean") {
-        throw new Error("health-runtime public config must include protected-bet mode diagnostics");
-      }
-      if (typeof json.publicConfig.productionLikeMonitoring !== "boolean") {
-        throw new Error("health-runtime public config must include production-like monitoring diagnostics");
-      }
-      if (typeof json.publicConfig.backupMonitorConfigured !== "boolean") {
-        throw new Error("health-runtime public config must include backup monitoring diagnostics");
-      }
-      if (typeof json.publicConfig.backupMonitorMaxAgeConfigured !== "boolean") {
-        throw new Error("health-runtime public config must include backup freshness diagnostics");
-      }
-      if (typeof json.publicConfig.emailAlertConfigured !== "boolean") {
-        throw new Error("health-runtime public config must include email alert diagnostics");
-      }
-      if (typeof json.publicConfig.multiReplicaWeb !== "boolean") {
-        throw new Error("health-runtime public config must include multi-replica diagnostics");
-      }
-      if (typeof json.publicConfig.externalRateLimitConfigured !== "boolean") {
-        throw new Error("health-runtime public config must include external rate-limit diagnostics");
-      }
-      if (typeof json.publicConfig.trustedProxyConfigured !== "boolean") {
-        throw new Error("health-runtime public config must include trusted proxy diagnostics");
-      }
-      if (typeof json.publicConfig.weakRateLimitIdentityAllowed !== "boolean") {
-        throw new Error("health-runtime public config must include weak identity diagnostics");
-      }
-      if (EXPECT_EPOCH_BOUND_BETS && json.publicConfig.contractRequiresEpochBoundBets !== true) {
-        throw new Error("health-runtime reports a stale build without required protected V10 bets");
-      }
-    },
+    assert: assertRuntimeHealthResponse,
   },
   {
     name: "jackpots",

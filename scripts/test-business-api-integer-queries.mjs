@@ -1,7 +1,86 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as boundedJsonBodyModule from "../app/api/_lib/boundedJsonBody.ts";
 import * as queryParamsModule from "../app/api/_lib/queryParams.ts";
+
+function runClaimCandidatesPaginationProbe() {
+  const poisonRoot = join(tmpdir(), `lore-claim-candidates-pagination-${process.pid}-${Date.now()}`);
+  const urls = {
+    route: new URL("../app/api/claim-candidates/route.ts", import.meta.url).href,
+    storage: new URL("../server/storage.ts", import.meta.url).href,
+    limiter: new URL("../app/api/_lib/sharedRateLimit.ts", import.meta.url).href,
+  };
+  const script = [
+    'const { mock } = await import("node:test");',
+    `const urls = ${JSON.stringify(urls)};`,
+    'const pageOptions = [];',
+    'const storageMock = mock.module(urls.storage, { namedExports: {',
+    '  getUserParticipatingEpochPage: (_user, options) => {',
+    '    pageOptions.push(options);',
+    '    return { epochs: [500, 499], hasMore: true, nextCursor: 499 };',
+    '  },',
+    '} });',
+    'const limiterMock = mock.module(urls.limiter, { namedExports: { enforceSharedRateLimit: async () => null } });',
+    'try {',
+    '  const { NextRequest } = await import("next/server");',
+    '  const routeModule = await import(urls.route + "?claim-candidates-pagination=1");',
+    '  const route = routeModule.default ?? routeModule;',
+    '  const user = "0x0000000000000000000000000000000000000001";',
+    '  const oversized = await route.GET(new NextRequest(`https://example.test/api/claim-candidates?user=${user}&limit=401`));',
+    '  const bounded = await route.GET(new NextRequest(`https://example.test/api/claim-candidates?user=${user}&limit=400`));',
+    '  console.log(JSON.stringify({',
+    '    oversized: { status: oversized.status, cacheControl: oversized.headers.get("cache-control"), body: await oversized.json() },',
+    '    bounded: { status: bounded.status, cacheControl: bounded.headers.get("cache-control"), body: await bounded.json() },',
+    '    pageOptions,',
+    '  }));',
+    '} finally {',
+    '  limiterMock.restore();',
+    '  storageMock.restore();',
+    '}',
+  ].join("\n");
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--no-warnings",
+        "--experimental-test-module-mocks",
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "--eval",
+        script,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: { ...process.env, LORE_DB_PATH: join(poisonRoot, "lore-v10.sqlite"), TSX_DISABLE_CACHE: "1" },
+        timeout: 30_000,
+        maxBuffer: 512 * 1024,
+        windowsHide: true,
+      },
+    );
+    assert.equal(result.status, 0, result.stderr.trim() || result.error?.message || "claim-candidates pagination probe failed");
+    assert.equal(existsSync(poisonRoot), false, "claim-candidates pagination validation must not open its poisoned DB path");
+    assert.deepEqual(JSON.parse(result.stdout.trim()), {
+      oversized: {
+        status: 400,
+        cacheControl: "no-store, no-cache, must-revalidate",
+        body: { error: "Invalid limit" },
+      },
+      bounded: {
+        status: 200,
+        cacheControl: "no-store, no-cache, must-revalidate",
+        body: { epochs: [500, 499], hasMore: true, nextCursor: 499 },
+      },
+      pageOptions: [{ beforeEpoch: null, limit: 400 }],
+    });
+  } finally {
+    rmSync(poisonRoot, { recursive: true, force: true });
+  }
+}
 
 export async function runApiIntegerQueryTests() {
   const boundedJsonBody = boundedJsonBodyModule.default ?? boundedJsonBodyModule;
@@ -78,14 +157,5 @@ export async function runApiIntegerQueryTests() {
       `strict API integer value parsing must reject numeric ${String(value)}`,
     );
   }
-  assert.match(
-    readFileSync("app/api/claim-candidates/route.ts", "utf8"),
-    /parsePositiveIntegerParam\(cursorParam\)[\s\S]*parseBoundedPositiveIntegerParam\(limitParam, MAX_PAGE_SIZE\)[\s\S]*limit: requestedLimit/,
-    "claim-candidates pagination must reject out-of-range limits instead of silently clamping them",
-  );
-  assert.doesNotMatch(
-    readFileSync("app/api/claim-candidates/route.ts", "utf8"),
-    /Math\.min\(requestedLimit, MAX_PAGE_SIZE\)/,
-    "claim-candidates pagination must keep max-limit rejection explicit instead of reintroducing silent clamping",
-  );
+  runClaimCandidatesPaginationProbe();
 }

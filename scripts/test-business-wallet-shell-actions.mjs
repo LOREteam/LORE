@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import React from "react";
@@ -30,29 +31,399 @@ function listSourceFiles(root, sourceFilePattern = /\.(?:ts|tsx|mjs)$/) {
   });
 }
 
+function readIsolatedWalletShellBehavior() {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--no-warnings",
+      "--experimental-test-module-mocks",
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      `
+        import { mock } from "node:test";
+        import { resolve } from "node:path";
+        import { pathToFileURL } from "node:url";
+        import React from "react";
+        import { renderToStaticMarkup } from "react-dom/server";
+        import * as pageTabPanelsModule from "./app/components/PageTabPanels.tsx";
+        import * as publicConfigModule from "./config/publicConfig.ts";
+        const walletSettingsClose = () => undefined;
+        const walletSettingsFocusTrapCalls = [];
+        mock.module(pathToFileURL(resolve("app/hooks/useDialogFocusTrap.ts")).href, {
+          namedExports: {
+            useDialogFocusTrap(active, onEscape, initialFocusSelector, externalRef) {
+              walletSettingsFocusTrapCalls.push({
+                active,
+                sameOnEscape: onEscape === walletSettingsClose,
+                initialFocusSelector: initialFocusSelector ?? null,
+                externalRefProvided: externalRef !== undefined,
+              });
+              return { current: null };
+            },
+          },
+        });
+        const walletSettingsModalModule = await import("./app/components/WalletSettingsModal.tsx");
+        const pageTabPanels = pageTabPanelsModule.default ?? pageTabPanelsModule;
+        const PageTabPanels = pageTabPanels.PageTabPanels;
+        const publicConfig = publicConfigModule.default ?? publicConfigModule;
+        const walletSettingsModal = walletSettingsModalModule.default ?? walletSettingsModalModule;
+        const markups = ["analytics", "rebate"].map((activeTab) => (
+          renderToStaticMarkup(React.createElement(PageTabPanels, {
+            activeTab,
+            analyticsProps: {},
+            hubProps: {},
+            leaderboardsProps: { data: null, loading: false, error: null, refetch: () => {} },
+            rebateProps: {},
+          }))
+        ));
+        const noop = () => undefined;
+        const walletSettingsMarkup = renderToStaticMarkup(React.createElement(
+          walletSettingsModal.WalletSettingsModal,
+          {
+            isOpen: true,
+            onClose: walletSettingsClose,
+            connectedWalletAddress: null,
+            embeddedWalletAddress: null,
+            externalWalletAddress: null,
+            formattedLineaBalance: null,
+            formattedEthBalance: null,
+            withdrawAmount: "",
+            withdrawEthAmount: "",
+            depositEthAmount: "",
+            depositTokenAmount: "",
+            isWithdrawing: false,
+            isWithdrawingEth: false,
+            isDepositingEth: false,
+            isDepositingToken: false,
+            onWithdrawAmountChange: noop,
+            onWithdrawEthAmountChange: noop,
+            onDepositEthAmountChange: noop,
+            onDepositTokenAmountChange: noop,
+            onCreateEmbeddedWallet: async () => undefined,
+            walletSetupCreating: false,
+            walletSetupError: null,
+            onCopyEmbeddedAddress: noop,
+            onExportEmbeddedWallet: noop,
+            onWithdrawToExternal: noop,
+            onWithdrawEthToExternal: noop,
+            onDepositEthToEmbedded: noop,
+            onDepositTokenToEmbedded: noop,
+            walletTransfers: null,
+            walletTransfersLoading: false,
+            onLoadWalletTransfers: noop,
+            deepScanWins: null,
+            deepScanScanning: false,
+            deepScanClaiming: false,
+            deepScanProgress: "",
+            onDeepScan: noop,
+            onDeepScanStop: noop,
+            onDeepClaimOne: noop,
+            onDeepClaimAll: noop,
+            connectedResolverRewards: "0",
+            connectedResolverRewardsWei: 0n,
+            embeddedResolverRewards: "0",
+            embeddedResolverRewardsWei: 0n,
+            isClaimingConnectedResolverRewards: false,
+            isClaimingEmbeddedResolverRewards: false,
+            onClaimConnectedResolverRewards: noop,
+            onClaimEmbeddedResolverRewards: noop,
+            pendingTransactionStatus: null,
+            isRefreshingPendingTx: false,
+            isCancellingPendingTx: false,
+            onRefreshPendingTx: noop,
+            onCancelPendingTx: noop,
+          },
+        ));
+        console.log(JSON.stringify({
+          markups,
+          walletSettingsFocusTrap: {
+            calls: walletSettingsFocusTrapCalls,
+            dialogRendered: /role="dialog"/.test(walletSettingsMarkup),
+          },
+          clientAutoResolve: {
+            enabled: publicConfig.getConfiguredClientAutoResolveEnabled(),
+            forbiddenExports: [
+              "getConfiguredAutoResolveSweepEnabled",
+              "DEFAULT_AUTO_RESOLVE_SWEEP_ENABLED",
+            ].filter((name) => Object.hasOwn(publicConfig, name)),
+            explicitValues: [undefined, null, "", "0", "1", "true", "yes"].map(
+              (explicitFlag) => publicConfig.getConfiguredClientAutoResolveEnabled(explicitFlag),
+            ),
+          },
+        }));
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NEXT_PUBLIC_ENABLE_CLIENT_AUTO_RESOLVE: "1",
+        NEXT_PUBLIC_ENABLE_AUTO_RESOLVE_SWEEP: "true",
+      },
+      timeout: 30_000,
+      maxBuffer: 512 * 1024,
+      windowsHide: true,
+    },
+  );
+  if (result.error || result.signal || result.status !== 0) {
+    throw new Error(
+      `isolated wallet-shell behavior probe failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+  }
+  return JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1));
+}
+
+function readIsolatedAutoResolveBehavior() {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--no-warnings",
+      "--experimental-test-module-mocks",
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      `
+        import { mock } from "node:test";
+        import { resolve } from "node:path";
+        import { setImmediate as waitForImmediate } from "node:timers/promises";
+        import { pathToFileURL } from "node:url";
+
+        const moduleUrl = (filePath) => pathToFileURL(resolve(filePath)).href;
+        let effects = [];
+        let events = [];
+        let payload = null;
+        let activeResponse = null;
+        let readJsonCalls = 0;
+        let responseJsonCalls = 0;
+        let requestTimerSets = 0;
+        let requestTimerClears = 0;
+
+        mock.module("react", {
+          namedExports: {
+            useCallback: (callback) => callback,
+            useEffect: (effect) => effects.push(effect),
+            useRef: (value) => ({ current: value }),
+          },
+        });
+        mock.module(moduleUrl("config/publicConfig.ts"), {
+          namedExports: {
+            getConfiguredClientAutoResolveEnabled: () => true,
+          },
+        });
+        mock.module(moduleUrl("app/lib/constants.ts"), {
+          namedExports: {
+            CONTRACT_ADDRESS: "0x1111111111111111111111111111111111111111",
+            GAME_ABI: [],
+          },
+        });
+        mock.module(moduleUrl("app/lib/logger.ts"), {
+          namedExports: {
+            log: {
+              info: (scope, message, details) => events.push(["log", "info", scope, message, details]),
+              warn: (scope, message, details) => events.push(["log", "warn", scope, message, details]),
+            },
+          },
+        });
+        mock.module(moduleUrl("app/lib/readJsonResponse.ts"), {
+          namedExports: {
+            readJsonResponse: async (response) => {
+              readJsonCalls += 1;
+              events.push(["readJsonResponse", response === activeResponse]);
+              return payload;
+            },
+          },
+        });
+        mock.module(moduleUrl("app/hooks/autoResolveStorage.ts"), {
+          namedExports: {
+            clearResolveGuard: () => events.push(["clearResolveGuard"]),
+            readResolveGuard: () => null,
+            writeResolveGuard: (epoch) => events.push(["writeResolveGuard", epoch]),
+          },
+        });
+        mock.module(moduleUrl("app/hooks/autoResolveShared.ts"), {
+          namedExports: {
+            waitUnlessCancelled: async (_cancelled, delayMs) => {
+              events.push(["waitUnlessCancelled", delayMs]);
+              return false;
+            },
+          },
+        });
+
+        const imported = await import("./app/hooks/useAutoResolve.ts");
+        const autoResolve = imported.default ?? imported;
+        const originalSetTimeout = globalThis.setTimeout;
+        const originalClearTimeout = globalThis.clearTimeout;
+        const originalWindow = globalThis.window;
+        const originalDocument = globalThis.document;
+        const originalFetch = globalThis.fetch;
+        const originalRandom = Math.random;
+        let scheduled = [];
+        const documentListeners = new Set();
+
+        globalThis.setTimeout = (callback, delayMs) => {
+          const timer = { callback, delayMs };
+          scheduled.push(timer);
+          return timer;
+        };
+        globalThis.clearTimeout = () => undefined;
+        globalThis.window = {
+          setTimeout: () => {
+            requestTimerSets += 1;
+            return 99;
+          },
+          clearTimeout: () => {
+            requestTimerClears += 1;
+          },
+        };
+        globalThis.document = {
+          visibilityState: "visible",
+          addEventListener: (_type, listener) => documentListeners.add(listener),
+          removeEventListener: (_type, listener) => documentListeners.delete(listener),
+        };
+        Math.random = () => 0;
+
+        async function settleUntil(done) {
+          for (let attempt = 0; attempt < 20 && !done(); attempt += 1) {
+            await Promise.resolve();
+            await waitForImmediate();
+          }
+          if (!done()) throw new Error("auto-resolve behavior probe did not settle");
+        }
+
+        async function runScenario(poolAmount, nextPayload) {
+          effects = [];
+          events = [];
+          scheduled = [];
+          payload = nextPayload;
+          readJsonCalls = 0;
+          responseJsonCalls = 0;
+          requestTimerSets = 0;
+          requestTimerClears = 0;
+          documentListeners.clear();
+          activeResponse = {
+            status: 200,
+            json() {
+              responseJsonCalls += 1;
+              throw new Error("response.json must not be called");
+            },
+          };
+          globalThis.fetch = async (input, init) => {
+            events.push(["fetch", {
+              input,
+              method: init?.method,
+              cache: init?.cache,
+              headers: init?.headers,
+              hasBody: Object.hasOwn(init ?? {}, "body"),
+              hasSignal: Boolean(init?.signal),
+            }]);
+            return activeResponse;
+          };
+          const publicClient = new Proxy({
+            async readContract(request) {
+              events.push(["readContract", {
+                functionName: request.functionName,
+                args: request.args.map((value) => value.toString()),
+              }]);
+              return [poolAmount, 0n, 0n, false, false, false];
+            },
+          }, {
+            get(target, property) {
+              if (property in target) return target[property];
+              throw new Error(\`unexpected public client member: \${String(property)}\`);
+            },
+          });
+
+          autoResolve.useAutoResolve({
+            actualCurrentEpoch: 42n,
+            currentEpochResolved: false,
+            publicClient,
+            refetchEpoch: () => undefined,
+            refetchGridEpochData: () => undefined,
+            refetchTileData: () => undefined,
+            refetchUserBets: () => undefined,
+            timeLeft: 0,
+          });
+          const cleanups = effects.map((effect) => effect()).filter((cleanup) => typeof cleanup === "function");
+          const startupTimer = scheduled.find((timer) => timer.delayMs === 4_000);
+          if (!startupTimer) throw new Error("auto-resolve behavior probe did not schedule the keeper trigger");
+          startupTimer.callback();
+          await settleUntil(() => poolAmount === 0n
+            ? events.some((event) => event[0] === "log" && event[3] === "skipping keeper trigger: epoch has no bets")
+            : events.some((event) => event[0] === "waitUnlessCancelled"));
+          for (const cleanup of cleanups.reverse()) cleanup();
+
+          return {
+            events,
+            startupDelayMs: startupTimer.delayMs,
+            readJsonCalls,
+            responseJsonCalls,
+            requestTimerSets,
+            requestTimerClears,
+            activeDocumentListenersAfterCleanup: documentListeners.size,
+          };
+        }
+
+        try {
+          const emptyPool = await runScenario(0n, null);
+          const pending = await runScenario(1n, {
+            ok: true,
+            action: "pending",
+            currentEpoch: "42",
+            hash: "0xabc",
+            retryAfter: 90,
+          });
+          console.log(JSON.stringify({ emptyPool, pending }));
+        } finally {
+          globalThis.setTimeout = originalSetTimeout;
+          globalThis.clearTimeout = originalClearTimeout;
+          globalThis.window = originalWindow;
+          globalThis.document = originalDocument;
+          globalThis.fetch = originalFetch;
+          Math.random = originalRandom;
+        }
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 512 * 1024,
+      windowsHide: true,
+    },
+  );
+  if (result.error || result.signal || result.status !== 0) {
+    throw new Error(
+      `isolated auto-resolve behavior probe failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+  }
+  return JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1));
+}
+
 export async function runWalletShellAndMiningActionTests() {
-  const publicConfigSource = readFileSync("config/publicConfig.ts", "utf8");
+  const isolatedWalletShellBehavior = readIsolatedWalletShellBehavior();
+  const isolatedAutoResolveBehavior = readIsolatedAutoResolveBehavior();
   const providersSource = readFileSync("app/providers.tsx", "utf8");
   assert.match(
     providersSource,
     /coinbaseWallet[\s\S]*preference[\s\S]*options:\s*['"]eoaOnly['"]/,
     "Privy Coinbase connector must avoid unsupported smart-wallet mode on Linea networks",
   );
-  const walletSettingsModalSource = readFileSync("app/components/WalletSettingsModal.tsx", "utf8");
-  assert.match(
-    walletSettingsModalSource,
-    /aria-label="Export support logs"[\s\S]*className="text-xs"[\s\S]*hidden sm:inline">Export Logs/,
-    "mobile Wallet Settings must keep support-log export available as an accessible icon button",
-  );
-  assert.match(
-    walletSettingsModalSource,
-    /useDialogFocusTrap<HTMLDivElement>\(isOpen, onClose\)/,
+  assert.deepEqual(
+    isolatedWalletShellBehavior.walletSettingsFocusTrap,
+    {
+      calls: [{
+        active: true,
+        sameOnEscape: true,
+        initialFocusSelector: null,
+        externalRefProvided: false,
+      }],
+      dialogRendered: true,
+    },
     "Wallet Settings must use the shared focus trap with hidden-control and escaped-focus recovery",
-  );
-  assert.match(
-    walletSettingsModalSource,
-    /role="dialog"[\s\S]*aria-modal="true"[\s\S]*aria-labelledby="wallet-settings-title"[\s\S]*aria-describedby="wallet-settings-description"[\s\S]*tabIndex=\{-1\}/,
-    "Wallet Settings dialog root must remain programmatically focusable for focus-trap fallback",
   );
   const backupAddress = "0x0000000000000000000000000000000000000001";
   assert.equal(backupGate.normalizeBackupAddress(backupAddress.toUpperCase().replace("0X", "0x")), backupAddress);
@@ -196,10 +567,12 @@ export async function runWalletShellAndMiningActionTests() {
     /aria-hidden="true"[\s\S]*orb-drift-1[\s\S]*aria-hidden="true"[\s\S]*opacity-\[0\.03\][\s\S]*aria-hidden="true"[\s\S]*animate-gradient-x/,
     "maintenance overlay decorative animation layers must stay hidden from assistive technology",
   );
-  const pageTabPanelsSource = readFileSync("app/components/PageTabPanels.tsx", "utf8");
-  assert.match(
-    pageTabPanelsSource,
-    /const TabPanelFallback[\s\S]*role="status"[\s\S]*aria-live="polite"[\s\S]*aria-busy="true"[\s\S]*Loading panel/,
+  const deferredPanelFallbackMarkups = isolatedWalletShellBehavior.markups;
+  assert.equal(
+    deferredPanelFallbackMarkups.every((markup) => (
+      /^<div(?=[^>]*role="status")(?=[^>]*aria-live="polite")(?=[^>]*aria-busy="true")[^>]*>Loading panel\.\.\.<\/div>$/.test(markup)
+    )),
+    true,
     "lazy tab panel fallback must announce loading state without changing tab behavior",
   );
   const notifications = [];
@@ -304,15 +677,12 @@ export async function runWalletShellAndMiningActionTests() {
     "manual and repeat actions must not emit redundant preparation notices",
   );
   const autoResolveSource = readFileSync("app/hooks/useAutoResolve.ts", "utf8");
-  assert.match(
-    autoResolveSource,
-    /function getBootstrapRetryDelayMs/,
-    "auto-resolve must centralize bootstrap retryAfter clamping",
-  );
   assert.equal(autoResolve.getBootstrapRetryDelayMs(undefined), 30_000);
   assert.equal(autoResolve.getBootstrapRetryDelayMs(-1), 30_000);
   assert.equal(autoResolve.getBootstrapRetryDelayMs("5"), 30_000);
   assert.equal(autoResolve.getBootstrapRetryDelayMs("90"), 90_000);
+  assert.equal(autoResolve.getBootstrapRetryDelayMs(90), 90_000, "numeric retryAfter seconds must use the bounded delay policy");
+  assert.equal(autoResolve.getBootstrapRetryDelayMs(" 90 "), 90_000, "canonical retryAfter text may contain surrounding whitespace");
   assert.equal(autoResolve.getBootstrapRetryDelayMs(10_000), 300_000);
   assert.equal(autoResolve.getBootstrapRetryDelayMs("1e2"), 30_000);
   assert.equal(autoResolve.getBootstrapRetryDelayMs("90.5"), 30_000);
@@ -346,24 +716,85 @@ export async function runWalletShellAndMiningActionTests() {
     };
     assert.equal(await autoResolve.readEpochHasPool(failingClient, "44"), false);
   }
-  assert.match(
-    autoResolveSource,
-    /function parseRetryAfterSeconds[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*\/\^\(\?:0\|\[1-9\]\\d\{0,5\}\)\$\/[\s\S]*Number\.parseInt\(trimmed, 10\)[\s\S]*const retryAfterSeconds = parseRetryAfterSeconds\(retryAfter\)/,
-    "auto-resolve retryAfter must use canonical bounded seconds parsing before backoff clamping",
-  );
-  assert.match(
-    autoResolveSource,
-    /readJsonResponse<BootstrapResolvePayload>/,
-    "auto-resolve bootstrap response parsing must use the bounded JSON response helper",
-  );
-  assert.match(
-    autoResolveSource,
-    /export async function readEpochHasPool\(publicClient: PublicClient \| undefined, epochKey: string\)[\s\S]*if \(!publicClient\) return false[\s\S]*publicClient\.readContract\(\{[\s\S]*functionName:\s*"epochs"[\s\S]*return epochData\[0\] > 0n[\s\S]*catch \{[\s\S]*return false[\s\S]*fetch\("\/api\/bootstrap-resolve"/,
+  assert.deepEqual(
+    isolatedAutoResolveBehavior.emptyPool,
+    {
+      events: [
+        ["readContract", { functionName: "epochs", args: ["42"] }],
+        ["log", "info", "AutoResolve", "skipping keeper trigger: epoch has no bets", { epoch: "42" }],
+      ],
+      startupDelayMs: 4_000,
+      readJsonCalls: 0,
+      responseJsonCalls: 0,
+      requestTimerSets: 0,
+      requestTimerClears: 0,
+      activeDocumentListenersAfterCleanup: 0,
+    },
     "browser auto-resolve must fail closed unless a read-only epoch precheck proves a funded pool before the server keeper API trigger",
   );
-  assert.match(
-    autoResolveSource,
-    /payload\?\.ok && payload\.action === "pending"[\s\S]*server keeper resolve tx pending[\s\S]*markRetryScheduled\(epochKey\)[\s\S]*getBootstrapRetryDelayMs\(payload\.retryAfter\)[\s\S]*continue;/,
+  const pendingAutoResolveEvents = isolatedAutoResolveBehavior.pending.events;
+  assert.deepEqual(
+    {
+      fetch: pendingAutoResolveEvents.find((event) => event[0] === "fetch")?.[1],
+      readJsonEvent: pendingAutoResolveEvents.find((event) => event[0] === "readJsonResponse"),
+      readJsonCalls: isolatedAutoResolveBehavior.pending.readJsonCalls,
+      requestTimerSets: isolatedAutoResolveBehavior.pending.requestTimerSets,
+      requestTimerClears: isolatedAutoResolveBehavior.pending.requestTimerClears,
+    },
+    {
+      fetch: {
+        input: "/api/bootstrap-resolve",
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        hasBody: false,
+        hasSignal: true,
+      },
+      readJsonEvent: ["readJsonResponse", true],
+      readJsonCalls: 1,
+      requestTimerSets: 1,
+      requestTimerClears: 1,
+    },
+    "auto-resolve bootstrap response parsing must use the bounded JSON response helper",
+  );
+  assert.deepEqual(
+    {
+      eventOrder: pendingAutoResolveEvents.map((event) => event[0]),
+      guardWrites: pendingAutoResolveEvents
+        .filter((event) => event[0] === "writeResolveGuard")
+        .map((event) => event[1]),
+      pendingLog: pendingAutoResolveEvents.find((event) => (
+        event[0] === "log" && event[3] === "server keeper resolve tx pending"
+      )),
+      waitDelays: pendingAutoResolveEvents
+        .filter((event) => event[0] === "waitUnlessCancelled")
+        .map((event) => event[1]),
+      startupDelayMs: isolatedAutoResolveBehavior.pending.startupDelayMs,
+      activeDocumentListenersAfterCleanup:
+        isolatedAutoResolveBehavior.pending.activeDocumentListenersAfterCleanup,
+    },
+    {
+      eventOrder: [
+        "readContract",
+        "writeResolveGuard",
+        "fetch",
+        "readJsonResponse",
+        "log",
+        "writeResolveGuard",
+        "waitUnlessCancelled",
+      ],
+      guardWrites: ["42", "42"],
+      pendingLog: [
+        "log",
+        "info",
+        "AutoResolve",
+        "server keeper resolve tx pending",
+        { epoch: "42", hash: "0xabc", reason: "resolve_pending" },
+      ],
+      waitDelays: [90_000],
+      startupDelayMs: 4_000,
+      activeDocumentListenersAfterCleanup: 0,
+    },
     "browser auto-resolve must treat keeper receipt timeouts as pending states with guarded retry/backoff",
   );
   assert.doesNotMatch(
@@ -371,14 +802,15 @@ export async function runWalletShellAndMiningActionTests() {
     /\b(?:useWriteContract|writeContractAsync|sendTransactionSilent|sendTransactionFromExternal|walletClient|eth_sendTransaction|sendTransaction\s*\(|writeContract\s*\(|simulateContract|encodeFunctionData)\b|\bbody\s*:/,
     "browser auto-resolve must not import or call wallet/write/send primitives or attach a mutation payload",
   );
-  assert.doesNotMatch(
-    autoResolveSource,
-    /res\.json\(\)|response\.json\(\)/,
+  assert.equal(
+    isolatedAutoResolveBehavior.pending.responseJsonCalls,
+    0,
     "auto-resolve bootstrap response parsing must not use unbounded response.json",
   );
-  assert.doesNotMatch(
-    autoResolveSource,
-    /Number\(payload\??\.retryAfter \?\? 0\)\s*\*\s*1000|Number\(retryAfter\)/,
+  assert.deepEqual(
+    ["0x5a", "1000000", {}, Number.POSITIVE_INFINITY]
+      .map((retryAfter) => autoResolve.getBootstrapRetryDelayMs(retryAfter)),
+    [30_000, 30_000, 30_000, 30_000],
     "auto-resolve must not trust raw retryAfter values from bootstrap responses",
   );
   assert.doesNotMatch(
@@ -400,14 +832,17 @@ export async function runWalletShellAndMiningActionTests() {
     [],
     "client source must not retain dormant resolveEpoch wallet/sweep references outside ABI, docs, or the fetch-only bootstrap hook",
   );
-  assert.doesNotMatch(
-    publicConfigSource,
-    /NEXT_PUBLIC_ENABLE_CLIENT_AUTO_RESOLVE|NEXT_PUBLIC_ENABLE_AUTO_RESOLVE_SWEEP|getConfiguredAutoResolveSweepEnabled|DEFAULT_AUTO_RESOLVE_SWEEP_ENABLED/,
-    "public config must not expose a browser auto-resolve sweep flag",
+  assert.deepEqual(
+    {
+      enabled: isolatedWalletShellBehavior.clientAutoResolve.enabled,
+      forbiddenExports: isolatedWalletShellBehavior.clientAutoResolve.forbiddenExports,
+    },
+    { enabled: false, forbiddenExports: [] },
+    "public auto-resolve flags must stay inert at import time and legacy sweep exports must stay absent",
   );
-  assert.match(
-    publicConfigSource,
-    /function getConfiguredClientAutoResolveEnabled\(explicitFlag\?: string \| null\)[\s\S]*void explicitFlag;[\s\S]*return DEFAULT_CLIENT_AUTO_RESOLVE_ENABLED;/,
+  assert.deepEqual(
+    isolatedWalletShellBehavior.clientAutoResolve.explicitValues,
+    [false, false, false, false, false, false, false],
     "client bootstrap resolve config must ignore public opt-in flags and remain isolated from browser runtime",
   );
 }

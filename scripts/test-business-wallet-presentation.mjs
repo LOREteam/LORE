@@ -9,6 +9,8 @@ import * as headerPoolChartModule from "../app/components/header/HeaderPoolChart
 import * as headerWalletCardModule from "../app/components/header/HeaderWalletCard.tsx";
 import * as sectionBuildersModule from "../app/lib/lineaOreClientSectionBuilders.ts";
 import * as pageWalletOverviewModule from "../app/hooks/usePageWalletOverview.ts";
+import * as betPanelModule from "../app/components/BetPanel.tsx";
+import * as walletSettingsModalModule from "../app/components/WalletSettingsModal.tsx";
 
 const walletTransferRow = walletTransferRowModule.default ?? walletTransferRowModule;
 const walletTransferPanels = walletTransferPanelsModule.default ?? walletTransferPanelsModule;
@@ -19,6 +21,8 @@ const pendingTxPanel = pendingTxPanelModule.default ?? pendingTxPanelModule;
 const headerPoolChart = headerPoolChartModule.default ?? headerPoolChartModule;
 const headerWalletCard = headerWalletCardModule.default ?? headerWalletCardModule;
 const sectionBuilders = sectionBuildersModule.default ?? sectionBuildersModule;
+const betPanel = betPanelModule.default ?? betPanelModule;
+const walletSettingsModal = walletSettingsModalModule.default ?? walletSettingsModalModule;
 
 const READY_BALANCE_STATUS = Object.freeze({ fetching: false, error: false, stale: false, updatedAt: null });
 
@@ -57,14 +61,110 @@ function assertPendingPresentation(input, actual) {
 }
 
 export function runWalletPresentationTests() {
-  const walletSettingsModalSource = readFileSync("app/components/WalletSettingsModal.tsx", "utf8");
-  const betPanelSource = readFileSync("app/components/BetPanel.tsx", "utf8");
-  assert.match(
-    betPanelSource,
-    /className="console-input lore-nums h-11 px-3 text-base font-black"/,
-    "manual bet amount input must use the shared numeric font class and 44px touch height",
-  );
   const hubSidePanelSourceForTypography = readFileSync("app/components/HubSidePanel.tsx", "utf8");
+  const connectedWalletAddress = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+  const walletSettingsModalHtml = renderToStaticMarkup(React.createElement(
+    walletSettingsModal.WalletSettingsModal,
+    {
+      isOpen: true,
+      onClose: () => undefined,
+      connectedWalletAddress,
+      embeddedWalletAddress: connectedWalletAddress.toLowerCase(),
+      externalWalletAddress: null,
+      formattedLineaBalance: "0.00",
+      formattedEthBalance: "0.0000",
+      withdrawAmount: "",
+      withdrawEthAmount: "",
+      depositEthAmount: "",
+      depositTokenAmount: "",
+      isWithdrawing: false,
+      isWithdrawingEth: false,
+      isDepositingEth: false,
+      isDepositingToken: false,
+      onWithdrawAmountChange: () => undefined,
+      onWithdrawEthAmountChange: () => undefined,
+      onDepositEthAmountChange: () => undefined,
+      onDepositTokenAmountChange: () => undefined,
+      onCreateEmbeddedWallet: async () => undefined,
+      walletSetupCreating: false,
+      walletSetupError: null,
+      onCopyEmbeddedAddress: () => undefined,
+      onExportEmbeddedWallet: () => undefined,
+      onWithdrawToExternal: () => undefined,
+      onWithdrawEthToExternal: () => undefined,
+      onDepositEthToEmbedded: () => undefined,
+      onDepositTokenToEmbedded: () => undefined,
+      walletTransfers: null,
+      walletTransfersLoading: false,
+      onLoadWalletTransfers: () => undefined,
+      deepScanWins: null,
+      deepScanScanning: false,
+      deepScanClaiming: false,
+      deepScanProgress: "",
+      onDeepScan: () => undefined,
+      onDeepScanStop: () => undefined,
+      onDeepClaimOne: () => undefined,
+      onDeepClaimAll: () => undefined,
+      connectedResolverRewards: "1.00",
+      connectedResolverRewardsWei: 1n,
+      embeddedResolverRewards: "2.00",
+      embeddedResolverRewardsWei: 2n,
+      isClaimingConnectedResolverRewards: false,
+      isClaimingEmbeddedResolverRewards: false,
+      onClaimConnectedResolverRewards: () => undefined,
+      onClaimEmbeddedResolverRewards: () => undefined,
+      pendingTransactionStatus: null,
+      isRefreshingPendingTx: false,
+      isCancellingPendingTx: false,
+      onRefreshPendingTx: () => undefined,
+      onCancelPendingTx: () => undefined,
+    },
+  ));
+  assert.match(
+    walletSettingsModalHtml,
+    /<div(?=[^>]*role="dialog")(?=[^>]*aria-modal="true")(?=[^>]*aria-labelledby="wallet-settings-title")(?=[^>]*aria-describedby="wallet-settings-description")(?=[^>]*tabindex="-1")[^>]*>/,
+    "rendered wallet settings modal must expose complete dialog semantics",
+  );
+  assert.match(
+    walletSettingsModalHtml,
+    /class="[^"]*max-h-\[calc\(100dvh-1rem\)\][^"]*sm:max-h-\[calc\(100dvh-2rem\)\][^"]*"/,
+    "rendered Wallet Settings modal must stay inside the dynamic viewport",
+  );
+  assert.match(
+    walletSettingsModalHtml,
+    /class="[^"]*min-h-0[^"]*flex-1[^"]*overflow-y-auto[^"]*"/,
+    "rendered Wallet Settings content must shrink and scroll inside the modal",
+  );
+  assert.match(
+    walletSettingsModalHtml,
+    /<button(?=[^>]*aria-label="Export support logs")(?=[^>]*title="Export support logs")[^>]*>[\s\S]*?<span class="hidden sm:inline">Export Logs<\/span>[\s\S]*?<\/button>/,
+    "rendered support-log action must preserve its accessible name, title, and desktop label",
+  );
+  const mobileSectionButtons = [
+    ...walletSettingsModalHtml.matchAll(/<button\b(?=[^>]*aria-pressed="(?:true|false)")[^>]*>([^<]+)<\/button>/g),
+  ].map((match) => ({ markup: match[0], label: match[1] }));
+  assert.deepEqual(
+    {
+      labels: mobileSectionButtons.map(({ label }) => label),
+      selectedLabels: mobileSectionButtons
+        .filter(({ markup }) => /aria-pressed="true"/.test(markup))
+        .map(({ label }) => label),
+    },
+    {
+      labels: ["All", "General", "Privy", "Transfer", "Scan"],
+      selectedLabels: ["All"],
+    },
+    "rendered mobile Wallet Settings navigation must expose all sections with exactly one selected",
+  );
+  assert.ok(
+    mobileSectionButtons.every(({ markup }) => /class="[^"]*min-h-11[^"]*focus-visible:ring-2[^"]*"/.test(markup)),
+    "rendered mobile Wallet Settings sections must keep a 44px touch target and visible keyboard focus",
+  );
+  assert.deepEqual(
+    [/Claim Connected/.test(walletSettingsModalHtml), /Claim Privy/.test(walletSettingsModalHtml)],
+    [true, false],
+    "normalized-equivalent connected and embedded addresses must not render a duplicate resolver claim",
+  );
   assert.match(
     hubSidePanelSourceForTypography,
     /value=\{manualBetForm\.betAmount\}[\s\S]*lore-nums h-11 w-full[\s\S]*tabular-nums[\s\S]*focus-visible:ring-2/,
@@ -75,60 +175,144 @@ export function runWalletPresentationTests() {
     /aria-label="Exact total stake"[\s\S]*lore-nums[\s\S]*tabular-nums[\s\S]*\{exactTotal \?\? "Unavailable"\} LINEA/,
     "mobile compact manual bet total must use the shared numeric font class",
   );
+  const manualBetPanelHtml = renderToStaticMarkup(React.createElement(betPanel.ManualBetPanel, {
+    formattedBalance: "100.00",
+    walletAuthenticated: true,
+    walletConnected: true,
+    selectedTilesCount: 3,
+    feeEstimate: null,
+    feeEstimateUnavailable: true,
+    isPending: false,
+    isRevealing: false,
+    isAutoMining: false,
+    readOnlyReason: "Betting is temporarily read-only.",
+    manualBetForm: {
+      betAmount: "1",
+      setBetAmount: () => undefined,
+      totalBetDisplay: "3.00",
+      betAmountError: null,
+      balanceDisplay: "100.00",
+      lineaDeficitDisplay: "0.00",
+      manualInsufficient: false,
+      disabledReason: null,
+      isDisabled: false,
+    },
+    onMine: () => undefined,
+    onQuickPickTiles: () => undefined,
+  }));
   assert.match(
-    betPanelSource,
-    /SmallInput[\s\S]*console-input lore-nums/,
-    "auto-miner numeric inputs must keep the shared numeric font class",
+    manualBetPanelHtml,
+    /<input(?=[^>]*id="bet-amount-per-tile")(?=[^>]*class="[^"]*console-input[^"]*lore-nums[^"]*h-11)[^>]*>/,
+    "rendered manual bet amount must use the shared numeric font class and 44px touch height",
   );
   assert.match(
-    betPanelSource,
+    manualBetPanelHtml,
     /data-testid="manual-bet-action"/,
-    "manual bet primary action must expose a stable smoke-test selector",
+    "rendered manual bet primary action must expose its stable smoke-test selector",
   );
   assert.match(
-    betPanelSource,
-    /manualButtonDescriptionId[\s\S]*manual-bet-readonly-reason[\s\S]*manual-bet-insufficient-reason[\s\S]*bet-amount-per-tile-error[\s\S]*manual-bet-status[\s\S]*manual-bet-disabled-reason[\s\S]*aria-describedby=\{manualButtonDescriptionId\}/,
-    "manual bet primary action must only reference a visible disabled/status reason",
+    manualBetPanelHtml,
+    /id="manual-bet-readonly-reason"[\s\S]*data-testid="manual-bet-action"[^>]*aria-describedby="manual-bet-readonly-reason"/,
+    "rendered manual bet action must reference its visible read-only reason",
   );
   assert.match(
-    betPanelSource,
-    /Bet network fee[\s\S]*feeEstimateUnavailable[\s\S]*Unavailable/,
-    "desktop manual bet must show the live fee estimate or an explicit unavailable state",
+    manualBetPanelHtml,
+    /role="status" aria-live="polite" aria-atomic="true">Betting is temporarily read-only\.<\/span>/,
+    "rendered manual bet state transition must be announced",
   );
   assert.match(
-    betPanelSource,
+    manualBetPanelHtml,
+    /<span>Bet network fee<\/span><span class="lore-nums text-sky-200">Unavailable<\/span>/,
+    "rendered manual bet must show an explicit unavailable network-fee state",
+  );
+  const autoMinerForm = {
+    betSize: "1",
+    setBetSize: () => undefined,
+    targets: 3,
+    cycles: 2,
+    displayBetSize: "1",
+    displayTargets: "3",
+    displayCycles: "2",
+    totalCost: 6,
+    betSizeError: null,
+    balance: 100,
+    insufficientBalance: false,
+    disabledReason: null,
+    isDisabled: false,
+    handleTargetsChange: () => undefined,
+    handleCyclesChange: () => undefined,
+  };
+  const insufficientAutoMinerHtml = renderToStaticMarkup(React.createElement(betPanel.AutoMinerPanel, {
+    form: {
+      ...autoMinerForm,
+      balance: 4,
+      insufficientBalance: true,
+      disabledReason: "Insufficient LINEA balance",
+      isDisabled: true,
+    },
+    autoMinePhase: "idle",
+    isAutoMining: false,
+    isPending: false,
+    isRevealing: false,
+    walletAuthenticated: true,
+    walletConnected: true,
+    onToggle: () => undefined,
+  }));
+  assert.equal(
+    (insufficientAutoMinerHtml.match(/<input(?=[^>]*class="[^"]*console-input lore-nums[^"]*")[^>]*>/g) ?? []).length,
+    3,
+    "all rendered auto-miner numeric inputs must keep the shared numeric font class",
+  );
+  assert.match(
+    insufficientAutoMinerHtml,
+    /Need 6\.00, have 4\.00; top up 2\.00 LINEA/,
+    "rendered auto-miner insufficient-balance copy must show the exact LINEA top-up deficit",
+  );
+  assert.match(
+    insufficientAutoMinerHtml,
+    /<button(?=[^>]*data-testid="auto-miner-action")(?=[^>]*aria-describedby="auto-miner-disabled-reason")[^>]*>[\s\S]*?<p id="auto-miner-disabled-reason"[^>]*>Insufficient LINEA balance<\/p>/,
+    "rendered auto-miner action must reference its visible disabled reason",
+  );
+  const retryWaitAutoMinerHtml = renderToStaticMarkup(React.createElement(betPanel.AutoMinerPanel, {
+    form: autoMinerForm,
+    autoMinePhase: "retry-wait",
+    isAutoMining: false,
+    isPending: false,
+    isRevealing: false,
+    walletAuthenticated: true,
+    walletConnected: true,
+    onToggle: () => undefined,
+  }));
+  assert.match(
+    retryWaitAutoMinerHtml,
     /data-testid="auto-miner-action"/,
-    "auto-miner primary action must expose a stable smoke-test selector",
+    "rendered auto-miner primary action must expose its stable smoke-test selector",
   );
   assert.match(
-    betPanelSource,
-    /top up \{lineaDeficitDisplay\} LINEA/,
-    "auto-miner insufficient-balance copy must show the exact LINEA top-up deficit",
+    retryWaitAutoMinerHtml,
+    /role="status" aria-live="polite" aria-atomic="true">Auto-miner Recovery queued\./,
+    "rendered auto-miner recovery phase must be announced",
   );
   assert.match(
-    betPanelSource,
-    /aria-describedby=\{autoAction\.disabled && disabledReason && !isAutoMining \? "auto-miner-disabled-reason" : undefined\}/,
-    "auto-miner disabled reason must be associated with the disabled primary action",
+    retryWaitAutoMinerHtml,
+    /Auto-miner is paused while the previous run settles\. It will resume automatically\./,
+    "recovery progress must remain visible after the active loop pauses",
   );
-  assert.match(
-    betPanelSource,
-    /manualAnnouncement[\s\S]*role="status" aria-live="polite" aria-atomic="true"[\s\S]*\{manualAnnouncement\}/,
-    "manual bet state transitions must be announced without relying on visible text changes",
-  );
-  assert.match(
-    betPanelSource,
-    /autoMinerAnnouncement[\s\S]*role="status" aria-live="polite" aria-atomic="true"[\s\S]*\{autoMinerAnnouncement\}/,
-    "auto-miner phase transitions must be announced without reading every progress update",
-  );
-  assert.match(
-    betPanelSource,
-    /showAutoMineProgress[\s\S]*autoMinePhase === "retry-wait"[\s\S]*autoMinePhase === "session-expired"/,
-    "auto-miner recovery states must keep the progress message visible after the active loop pauses",
-  );
-  assert.match(
-    betPanelSource,
-    /showAutoMineProgress && phaseProgressText/,
-    "auto-miner progress card must use the shared recovery progress visibility guard",
+  const idleAutoMinerHtml = renderToStaticMarkup(React.createElement(betPanel.AutoMinerPanel, {
+    form: autoMinerForm,
+    autoMinePhase: "idle",
+    autoMineProgress: "synthetic hidden idle progress",
+    isAutoMining: false,
+    isPending: false,
+    isRevealing: false,
+    walletAuthenticated: true,
+    walletConnected: true,
+    onToggle: () => undefined,
+  }));
+  assert.doesNotMatch(
+    idleAutoMinerHtml,
+    /synthetic hidden idle progress/,
+    "idle auto-miner progress must remain hidden when no recovery or active loop is present",
   );
   const transferInputs = [
     { buttonLabel: "Send ETH", disabled: false, loading: false },
@@ -187,63 +371,6 @@ export function runWalletPresentationTests() {
       "wallet transfer presentation invariant must reject pending-state mutants",
     );
   }
-  const walletTransferPanelsSource = readFileSync("app/components/wallet/WalletSettingsTransferPanels.tsx", "utf8");
-  assert.match(
-    walletTransferPanelsSource,
-    /lore-nums[\s\S]*totalIn/,
-    "wallet transfer summary totals must use the shared numeric font class",
-  );
-  assert.match(
-    walletTransferPanelsSource,
-    /walletTransfers\.totalInDisplay[\s\S]*walletTransfers\.totalOutDisplay/,
-    "wallet transfer summary totals must render bigint-safe display strings",
-  );
-  assert.doesNotMatch(
-    walletTransferPanelsSource,
-    /walletTransfers\.(?:totalIn|totalOut)\.toFixed\(2\)/,
-    "wallet transfer summary totals must not format numeric compatibility fields for display",
-  );
-  assert.match(
-    walletTransferPanelsSource,
-    /transferHistoryLoadLabel[\s\S]*role="status"[\s\S]*aria-live="polite"[\s\S]*aria-label=\{transferHistoryLoadLabel\}[\s\S]*title=\{transferHistoryLoadLabel\}/,
-    "wallet transfer history load action must expose a state-aware label and polite loading status",
-  );
-  assert.match(
-    walletTransferPanelsSource,
-    /role="list"[\s\S]*aria-label="LINEA transfer history"[\s\S]*explorerLabel[\s\S]*role="listitem"[\s\S]*aria-label=\{explorerLabel\}[\s\S]*title=\{explorerLabel\}/,
-    "wallet transfer history rows must expose list semantics and clear Lineascan link labels",
-  );
-  const headerWalletCardSource = readFileSync("app/components/header/HeaderWalletCard.tsx", "utf8");
-  assert.match(
-    headerWalletCardSource,
-    /Copy Privy wallet address[\s\S]*min-h-11[\s\S]*text-\[11px\][\s\S]*focus-visible:ring-2/,
-    "header wallet copy action must keep a readable 44px target and visible keyboard focus",
-  );
-  assert.match(
-    headerWalletCardSource,
-    /min-h-11 min-w-11[\s\S]*focus-visible:ring-2[\s\S]*Open Privy wallet address in explorer/,
-    "header wallet Explorer action must keep a 44px touch target and visible keyboard focus",
-  );
-  assert.match(
-    walletTransferPanelsSource,
-    /min-h-11 items-center[\s\S]*text-\[11px\][\s\S]*focus-visible:ring-2/,
-    "transfer Explorer links must keep a 44px touch target, readable text, and visible keyboard focus",
-  );
-  assert.match(
-    walletTransferPanelsSource,
-    /walletTransfers\.statusMessage[\s\S]*dataStatus === "error"[\s\S]*Try again[\s\S]*No verified LINEA transfers were found/,
-    "wallet transfer history must distinguish unavailable RPC data from an empty verified history",
-  );
-  assert.match(
-    walletTransferPanelsSource,
-    /scanCoverage === "partial"[\s\S]*historyRowsTruncated[\s\S]*Last checked[\s\S]*Observed deposits[\s\S]*LINEA · lower bound[\s\S]*Observed withdrawals/,
-    "partial transfer histories must label observed lower-bound totals and their last check",
-  );
-  assert.match(
-    walletTransferPanelsSource,
-    /Saved transfer list is capped; totals reflect the full last check[\s\S]*No transfers were observed in this partial scan; more may exist/,
-    "capped full caches and empty partial scans must keep their different provenance claims",
-  );
   assert.deepEqual(
     normalizeCachedPrivyBalances(undefined),
     { token: null, tokenUpdatedAt: null, eth: null, ethUpdatedAt: null },
@@ -336,6 +463,24 @@ export function runWalletPresentationTests() {
     onWithdrawEthToExternal: () => undefined,
     onLoadWalletTransfers: () => undefined,
   };
+  const loadingTransferPanelHtml = renderToStaticMarkup(React.createElement(
+    walletTransferPanels.WalletSettingsTransferPanels,
+    {
+      ...transferPanelProps,
+      walletTransfers: null,
+      walletTransfersLoading: true,
+    },
+  ));
+  assert.match(
+    loadingTransferPanelHtml,
+    /role="status" aria-live="polite">Loading LINEA transfer history<\/span>/,
+    "loading transfer history must announce its current state",
+  );
+  assert.match(
+    loadingTransferPanelHtml,
+    /<button[^>]*disabled=""[^>]*aria-label="Loading LINEA transfer history"[^>]*title="Loading LINEA transfer history"/,
+    "loading transfer history must expose the same state-aware accessible name and title",
+  );
   const unavailableTransferPanelHtml = renderToStaticMarkup(React.createElement(
     walletTransferPanels.WalletSettingsTransferPanels,
     transferPanelProps,
@@ -366,6 +511,37 @@ export function runWalletPresentationTests() {
   assert.match(verifiedZeroTransferPanelHtml, /Deposited<\/div>[\s\S]*?0\.00/);
   assert.match(verifiedZeroTransferPanelHtml, /Withdrawn<\/div>[\s\S]*?0\.00/);
   assert.doesNotMatch(verifiedZeroTransferPanelHtml, /Observed deposits|lower bound/);
+  const exactDisplayTransferPanelHtml = renderToStaticMarkup(React.createElement(
+    walletTransferPanels.WalletSettingsTransferPanels,
+    {
+      ...transferPanelProps,
+      walletTransfers: {
+        ...unavailableTransferSummary,
+        dataStatus: "live",
+        scanCoverage: "full",
+        totalIn: 12.345,
+        totalOut: 6.789,
+        totalInDisplay: "9007199254740993.56",
+        totalOutDisplay: "0.000000000000000001",
+        statusMessage: null,
+      },
+    },
+  ));
+  assert.match(
+    exactDisplayTransferPanelHtml,
+    /<div class="lore-nums [^"]*">9007199254740993\.56<\/div>/,
+    "deposit totals must render the bigint-safe display string with the shared numeric font",
+  );
+  assert.match(
+    exactDisplayTransferPanelHtml,
+    /<div class="lore-nums [^"]*">0\.000000000000000001<\/div>/,
+    "withdrawal totals must render the bigint-safe display string with the shared numeric font",
+  );
+  assert.doesNotMatch(
+    exactDisplayTransferPanelHtml,
+    />12\.35<\/div>|>6\.79<\/div>/,
+    "numeric compatibility totals must not replace the exact display strings",
+  );
   const emptyPartialTransferPanelHtml = renderToStaticMarkup(React.createElement(
     walletTransferPanels.WalletSettingsTransferPanels,
     {
@@ -454,6 +630,17 @@ export function runWalletPresentationTests() {
   assert.match(observedPartialTransferPanelHtml, /Observed deposits/);
   assert.match(observedPartialTransferPanelHtml, /Observed withdrawals/);
   assert.match(observedPartialTransferPanelHtml, /12\.50|2\.25/);
+  assert.match(observedPartialTransferPanelHtml, /role="list" aria-label="LINEA transfer history"/);
+  assert.equal(
+    (observedPartialTransferPanelHtml.match(/role="listitem"/g) ?? []).length,
+    2,
+    "each observed transfer must retain list-item semantics",
+  );
+  assert.match(
+    observedPartialTransferPanelHtml,
+    /<a[^>]*aria-label="Open inbound LINEA transfer on Lineascan"[^>]*title="Open inbound LINEA transfer on Lineascan"[^>]*class="[^"]*min-h-11[^"]*text-\[11px\][^"]*focus-visible:ring-2[^"]*"/,
+    "rendered transfer Explorer links must expose a clear label, readable target, and keyboard focus ring",
+  );
   assert.doesNotMatch(observedPartialTransferPanelHtml, /No transfers were observed in this partial scan/);
   const cappedFullTransferRows = Array.from({ length: 500 }, (_, index) => ({
     direction: "in",
@@ -573,6 +760,16 @@ export function runWalletPresentationTests() {
   assert.match(unavailableHeaderWalletHtml, /Unavailable<span[^>]*> ETH<\/span>/);
   assert.match(unavailableHeaderWalletHtml, /aria-label="LINEA balance unavailable"[^>]*data-balance-state="unavailable"/);
   assert.match(unavailableHeaderWalletHtml, /Unavailable<span[^>]*> LINEA<\/span>/);
+  assert.match(
+    unavailableHeaderWalletHtml,
+    /<button[^>]*aria-label="Copy Privy wallet address"[^>]*class="[^"]*min-h-11[^"]*text-\[11px\][^"]*focus-visible:ring-2[^"]*"/,
+    "rendered wallet copy action must keep its readable accessible label, target, and keyboard focus ring",
+  );
+  assert.match(
+    unavailableHeaderWalletHtml,
+    /<a[^>]*class="[^"]*min-h-11 min-w-11[^"]*focus-visible:ring-2[^"]*"[^>]*aria-label="Open Privy wallet address in explorer"/,
+    "rendered wallet Explorer action must keep its accessible label, target, and keyboard focus ring",
+  );
   const refreshingHeaderWalletHtml = renderToStaticMarkup(React.createElement(headerWalletCard.HeaderWalletCard, {
     authenticated: true,
     loginState: {
@@ -809,16 +1006,6 @@ export function runWalletPresentationTests() {
       "replacement verification presentation must reject ambiguous or enabled-action mutants",
     );
   }
-  assert.match(
-    walletSettingsModalSource,
-    /aria-pressed=\{activeSection === s\.id\}/,
-    "mobile wallet settings sections must expose their selected state",
-  );
-  assert.match(
-    walletSettingsModalSource,
-    /min-h-11[^"]*focus-visible:ring-2/,
-    "mobile wallet settings sections must keep a 44px touch target and visible keyboard focus",
-  );
   const emptyPoolChartHtml = renderToStaticMarkup(React.createElement(headerPoolChart.HeaderPoolChart, {
     linePath: "",
     muted: false,

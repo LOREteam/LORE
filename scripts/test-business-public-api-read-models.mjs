@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import * as publicReadModelPolicyModule from "../app/api/_lib/publicReadModelPolicy.ts";
 import { runIsolatedBusinessLogicChild } from "./business-logic-isolated-runner.mjs";
 
@@ -34,6 +36,7 @@ const NORMALIZED_ADDRESS = CHECKSUM_ADDRESS.toLowerCase();
 const HASH_A = `0x${"a".repeat(64)}`;
 const HASH_B = `0x${"b".repeat(64)}`;
 const STORAGE_BEHAVIOR_CHILD_ARG = "--public-read-model-storage-child";
+const ROUTE_BEHAVIOR_CHILD_ARG = "--public-read-model-route-child";
 
 function pathIsInsideOrSame(rootPath, candidatePath) {
   const relativePath = relative(rootPath, candidatePath);
@@ -288,6 +291,21 @@ async function runPublicReadModelStorageBehaviorChild() {
   assert.deepEqual(storage.getIndexerBlockCheckpoints(), []);
   assert.equal(storage.releaseIndexerLease(leaseOwnerToken), true);
   assertRevision(storage, revision, "lease housekeeping must not affect the public revision");
+  assert.equal(
+    storage.getMetaBigInt("publicReadModelRevision"),
+    revision,
+    "public read-model revision must persist under the contract-scoped meta key",
+  );
+  assert.equal(
+    storage.getPublicReadModelRevision(),
+    revision.toString(),
+    "the exported public revision getter must expose the persisted revision",
+  );
+  assert.equal(
+    revision,
+    9n,
+    "accepted public mutations must each advance the revision exactly once",
+  );
 }
 
 function assertPublicReadModelRevisionStorageBehavior() {
@@ -308,6 +326,250 @@ function assertPublicReadModelRevisionStorageBehavior() {
     `isolated public read-model storage behavior child failed${output ? `:\n${output.slice(-4_000)}` : ""}`,
   );
   assert.match(String(result.stdout ?? ""), /Public read-model storage revision behavior passed\./);
+}
+
+function buildRouteBehaviorChildEnvironment() {
+  const childEnv = {
+    FORCE_COLOR: "0",
+    LORE_PREMAINNET_RUNTIME_STRICT: "0",
+    NEXT_PUBLIC_LINEA_NETWORK: "sepolia",
+    NODE_ENV: "test",
+    NO_COLOR: "1",
+  };
+  for (const name of ["SystemRoot", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR"]) {
+    const value = process.env[name];
+    if (typeof value === "string") childEnv[name] = value;
+  }
+  return childEnv;
+}
+
+async function runPublicReadModelRouteBehaviorChild() {
+  const { mock } = await import("node:test");
+  const forbiddenDbParent = join(
+    tmpdir(),
+    `lore-public-read-model-route-no-db-${process.pid}-${Date.now()}`,
+  );
+  if (existsSync(forbiddenDbParent)) {
+    throw new Error("public read-model route probe DB poison path already exists");
+  }
+  process.env.LORE_DB_PATH = join(forbiddenDbParent, "lore.sqlite");
+  const state = {
+    revision: "100",
+    revisionReads: [],
+    queuedRevisionReads: [],
+    cacheKeyInputs: [],
+    globalBuilds: 0,
+    globalNextRevision: null,
+    leaderboardBuilds: 0,
+    snapshot: null,
+    snapshotWrites: [],
+    networkCalls: 0,
+  };
+  const readRevision = () => {
+    const queued = state.queuedRevisionReads.shift();
+    const value = queued?.value ?? state.revision;
+    if (queued?.commit) state.revision = value;
+    state.revisionReads.push(value);
+    return value;
+  };
+  const leaderboardValue = (payload) => payload?.biggestSingleWin?.[0]?.value ?? null;
+  const requestJson = async (route, url) => {
+    const response = await route.GET(new Request(url));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store, no-cache, must-revalidate");
+    return response.json();
+  };
+
+  globalThis.fetch = async () => {
+    state.networkCalls += 1;
+    throw new Error("public read-model route behavior child forbids network access");
+  };
+  mock.module(new URL("../server/storage.ts", import.meta.url).href, {
+    namedExports: {
+      getChatProfiles: () => ({}),
+      getGlobalStatsAggregate: () => {
+        state.globalBuilds += 1;
+        const payloadRevision = state.revision;
+        if (state.globalNextRevision !== null) {
+          state.revision = state.globalNextRevision;
+          state.globalNextRevision = null;
+        }
+        return { revision: payloadRevision, build: state.globalBuilds };
+      },
+      getLeaderboardReadModel: () => {
+        state.leaderboardBuilds += 1;
+        const row = {
+          address: NORMALIZED_ADDRESS,
+          value: `leaderboard-${state.revision}`,
+          valueNum: state.leaderboardBuilds,
+        };
+        return {
+          biggestSingleWin: [row],
+          luckiest: [],
+          oneTileWonder: [],
+          mostWins: [],
+          whales: [],
+          underdog: [],
+          luckyTile: [],
+        };
+      },
+      getMetaJson: () => state.snapshot,
+      getPublicReadModelRevision: readRevision,
+      setMetaJson: (_key, value) => {
+        state.snapshot = value;
+        state.snapshotWrites.push(value);
+      },
+    },
+  });
+  mock.module(new URL("../app/api/_lib/sharedRateLimit.ts", import.meta.url).href, {
+    namedExports: {
+      enforceSharedRateLimit: async () => null,
+    },
+  });
+  mock.module(new URL("../app/api/_lib/publicReadModelPolicy.ts", import.meta.url).href, {
+    namedExports: {
+      buildPublicReadModelFailure,
+      createPublicReadModelCacheKey: (namespace, revision) => {
+        state.cacheKeyInputs.push({ namespace, revision });
+        return createPublicReadModelCacheKey(namespace, revision);
+      },
+      createPublicReadModelJsonResponse,
+      isFreshPublicReadModelSnapshot,
+      sanitizePublicLeaderboardName,
+    },
+  });
+
+  const [leaderboardsRouteModule, globalStatsRouteModule] = await Promise.all([
+    import("../app/api/leaderboards/route.ts"),
+    import("../app/api/global-stats/route.ts"),
+  ]);
+  const leaderboardsRoute = leaderboardsRouteModule.default ?? leaderboardsRouteModule;
+  const globalStatsRoute = globalStatsRouteModule.default ?? globalStatsRouteModule;
+
+  const globalUrl = "https://read-model.invalid/api/global-stats";
+  const globalBaseline = await requestJson(globalStatsRoute, globalUrl);
+  assert.deepEqual(globalBaseline, { revision: "100", build: 1 });
+  await requestJson(globalStatsRoute, globalUrl);
+  assert.equal(state.globalBuilds, 1, "a stable revision must reuse its cached aggregate");
+
+  state.queuedRevisionReads = [
+    { value: "100", commit: false },
+    { value: "101", commit: true },
+  ];
+  const globalAfterCachedRevisionChange = await requestJson(globalStatsRoute, globalUrl);
+  assert.equal(globalAfterCachedRevisionChange.revision, "101");
+  assert.equal(state.globalBuilds, 2, "a cached payload must be rechecked against the current revision");
+  await requestJson(globalStatsRoute, globalUrl);
+  assert.equal(state.globalBuilds, 2, "the second stability attempt must cache the current revision");
+
+  state.revision = "200";
+  state.globalNextRevision = "201";
+  const buildsBeforeGlobalChurn = state.globalBuilds;
+  const globalAfterBuildRevisionChange = await requestJson(globalStatsRoute, globalUrl);
+  assert.equal(globalAfterBuildRevisionChange.revision, "201");
+  assert.equal(
+    state.globalBuilds,
+    buildsBeforeGlobalChurn + 2,
+    "an aggregate built across a revision change must be retried instead of cached",
+  );
+  await requestJson(globalStatsRoute, globalUrl);
+  assert.equal(
+    state.globalBuilds,
+    buildsBeforeGlobalChurn + 2,
+    "only the stable retry may populate the revision cache",
+  );
+
+  const leaderboardsUrl = "https://read-model.invalid/api/leaderboards";
+  state.revisionReads = [];
+  state.cacheKeyInputs = [];
+  state.revision = "300";
+  state.snapshot = null;
+  state.snapshotWrites = [];
+  const leaderboardBaseline = await requestJson(leaderboardsRoute, leaderboardsUrl);
+  assert.equal(leaderboardValue(leaderboardBaseline), "leaderboard-300");
+  await requestJson(leaderboardsRoute, leaderboardsUrl);
+  assert.equal(state.leaderboardBuilds, 1, "a stable leaderboard revision must reuse its cache");
+
+  state.revision = "400";
+  state.queuedRevisionReads = [
+    { value: "400", commit: false },
+    { value: "400", commit: false },
+    { value: "401", commit: true },
+  ];
+  const leaderboardBuildsBeforeCommitChurn = state.leaderboardBuilds;
+  const snapshotWritesBeforeCommitChurn = state.snapshotWrites.length;
+  const leaderboardAfterCommitRevisionChange = await requestJson(leaderboardsRoute, leaderboardsUrl);
+  assert.equal(leaderboardValue(leaderboardAfterCommitRevisionChange), "leaderboard-401");
+  assert.equal(
+    state.leaderboardBuilds,
+    leaderboardBuildsBeforeCommitChurn + 2,
+    "a leaderboard build must retry when its revision changes during cache commit",
+  );
+  assert.deepEqual(
+    state.snapshotWrites.slice(snapshotWritesBeforeCommitChurn).map((entry) => entry.watermark),
+    ["401"],
+    "a cache-set revision change must prevent the stale snapshot write",
+  );
+  await requestJson(leaderboardsRoute, leaderboardsUrl);
+  assert.equal(
+    state.leaderboardBuilds,
+    leaderboardBuildsBeforeCommitChurn + 2,
+    "the stable second attempt must populate the leaderboard cache",
+  );
+
+  state.queuedRevisionReads = [
+    { value: "401", commit: false },
+    { value: "402", commit: true },
+  ];
+  const leaderboardAfterCachedRevisionChange = await requestJson(leaderboardsRoute, leaderboardsUrl);
+  assert.equal(leaderboardValue(leaderboardAfterCachedRevisionChange), "leaderboard-402");
+  assert.equal(
+    state.leaderboardBuilds,
+    leaderboardBuildsBeforeCommitChurn + 3,
+    "a cached leaderboard payload must be discarded when its revision changes before return",
+  );
+  await requestJson(leaderboardsRoute, leaderboardsUrl);
+  assert.equal(
+    state.leaderboardBuilds,
+    leaderboardBuildsBeforeCommitChurn + 3,
+    "the revision-specific leaderboard cache key must reuse only the current payload",
+  );
+  assert.deepEqual(
+    [...new Set(state.revisionReads)],
+    ["300", "400", "401", "402"],
+    "leaderboards must consult the public read-model revision across every cache generation",
+  );
+  assert.deepEqual(
+    [...new Set(state.cacheKeyInputs.map(({ namespace, revision }) => `${namespace}:${revision}`))],
+    ["leaderboards:300", "leaderboards:400", "leaderboards:401", "leaderboards:402"],
+    "leaderboards must derive each cache key from the current public read-model revision",
+  );
+  assert.equal(state.networkCalls, 0, "the hermetic route harness must not use the network");
+  if (existsSync(forbiddenDbParent)) {
+    throw new Error("public read-model route probe opened its fail-closed DB path");
+  }
+}
+
+function assertPublicReadModelRevisionRouteBehavior() {
+  const result = runIsolatedBusinessLogicChild({
+    args: [
+      "--experimental-test-module-mocks",
+      "--import",
+      "tsx",
+      fileURLToPath(import.meta.url),
+      ROUTE_BEHAVIOR_CHILD_ARG,
+    ],
+    env: buildRouteBehaviorChildEnvironment(),
+    maxBuffer: 1024 * 1024,
+    timeout: 30_000,
+  });
+  const output = `${String(result.stdout ?? "")}\n${String(result.stderr ?? "")}`.trim();
+  assert.equal(
+    result.status,
+    0,
+    `isolated public read-model route behavior child failed${output ? `:\n${output.slice(-4_000)}` : ""}`,
+  );
+  assert.match(String(result.stdout ?? ""), /Public read-model revision route behavior passed\./);
 }
 
 function assertEpochPolicy(candidate) {
@@ -347,62 +609,6 @@ function assertPublicReadModelRevisionCacheKeyPolicy(candidate) {
   for (const value of ["", "01", "-1", "1.5", "1e3", 1, null]) {
     assert.equal(candidate("leaderboards", value), "leaderboards:revision:0");
   }
-}
-
-function publicReadModelRevisionMutationPattern(name) {
-  const beforeNextExport = "(?:(?!\\nexport function )[\\s\\S])*?";
-  return new RegExp(
-    `export function ${name}\\([\\s\\S]*?\\)\\s*\\{${beforeNextExport}` +
-      "runInTransaction\\(\\(\\) => \\{[\\s\\S]*?bumpPublicReadModelRevision\\(\\)",
-  );
-}
-
-function assertPublicReadModelRevisionSourceBinding() {
-  // Structural binding complements the isolated executable SQLite mutation coverage below.
-  const storageSource = readFileSync("server/storage.ts", "utf8");
-  const leaderboardsSource = readFileSync("app/api/leaderboards/route.ts", "utf8");
-  const globalStatsSource = readFileSync("app/api/global-stats/route.ts", "utf8");
-
-  assert.match(storageSource, /PUBLIC_READ_MODEL_REVISION_META_KEY = "publicReadModelRevision"/);
-  assert.match(storageSource, /export function getPublicReadModelRevision\(\)/);
-  for (const name of [
-    "upsertEpochMap",
-    "upsertBets",
-    "upsertJackpots",
-    "upsertRewardClaims",
-    "upsertProtocolFeeFlushes",
-    "upsertChatProfile",
-    "rollbackIndexerToBlock",
-    "commitIndexerChunk",
-  ]) {
-    assert.match(
-      storageSource,
-      publicReadModelRevisionMutationPattern(name),
-      `${name} must commit its public read-model revision atomically with the write`,
-    );
-  }
-  assert.match(leaderboardsSource, /getPublicReadModelRevision/);
-  assert.match(leaderboardsSource, /getLeaderboardsCacheKey\(currentWatermark\)/);
-  assert.match(leaderboardsSource, /const PUBLIC_READ_MODEL_STABILITY_ATTEMPTS = 2/);
-  assert.match(
-    leaderboardsSource,
-    /if \(isLeaderboardsRevisionCurrent\(currentWatermark\)\) \{[\s\S]*?return jsonNoStore\(cached\)/,
-  );
-  assert.match(
-    leaderboardsSource,
-    /if \(!isLeaderboardsRevisionCurrent\(watermark\)\) return false;[\s\S]*?leaderboardsRouteCache\.set\([\s\S]*?if \(!isLeaderboardsRevisionCurrent\(watermark\)\) return false;[\s\S]*?saveLeaderboardsSnapshot/,
-  );
-  assert.match(globalStatsSource, /getPublicReadModelRevision\(\)/);
-  assert.match(globalStatsSource, /createPublicReadModelCacheKey/);
-  assert.match(globalStatsSource, /const PUBLIC_READ_MODEL_STABILITY_ATTEMPTS = 2/);
-  assert.match(
-    globalStatsSource,
-    /if \(getPublicReadModelRevision\(\) === revision\) \{[\s\S]*?return applyNoStoreHeaders\(NextResponse\.json\(cached\)\)/,
-  );
-  assert.match(
-    globalStatsSource,
-    /if \(getPublicReadModelRevision\(\) !== revision\) continue;[\s\S]*?globalStatsRouteCache\.set/,
-  );
 }
 
 function assertAddressPolicy(candidate) {
@@ -521,7 +727,7 @@ export function runPublicApiReadModelTests() {
   assertEpochPolicy(parsePublicRewardsEpochs);
   assertSnapshotFreshnessPolicy(isFreshPublicReadModelSnapshot);
   assertPublicReadModelRevisionCacheKeyPolicy(createPublicReadModelCacheKey);
-  assertPublicReadModelRevisionSourceBinding();
+  assertPublicReadModelRevisionRouteBehavior();
   assertPublicReadModelRevisionStorageBehavior();
   assertAddressPolicy(normalizePublicReadModelAddress);
   assertHashPolicy(normalizePublicTransactionHash);
@@ -644,6 +850,9 @@ if (process.argv[1]?.endsWith("test-business-public-api-read-models.mjs")) {
   if (process.argv.includes(STORAGE_BEHAVIOR_CHILD_ARG)) {
     await runPublicReadModelStorageBehaviorChild();
     console.log("Public read-model storage revision behavior passed.");
+  } else if (process.argv.includes(ROUTE_BEHAVIOR_CHILD_ARG)) {
+    await runPublicReadModelRouteBehaviorChild();
+    console.log("Public read-model revision route behavior passed.");
   } else {
     runPublicApiReadModelTests();
     console.log("Public API read-model behavior tests passed.");

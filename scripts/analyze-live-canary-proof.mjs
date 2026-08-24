@@ -1,8 +1,9 @@
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, resolve } from "node:path";
 import { resolveCanaryProofProfile } from "./canary-proof-profile.mjs";
 import { hasPublicProofHttpsUrl as hasPublicHttpsUrl } from "./collect-proof-common.mjs";
+import { requireV10RedactedRpcLabel } from "./v10-preview-consent-envelope.mjs";
 import { verifyV10SepoliaDeploymentManifest } from "./verify-v10-sepolia-deployment-manifest.mjs";
 
 const JSONL_READ_CHUNK_BYTES = 64 * 1024;
@@ -20,7 +21,8 @@ const optionArgs = new Map(
 const profile = resolveCanaryProofProfile(optionArgs.get("profile") || process.env.CANARY_PROOF_PROFILE || "launch");
 const positionalArgs = process.argv.slice(2).filter((arg) => !arg.startsWith("--"));
 const logPath = positionalArgs[0] || process.env.LIVE_CANARY_LOG_PATH || "";
-const strict = process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
+const previewDryRun = process.argv.includes("--preview-dry-run");
+const strict = previewDryRun || process.argv.includes("--strict") || process.env.PROOF_STRICT === "1";
 const summaryOnly = process.argv.includes("--summary-only");
 const canaryLaunchGates = ["G10", "G11"];
 const canaryLaunchGateGroups = "canary=2";
@@ -44,7 +46,6 @@ const expectedContract = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS?.trim() || pro
 const expectedChainId = process.env.NEXT_PUBLIC_LINEA_CHAIN_ID?.trim() || process.env.LINEA_CHAIN_ID?.trim() || String(profile.chainId);
 const requiredCanaryRoles = normalizeRoleList(profile.requiredRoles);
 const TEMPLATE_VALUE_RE = /REPLACE_|<REDACTED>|TODO|TBD/i;
-const GENERIC_RPC_LABEL_RE = /^(?:configured|default|fallback|mainnet|rpc|redacted|target|unlabeled)(?:[-_ ]?rpc(?:[-_ ]?label)?(?:[-_ ]?required)?)?$/i;
 const unsafeDiagnosticKeyPattern = /^(?:error|message|diagnostic|reason|cause|stack|rawError|rawMessage)$/i;
 const unsafeDiagnosticTextPattern = /(?:https?:\/\/|\b0x[a-fA-F0-9]{40}\b|\b0x[a-fA-F0-9]{80,}\b)/i;
 
@@ -170,21 +171,30 @@ const CANARY_CONTROL_ALLOWED_FIELDS_BY_MODE = {
 };
 
 if (!logPath) {
-  if (summaryOnly) {
+  if (summaryOnly || previewDryRun) {
     printMissingLogSummary("live canary log path is missing");
   } else {
-    console.error("Usage: node scripts/analyze-live-canary-proof.mjs <live-canary.jsonl> [--profile=launch|testnet|v10-matrix] [--strict] [--summary-only] [--require-epoch-bound] [--require-v10-gas-matrix] [--require-canary-admission] [--require-v10-deployment-manifest] [--manifest=<path>]");
+    console.error("Usage: node scripts/analyze-live-canary-proof.mjs <live-canary.jsonl> [--profile=launch|testnet|v10-matrix] [--strict] [--preview-dry-run] [--summary-only] [--require-epoch-bound] [--require-v10-gas-matrix] [--require-canary-admission] [--require-v10-deployment-manifest] [--manifest=<path>]");
     process.exitCode = 1;
   }
 } else if (!isExistingFile(resolve(process.cwd(), logPath))) {
-  if (summaryOnly) {
+  if (summaryOnly || previewDryRun) {
     printMissingLogSummary(existsSync(resolve(process.cwd(), logPath)) ? "live canary log must be a file" : "live canary log is missing");
   } else {
     console.error(`Live canary log is missing or not a file: ${basename(logPath)}`);
     process.exitCode = 1;
   }
 } else {
-  const logEvidence = readJsonl(logPath);
+  let logEvidence;
+  try {
+    logEvidence = readJsonl(logPath);
+  } catch (error) {
+    if (previewDryRun && error?.code === "PREVIEW_DRY_RUN_LOG_BOUNDARY") {
+      printMissingLogSummary(error instanceof Error ? error.message : "Preview dry-run log boundary failed");
+      process.exit(1);
+    }
+    throw error;
+  }
   const events = logEvidence.events;
   const bets = events.filter((event) => (
     Number.isInteger(event.round)
@@ -270,11 +280,11 @@ if (!logPath) {
   // useful when every later monetary action is cryptographically tied to it.
   // Keep historical V9/testnet logs analyzable: an admission becomes mandatory
   // for the V10 matrix profile (and whenever a log claims to contain one).
-  const admissionRequired = strict && (
+  const admissionRequired = previewDryRun || (strict && (
     requireCanaryAdmission ||
     profile.key === "v10-matrix" ||
     events.some((event) => event.mode === "admission")
-  );
+  ));
   const admissionEvaluation = evaluateCanaryAdmission({
     events,
     required: admissionRequired,
@@ -284,10 +294,62 @@ if (!logPath) {
     targetContractAddress,
     requiredRoles: requiredCanaryRoles,
     expectedRunId: expectedAdmissionRunId,
+    expectedExecution: previewDryRun ? "dry-run" : "live",
   });
   const liveLogTemplateFindings = findTemplateLikeValues(events);
   const liveLogSecretFindings = findSecretLikeValues(events);
   const liveLogUnsafeErrorFindings = findUnsafeErrorText(events);
+  const previewActionEvents = events.filter((event) => (
+    BET_MODES.has(event.mode) || event.mode === "approve" || event.mode === "resolve"
+  ));
+  const previewActionTransactionEvidence = events.filter(hasPreviewActionTransactionEvidence);
+  const previewUnexpectedEvents = events.slice(1).filter((event) => event.mode !== "preflight");
+  const previewRuntimePreflights = preflightEvents.filter((event) => event.role === "SYSTEM");
+  const previewWalletPreflights = preflightEvents.filter((event) => event.role !== "SYSTEM");
+  const invalidPreviewRuntimePreflights = previewRuntimePreflights.filter((event) => (
+    event.ok !== true
+    || event.amount !== "0"
+    || event.round !== -1
+    || !hasIsoTimestamp(event.timestamp)
+  ));
+  const invalidPreviewWalletPreflights = previewWalletPreflights.filter((event) => (
+    event.ok !== true
+    || event.amount !== "0"
+    || event.round !== -1
+    || event.participant !== true
+    || event.enoughEth !== true
+    || event.enoughToken !== true
+    || typeof event.approvalRequired !== "boolean"
+    || !hasIsoTimestamp(event.timestamp)
+    || !isNonNegativeInteger(event.nonceLatest)
+    || !isNonNegativeInteger(event.noncePending)
+    || nonceValue(event.noncePending) > nonceValue(event.nonceLatest)
+  ));
+
+  const previewDryRunFailures = [];
+  if (previewDryRun) {
+    if (profile.key !== "v10-matrix") previewDryRunFailures.push("Preview dry-run analyzer requires the v10-matrix profile");
+    if (admissionEvaluation.status !== "checked") previewDryRunFailures.push(...admissionEvaluation.failures);
+    if (failedPreflight.length > 0) previewDryRunFailures.push(`failed preflight checks ${failedPreflight.length}`);
+    if (previewRuntimePreflights.length !== 1) previewDryRunFailures.push(`runtime identity preflight count ${previewRuntimePreflights.length} != 1`);
+    if (previewWalletPreflights.length === 0) previewDryRunFailures.push("wallet preflight evidence is missing");
+    if (invalidPreviewRuntimePreflights.length > 0) previewDryRunFailures.push(`invalid runtime identity preflight envelopes ${invalidPreviewRuntimePreflights.length}`);
+    if (invalidPreviewWalletPreflights.length > 0) previewDryRunFailures.push(`invalid wallet preflight evidence ${invalidPreviewWalletPreflights.length}`);
+    if (previewActionEvents.length > 0) previewDryRunFailures.push(`dry-run action events ${previewActionEvents.length} != 0`);
+    if (previewActionTransactionEvidence.length > 0) {
+      previewDryRunFailures.push(`dry-run transaction evidence events ${previewActionTransactionEvidence.length} != 0`);
+    }
+    if (previewUnexpectedEvents.length > 0) previewDryRunFailures.push(`unexpected dry-run events ${previewUnexpectedEvents.length}`);
+    if (targetEventMismatches.length > 0) previewDryRunFailures.push(`target metadata mismatches ${targetEventMismatches.length}`);
+    if (liveLogTemplateFindings.length > 0) previewDryRunFailures.push(`live canary log contains template-like values at ${liveLogTemplateFindings.slice(0, 5).join(", ")}`);
+    if (liveLogSecretFindings.length > 0) previewDryRunFailures.push(`live canary log contains secret-like values at ${liveLogSecretFindings.slice(0, 5).join(", ")}`);
+    if (liveLogUnsafeErrorFindings.length > 0) previewDryRunFailures.push(`live canary log contains unsafe error text at ${liveLogUnsafeErrorFindings.slice(0, 5).join(", ")}`);
+    if (requireV10DeploymentManifest && admissionEvaluation.status !== "checked") {
+      previewDryRunFailures.push("canonical V10 deployment manifest admission is invalid");
+    }
+    previewDryRunFailures.push(...manifestIssues);
+  }
+  const uniquePreviewDryRunFailures = [...new Set(previewDryRunFailures)].sort();
 
   const strictFailures = [];
   if (betEpochs.length < minEpochs) strictFailures.push(`unique bet epochs ${betEpochs.length} < ${minEpochs}`);
@@ -375,6 +437,15 @@ if (!logPath) {
   console.log(`Minimum auto-miner epochs: ${minAutoMinerEpochs}`);
   console.log(`Minimum elapsed ms per epoch: ${minElapsedMsPerEpoch}`);
   console.log(`Manifest: ${summaryOnly ? manifestSummaryStatus() : (manifestPath ? resolve(process.cwd(), manifestPath) : "not required")}`);
+  if (previewDryRun) {
+    console.log(`Preview dry-run verdict: ${uniquePreviewDryRunFailures.length === 0 ? "passed" : "failed"}`);
+    console.log(`Preview action events: ${previewActionEvents.length}`);
+    console.log(`Preview successful action tx: ${successfulOnchainActionEvents.length}`);
+    console.log(`Preview transaction evidence events: ${previewActionTransactionEvidence.length}`);
+    console.log(`Preview runtime identity preflights: ${previewRuntimePreflights.length}`);
+    console.log(`Preview wallet preflights: ${previewWalletPreflights.length}`);
+    console.log("Live launch gates: blocked G10, G11");
+  }
   console.log("");
   console.log("| Metric | Value |");
   console.log("| --- | --- |");
@@ -487,13 +558,39 @@ if (!logPath) {
     console.log("");
   }
 
-  console.log(
-    strictFailures.length === 0
-      ? `Summary: live canary proof checks passed; ${launchGateSummary(strictFailures.length)}.`
-      : `Summary: ${strictFailures.length} proof issue(s): ${strictFailures.join("; ")}; ${launchGateSummary(strictFailures.length)}.`,
-  );
+  if (previewDryRun) {
+    console.log(
+      uniquePreviewDryRunFailures.length === 0
+        ? "Summary: Preview dry-run evidence checks passed; live launch gates remain blocked G10, G11."
+        : `Summary: ${uniquePreviewDryRunFailures.length} Preview dry-run issue(s): ${uniquePreviewDryRunFailures.join("; ")}; live launch gates remain blocked G10, G11.`,
+    );
+    if (summaryOnly) {
+      console.log(JSON.stringify({
+        status: uniquePreviewDryRunFailures.length === 0 ? "pass" : "fail",
+        mode: "preview-dry-run",
+        previewDryRunVerdict: uniquePreviewDryRunFailures.length === 0 ? "passed" : "failed",
+        liveLaunchGates: ["G10", "G11"],
+        logName: basename(logPath),
+        logSha256: logEvidence.sha256,
+        logBytes: logEvidence.bytes,
+        actionEvents: previewActionEvents.length,
+        successfulActionTx: successfulOnchainActionEvents.length,
+        transactionEvidenceEvents: previewActionTransactionEvidence.length,
+        runtimeIdentityPreflights: previewRuntimePreflights.length,
+        walletPreflights: previewWalletPreflights.length,
+        issues: uniquePreviewDryRunFailures,
+      }));
+    }
+    if (uniquePreviewDryRunFailures.length > 0) process.exitCode = 1;
+  } else {
+    console.log(
+      strictFailures.length === 0
+        ? `Summary: live canary proof checks passed; ${launchGateSummary(strictFailures.length)}.`
+        : `Summary: ${strictFailures.length} proof issue(s): ${strictFailures.join("; ")}; ${launchGateSummary(strictFailures.length)}.`,
+    );
 
-  if (strict && strictFailures.length > 0) process.exitCode = 1;
+    if (strict && strictFailures.length > 0) process.exitCode = 1;
+  }
 }
 
 function printMissingLogSummary(reason) {
@@ -504,16 +601,53 @@ function printMissingLogSummary(reason) {
   console.log(`Strict: ${strict ? "yes" : "no"}`);
   console.log(`Profile: ${profile.key} (${profile.label})`);
   console.log(`Manifest: ${summaryOnly ? manifestSummaryStatus() : (manifestPath ? resolve(process.cwd(), manifestPath) : "not required")}`);
+  if (previewDryRun) {
+    console.log("Preview dry-run verdict: failed");
+    console.log("Preview action events: unavailable");
+    console.log("Preview successful action tx: unavailable");
+    console.log("Preview transaction evidence events: unavailable");
+    console.log("Preview runtime identity preflights: unavailable");
+    console.log("Preview wallet preflights: unavailable");
+    console.log("Live launch gates: blocked G10, G11");
+  }
   console.log("");
-  console.log(`Summary: 1 proof issue(s): ${reason}; ${launchGateSummary(1)}.`);
+  console.log(previewDryRun
+    ? `Summary: 1 Preview dry-run issue(s): ${reason}; live launch gates remain blocked G10, G11.`
+    : `Summary: 1 proof issue(s): ${reason}; ${launchGateSummary(1)}.`);
+  if (previewDryRun && summaryOnly) {
+    console.log(JSON.stringify({
+      status: "fail",
+      mode: "preview-dry-run",
+      previewDryRunVerdict: "failed",
+      liveLaunchGates: ["G10", "G11"],
+      logName: null,
+      logSha256: null,
+      logBytes: null,
+      actionEvents: null,
+      successfulActionTx: null,
+      transactionEvidenceEvents: null,
+      runtimeIdentityPreflights: null,
+      walletPreflights: null,
+      issues: [reason],
+    }));
+  }
   if (strict) process.exitCode = 1;
 }
 
 function readJsonl(path) {
   const events = [];
-  const fd = openSync(path, "r");
+  const absolutePath = resolve(process.cwd(), path);
+  const pathFingerprintBefore = previewDryRun ? previewLogPathFingerprint(absolutePath) : null;
+  let fd;
+  try {
+    fd = openSync(absolutePath, "r");
+  } catch (error) {
+    if (previewDryRun) throw previewLogBoundaryError("Preview dry-run log could not be opened as a stable ordinary file");
+    throw error;
+  }
   const buffer = Buffer.alloc(JSONL_READ_CHUNK_BYTES);
   const digest = createHash("sha256");
+  let descriptorFingerprintBefore = null;
   let bytes = 0;
   let pending = "";
   let lineNumber = 0;
@@ -532,9 +666,18 @@ function readJsonl(path) {
   };
 
   try {
+    if (previewDryRun) {
+      descriptorFingerprintBefore = previewLogDescriptorFingerprint(fd);
+      if (descriptorFingerprintBefore !== pathFingerprintBefore) {
+        throw previewLogBoundaryError("Preview dry-run log path does not match the opened file");
+      }
+    }
     while (true) {
       const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
       if (bytesRead === 0) break;
+      if (previewDryRun && bytes + bytesRead > MAX_CANARY_ARTIFACT_TEXT_BYTES) {
+        throw previewLogBoundaryError(`Preview dry-run log exceeds the ${MAX_CANARY_ARTIFACT_TEXT_BYTES}-byte limit`);
+      }
       digest.update(buffer.subarray(0, bytesRead));
       bytes += bytesRead;
       pending += buffer.toString("utf8", 0, bytesRead);
@@ -543,10 +686,65 @@ function readJsonl(path) {
       for (const line of lines) parseLine(line);
     }
     if (pending) parseLine(pending);
+    if (previewDryRun) {
+      const descriptorFingerprintAfter = previewLogDescriptorFingerprint(fd);
+      if (descriptorFingerprintAfter !== descriptorFingerprintBefore) {
+        throw previewLogBoundaryError("Preview dry-run log changed while it was read");
+      }
+    }
   } finally {
     closeSync(fd);
   }
+  if (previewDryRun) {
+    const pathFingerprintAfter = previewLogPathFingerprint(absolutePath);
+    if (pathFingerprintAfter !== pathFingerprintBefore) {
+      throw previewLogBoundaryError("Preview dry-run log path changed while it was read");
+    }
+  }
   return { events, bytes, sha256: digest.digest("hex") };
+}
+
+function previewLogBoundaryError(message) {
+  const error = new Error(message);
+  error.code = "PREVIEW_DRY_RUN_LOG_BOUNDARY";
+  return error;
+}
+
+function previewLogFingerprint(stats) {
+  const modified = stats.mtimeNs ?? BigInt(Math.trunc(Number(stats.mtimeMs) * 1_000_000));
+  const changed = stats.ctimeNs ?? BigInt(Math.trunc(Number(stats.ctimeMs) * 1_000_000));
+  return [stats.dev, stats.ino, stats.mode, stats.size, modified, changed].map(String).join(":");
+}
+
+function assertPreviewLogStats(stats) {
+  if (!stats.isFile() || stats.isSymbolicLink?.()) {
+    throw previewLogBoundaryError("Preview dry-run log must be an ordinary non-symlink file");
+  }
+  if (stats.size > BigInt(MAX_CANARY_ARTIFACT_TEXT_BYTES)) {
+    throw previewLogBoundaryError(`Preview dry-run log exceeds the ${MAX_CANARY_ARTIFACT_TEXT_BYTES}-byte limit`);
+  }
+}
+
+function previewLogPathFingerprint(filePath) {
+  let stats;
+  try {
+    stats = lstatSync(filePath, { bigint: true });
+  } catch {
+    throw previewLogBoundaryError("Preview dry-run log is unavailable");
+  }
+  assertPreviewLogStats(stats);
+  return previewLogFingerprint(stats);
+}
+
+function previewLogDescriptorFingerprint(fd) {
+  let stats;
+  try {
+    stats = fstatSync(fd, { bigint: true });
+  } catch {
+    throw previewLogBoundaryError("Preview dry-run log descriptor is unavailable");
+  }
+  assertPreviewLogStats(stats);
+  return previewLogFingerprint(stats);
 }
 
 function regularFileStat(filePath) {
@@ -723,8 +921,12 @@ function looksLikeUrl(value) {
 }
 
 function hasConcreteRpcLabel(value) {
-  const normalized = String(value ?? "").trim();
-  return hasRealText(normalized) && !looksLikeUrl(normalized) && !GENERIC_RPC_LABEL_RE.test(normalized);
+  try {
+    requireV10RedactedRpcLabel(value, "canary RPC label");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function hasConcreteText(value) {
@@ -1446,6 +1648,28 @@ function findDuplicateNonceKeys(events) {
   return [...duplicateKeys].sort();
 }
 
+function hasPreviewActionTransactionEvidence(event) {
+  if (!isPlainObject(event)) return false;
+  if (
+    event.signatureRequested === true
+    || event.transactionSent === true
+    || event.walletClientCreated === true
+    || event.contractWriteSubmitted === true
+  ) return true;
+  return [
+    "effectiveGasPrice",
+    "gasEstimate",
+    "gasLimit",
+    "gasUsed",
+    "hash",
+    "networkFeeWei",
+    "receipt",
+    "transactionHash",
+    "txHash",
+    "txStatus",
+  ].some((key) => Object.hasOwn(event, key));
+}
+
 function evaluateCanaryAdmission({
   events,
   required,
@@ -1455,6 +1679,7 @@ function evaluateCanaryAdmission({
   targetContractAddress,
   requiredRoles,
   expectedRunId,
+  expectedExecution = "live",
 }) {
   const admissionIndexes = [];
   for (let index = 0; index < events.length; index += 1) {
@@ -1500,8 +1725,12 @@ function evaluateCanaryAdmission({
   if (admission.execution !== "live" && admission.execution !== "dry-run") {
     failures.push("canonical canary admission execution is invalid");
   }
-  if (required && admission.execution !== "live") {
-    failures.push("canonical canary admission execution must be live for strict proof");
+  if (required && admission.execution !== expectedExecution) {
+    failures.push(
+      expectedExecution === "dry-run"
+        ? "canonical canary admission execution must be dry-run for Preview proof"
+        : "canonical canary admission execution must be live for strict proof",
+    );
   }
   if (admission.profile !== "v10-matrix" && admission.profile !== "managed-soak") {
     failures.push("canonical canary admission profile is invalid");
@@ -1777,6 +2006,10 @@ function evaluateCanaryAdmission({
       continue;
     }
     const approvals = approvalsByRole.get(role) ?? [];
+    if (expectedExecution === "dry-run") {
+      if (approvals.length !== 0) failures.push(`canonical dry-run approval evidence for ${role} must be absent`);
+      continue;
+    }
     if (!preflight.approvalRequired && approvals.length !== 0) {
       failures.push(`unexpected canary approval evidence for ${role}`);
     }
@@ -1816,7 +2049,7 @@ function evaluateCanaryAdmission({
     walletPreflightIndexesByRole,
     walletPreflightsByRole,
   });
-  validateCanarySummaryLifecycle({ events, relevantEvents, failures });
+  if (expectedExecution === "live") validateCanarySummaryLifecycle({ events, relevantEvents, failures });
   if (profileKey === "v10-matrix") validateV10MatrixRepeatPairs(relevantEvents, failures);
 
   return { status: failures.length === 0 ? "checked" : "invalid", failures: [...new Set(failures)].sort() };
@@ -2213,7 +2446,7 @@ function findTargetEventMismatches(events, network, chainId, contractAddress, rp
       mismatches.push(`${label} contractAddress=${event.contractAddress ?? "missing"}`);
     }
     if (expectedRpcLabel && String(event.rpcLabel ?? "").trim().toLowerCase() !== expectedRpcLabel) {
-      mismatches.push(`${label} rpcLabel=${event.rpcLabel ?? "missing"}`);
+      mismatches.push(`${label} rpcLabel=mismatch`);
     }
   }
   return mismatches;

@@ -13,9 +13,16 @@ import {
 import {
   assessPerformanceEvidenceAgainstCurrentBuild,
   assessStrictPerformanceEvidence,
+  analyzeNativeBackgroundAudit,
   BUILD_OUTPUT_DIGEST_DOMAIN,
   createDualBuildBinding,
   MARKER_FILE_DIGEST_DOMAIN,
+  NATIVE_TIMER_HEARTBEAT_INTERVAL_MS,
+  NATIVE_TIMER_HEARTBEAT_LIMIT,
+  NATIVE_TIMER_HIDDEN_PHASE_MS,
+  NATIVE_TIMER_LONG_TASK_LIMIT,
+  NATIVE_TIMER_TRANSITION_LIMIT,
+  NATIVE_TIMER_VISIBLE_CONTROL_MS,
   REACT_PROFILING_BUILD_ROLE,
   summarizePorcelainStatus,
   TWO_HOURS_MS,
@@ -91,9 +98,94 @@ function printUsage() {
     "Usage: node scripts/verify-p1-performance-evidence.mjs [--input <path>] [--against-current-build --profiling-dist-dir <.next-name>] [--summary-only]",
     "       node scripts/verify-p1-performance-evidence.mjs --self-test",
     "",
-    "Strictly verifies a full schema-3 dual-build P1 performance artifact without browser, network, wallet, or chain access.",
+    "Strictly verifies a full schema-4 dual-build P1 performance artifact without browser, network, wallet, or chain access.",
     "--against-current-build additionally binds both canonical .next and the explicit profiling output to the locked current clean Git HEAD.",
   ].join("\n"));
+}
+
+function createNativeTimerAuditFixture() {
+  const timeOriginMs = 1_700_000_000_000;
+  const witnessTimeOriginMs = timeOriginMs + 1_000;
+  const observation = (atMs, state, origin = timeOriginMs) => ({
+    atMs,
+    timeOriginMs: origin,
+    nativeState: state,
+    nativeHidden: state === "hidden",
+    exposedState: state,
+    exposedHidden: state === "hidden",
+    ownVisibilityState: false,
+    ownHidden: false,
+  });
+  const visibleBeforeStart = 0;
+  const visibleBeforeEnd = NATIVE_TIMER_VISIBLE_CONTROL_MS;
+  const hiddenStart = visibleBeforeEnd + 100;
+  const hiddenEnd = hiddenStart + NATIVE_TIMER_HIDDEN_PHASE_MS;
+  const visibleAfterStart = hiddenEnd + 100;
+  const visibleAfterEnd = visibleAfterStart + NATIVE_TIMER_VISIBLE_CONTROL_MS;
+  const heartbeats = [];
+  const appendTicks = (startAtMs, endAtMs, intervalMs, state) => {
+    for (let atMs = startAtMs; atMs <= endAtMs; atMs += intervalMs) {
+      heartbeats.push(observation(atMs, state));
+    }
+  };
+  appendTicks(visibleBeforeStart, visibleBeforeEnd, NATIVE_TIMER_HEARTBEAT_INTERVAL_MS, "visible");
+  appendTicks(hiddenStart, hiddenEnd, 1_000, "hidden");
+  appendTicks(visibleAfterStart, visibleAfterEnd, NATIVE_TIMER_HEARTBEAT_INTERVAL_MS, "visible");
+  const sequencedHeartbeats = heartbeats.map((heartbeat, seq) => ({ seq, ...heartbeat }));
+  return {
+    clock: "performance.now",
+    heartbeatIntervalMs: NATIVE_TIMER_HEARTBEAT_INTERVAL_MS,
+    heartbeatLimit: NATIVE_TIMER_HEARTBEAT_LIMIT,
+    transitionLimit: NATIVE_TIMER_TRANSITION_LIMIT,
+    longTaskLimit: NATIVE_TIMER_LONG_TASK_LIMIT,
+    heartbeatsTruncated: false,
+    transitionsTruncated: false,
+    longTasksTruncated: false,
+    longTasks: [],
+    browser: {
+      product: "Chrome/fixture",
+      version: "fixture-revision",
+      commandLineObserved: true,
+      effectiveSwitchNames: ["--enable-automation"],
+      disabledFeatures: [],
+    },
+    phases: {
+      "native-visible-before": {
+        requestedMs: NATIVE_TIMER_VISIBLE_CONTROL_MS,
+        controllerDurationMs: NATIVE_TIMER_VISIBLE_CONTROL_MS,
+        timeOriginMs,
+        startPerformanceMs: visibleBeforeStart,
+        endPerformanceMs: visibleBeforeEnd,
+        startSnapshot: observation(visibleBeforeStart, "visible"),
+        endSnapshot: observation(visibleBeforeEnd, "visible"),
+      },
+      "native-hidden": {
+        requestedMs: NATIVE_TIMER_HIDDEN_PHASE_MS,
+        controllerDurationMs: NATIVE_TIMER_HIDDEN_PHASE_MS,
+        timeOriginMs,
+        startPerformanceMs: hiddenStart,
+        endPerformanceMs: hiddenEnd,
+        startSnapshot: observation(hiddenStart, "hidden"),
+        endSnapshot: observation(hiddenEnd, "hidden"),
+        witnessStart: observation(100, "visible", witnessTimeOriginMs),
+        witnessEnd: observation(NATIVE_TIMER_HIDDEN_PHASE_MS + 100, "visible", witnessTimeOriginMs),
+      },
+      "native-visible-after": {
+        requestedMs: NATIVE_TIMER_VISIBLE_CONTROL_MS,
+        controllerDurationMs: NATIVE_TIMER_VISIBLE_CONTROL_MS,
+        timeOriginMs,
+        startPerformanceMs: visibleAfterStart,
+        endPerformanceMs: visibleAfterEnd,
+        startSnapshot: observation(visibleAfterStart, "visible"),
+        endSnapshot: observation(visibleAfterEnd, "visible"),
+      },
+    },
+    heartbeats: sequencedHeartbeats,
+    transitions: [
+      { seq: 0, ...observation(visibleBeforeEnd + 50, "hidden"), isTrusted: true },
+      { seq: 1, ...observation(hiddenEnd + 50, "visible"), isTrusted: true },
+    ],
+  };
 }
 
 function createPassingFixture() {
@@ -179,8 +271,10 @@ function createPassingFixture() {
   const expectedHeapSampleCount = samples.length;
   const minimumHeapSampleCount = Math.ceil(expectedHeapSampleCount * 0.8);
   const minimumHeapWindowMs = TWO_HOURS_MS - (2 * SAMPLE_INTERVAL_MS);
+  const nativeAudit = createNativeTimerAuditFixture();
+  const nativeAuditAnalysis = analyzeNativeBackgroundAudit(nativeAudit);
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     status: "complete",
     provenance: {
       repositoryBefore: repository,
@@ -247,10 +341,10 @@ function createPassingFixture() {
       status: "measured",
       blockers: [],
       safety: {
-        headlessTemporaryProfile: true,
+        headlessTemporaryProfile: false,
         temporaryProfile: true,
         dedicatedProfile: true,
-        browserMode: "headless",
+        browserMode: "headed-native-hidden",
         externalBrowserRequestsBlocked: true,
         serverExternalNetworkGuard: "global fetch plus http/https/net/tls loopback-only preload",
         apiWritesFulfilled: false,
@@ -276,19 +370,46 @@ function createPassingFixture() {
         samples,
       },
       visibility: {
+        syntheticCapability: {
+          overrideInstalled: true,
+          syntheticState: "visible",
+          syntheticHidden: false,
+          nativeState: "visible",
+          nativeHidden: false,
+        },
+        nativeWhileBackgrounded: {
+          overrideInstalled: false,
+          syntheticState: "hidden",
+          syntheticHidden: true,
+          nativeState: "hidden",
+          nativeHidden: true,
+        },
+        nativeHiddenObserved: true,
+        nativeAudit,
+        timerThrottling: nativeAuditAnalysis.timerThrottling,
         coverage: {
           nativeBrowserBackground: {
             status: "measured",
             nativeHiddenObserved: true,
-            pollingMeasured: true,
-            measuredDurationMs: 120_000,
+            timerCadenceMeasured: true,
+            apiPollingCountMeasured: true,
+            apiPollingObserved: true,
+            apiRequestCount: 2,
+            measuredDurationMs: NATIVE_TIMER_HIDDEN_PHASE_MS,
+            hiddenThroughout: true,
+            browserTimerThrottlingMeasured: true,
           },
         },
       },
       polling: {
         blockedExternalRequestCount: 0,
         phases: {
-          "native-hidden": { actualMs: 120_000, total: 2, byPath: { "/api/game-data": 2 } },
+          "native-hidden": {
+            requestedMs: NATIVE_TIMER_HIDDEN_PHASE_MS,
+            actualMs: NATIVE_TIMER_HIDDEN_PHASE_MS,
+            total: 2,
+            byPath: { "/api/game-data": 2 },
+          },
           "simulated-auto-miner": { actualMs: 120_000, total: 4, byPath: { "/api/game-data": 4 } },
         },
       },
@@ -384,6 +505,13 @@ async function runSelfTest() {
   const passing = createPassingFixture();
   assert.deepEqual(assessStrictPerformanceEvidence(passing).failures, []);
   cases += 1;
+  const zeroApiPollPassing = createPassingFixture();
+  zeroApiPollPassing.runtime.polling.phases["native-hidden"].total = 0;
+  zeroApiPollPassing.runtime.polling.phases["native-hidden"].byPath = {};
+  zeroApiPollPassing.runtime.visibility.coverage.nativeBrowserBackground.apiRequestCount = 0;
+  zeroApiPollPassing.runtime.visibility.coverage.nativeBrowserBackground.apiPollingObserved = false;
+  assert.deepEqual(assessStrictPerformanceEvidence(zeroApiPollPassing).failures, []);
+  cases += 1;
 
   const expectFailure = (code, mutate) => {
     const fixture = createPassingFixture();
@@ -394,7 +522,7 @@ async function runSelfTest() {
     cases += 1;
   };
 
-  expectFailure("schema.version", (fixture) => { fixture.schemaVersion = 1; });
+  expectFailure("schema.version", (fixture) => { fixture.schemaVersion = 3; });
   expectFailure("report.complete", (fixture) => { fixture.status = "partial"; });
   expectFailure("provenance.repository.clean", (fixture) => {
     fixture.provenance.repositoryAfter.dirty = true;
@@ -478,11 +606,171 @@ async function runSelfTest() {
     fixture.runtime.memory.samples.at(-1).elapsedMs = 300_000;
     fixture.runtime.memoryCoverage.finiteHeapWindowMs = 300_000;
   });
-  expectFailure("runtime.visibility.native-hidden-timed", (fixture) => {
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
     fixture.runtime.visibility.coverage.nativeBrowserBackground.status = "probe-only";
   });
-  expectFailure("runtime.visibility.native-hidden-timed", (fixture) => {
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
     fixture.runtime.polling.phases["native-hidden"].actualMs = 1_000;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.safety.browserMode = "headless";
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.safety.headlessTemporaryProfile = true;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.visibility.nativeWhileBackgrounded.overrideInstalled = true;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.visibility.syntheticCapability.overrideInstalled = false;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.visibility.nativeWhileBackgrounded.nativeState = "visible";
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.visibility.nativeWhileBackgrounded.nativeHidden = false;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.visibility.nativeWhileBackgrounded.syntheticState = "visible";
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.visibility.nativeHiddenObserved = false;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.phases["native-hidden"].requestedMs = 60_000;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.phases["native-hidden"].total = 0;
+    fixture.runtime.polling.phases["native-hidden"].byPath = {};
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    delete fixture.runtime.visibility.nativeAudit;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.visibility.nativeAudit.heartbeatsTruncated = true;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.visibility.nativeAudit.transitionsTruncated = true;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.visibility.nativeAudit.heartbeats[1].atMs =
+      fixture.runtime.visibility.nativeAudit.heartbeats[0].atMs;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    const snapshot = fixture.runtime.visibility.nativeAudit.phases["native-hidden"].startSnapshot;
+    snapshot.nativeState = "visible";
+    snapshot.nativeHidden = false;
+    snapshot.exposedState = "visible";
+    snapshot.exposedHidden = false;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    const snapshot = fixture.runtime.visibility.nativeAudit.phases["native-hidden"].endSnapshot;
+    snapshot.nativeState = "visible";
+    snapshot.nativeHidden = false;
+    snapshot.exposedState = "visible";
+    snapshot.exposedHidden = false;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.visibility.nativeAudit.phases["native-hidden"].witnessEnd.nativeState = "hidden";
+    fixture.runtime.visibility.nativeAudit.phases["native-hidden"].witnessEnd.nativeHidden = true;
+    fixture.runtime.visibility.nativeAudit.phases["native-hidden"].witnessEnd.exposedState = "hidden";
+    fixture.runtime.visibility.nativeAudit.phases["native-hidden"].witnessEnd.exposedHidden = true;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    const audit = fixture.runtime.visibility.nativeAudit;
+    const hidden = audit.phases["native-hidden"];
+    audit.transitions.push({
+      seq: audit.transitions.length,
+      ...hidden.startSnapshot,
+      atMs: hidden.startPerformanceMs + 1_000,
+      nativeState: "visible",
+      nativeHidden: false,
+      exposedState: "visible",
+      exposedHidden: false,
+      isTrusted: true,
+    });
+    audit.transitions.sort((left, right) => left.atMs - right.atMs);
+    audit.transitions.forEach((transition, seq) => { transition.seq = seq; });
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    const audit = fixture.runtime.visibility.nativeAudit;
+    const hidden = audit.phases["native-hidden"];
+    audit.transitions.push({
+      seq: audit.transitions.length,
+      ...hidden.startSnapshot,
+      atMs: hidden.startPerformanceMs + 1_000,
+      isTrusted: false,
+    });
+    audit.transitions.sort((left, right) => left.atMs - right.atMs);
+    audit.transitions.forEach((transition, seq) => { transition.seq = seq; });
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.visibility.nativeAudit.browser.effectiveSwitchNames.push(
+      "--disable-background-timer-throttling",
+    );
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.visibility.nativeAudit.browser.commandLineObserved = false;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.visibility.nativeAudit.browser.disabledFeatures.push("IntensiveWakeUpThrottling");
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.visibility.nativeAudit.phases["native-hidden"].controllerDurationMs = 120_000;
+  });
+  expectFailure("runtime.visibility.browser-timer-throttling", (fixture) => {
+    const audit = fixture.runtime.visibility.nativeAudit;
+    const hidden = audit.phases["native-hidden"];
+    const hiddenTicks = audit.heartbeats.filter((heartbeat) =>
+      heartbeat.atMs >= hidden.startPerformanceMs && heartbeat.atMs <= hidden.endPerformanceMs);
+    hiddenTicks.forEach((heartbeat, index) => {
+      heartbeat.atMs = hidden.startPerformanceMs + (index * NATIVE_TIMER_HEARTBEAT_INTERVAL_MS);
+    });
+  });
+  expectFailure("runtime.visibility.browser-timer-throttling", (fixture) => {
+    const audit = fixture.runtime.visibility.nativeAudit;
+    const before = audit.phases["native-visible-before"];
+    audit.heartbeats = audit.heartbeats.filter((heartbeat, index) =>
+      heartbeat.atMs < before.startPerformanceMs
+        || heartbeat.atMs > before.endPerformanceMs
+        || index % 5 === 0);
+    audit.heartbeats.forEach((heartbeat, seq) => { heartbeat.seq = seq; });
+  });
+  expectFailure("runtime.visibility.browser-timer-throttling", (fixture) => {
+    const audit = fixture.runtime.visibility.nativeAudit;
+    const after = audit.phases["native-visible-after"];
+    let visibleAfterIndex = 0;
+    audit.heartbeats = audit.heartbeats.filter((heartbeat) => {
+      if (heartbeat.atMs < after.startPerformanceMs || heartbeat.atMs > after.endPerformanceMs) return true;
+      const keep = visibleAfterIndex % 5 === 0;
+      visibleAfterIndex += 1;
+      return keep;
+    });
+    audit.heartbeats.forEach((heartbeat, seq) => { heartbeat.seq = seq; });
+  });
+  expectFailure("runtime.visibility.browser-timer-throttling", (fixture) => {
+    const hidden = fixture.runtime.visibility.nativeAudit.phases["native-hidden"];
+    fixture.runtime.visibility.nativeAudit.longTasks.push({
+      startTime: hidden.startPerformanceMs + 30_000,
+      duration: hidden.endPerformanceMs - hidden.startPerformanceMs - 30_000,
+    });
+  });
+  expectFailure("runtime.visibility.browser-timer-throttling", (fixture) => {
+    const audit = fixture.runtime.visibility.nativeAudit;
+    const hidden = audit.phases["native-hidden"];
+    let keptHiddenTick = false;
+    audit.heartbeats = audit.heartbeats.filter((heartbeat) => {
+      const inHidden = heartbeat.atMs >= hidden.startPerformanceMs
+        && heartbeat.atMs <= hidden.endPerformanceMs;
+      if (!inHidden) return true;
+      if (keptHiddenTick) return false;
+      keptHiddenTick = true;
+      return true;
+    });
+    audit.heartbeats.forEach((heartbeat, seq) => { heartbeat.seq = seq; });
+  });
+  expectFailure("runtime.visibility.browser-timer-throttling", (fixture) => {
+    fixture.runtime.visibility.timerThrottling.hiddenToVisibleMedianRatio = 999;
   });
   expectFailure("runtime.react.component-profiler", (fixture) => {
     fixture.runtime.reactRerenders.componentProfilerCollected = false;
@@ -568,7 +856,7 @@ async function runSelfTest() {
     await fs.rm(absentFixtureRoot, { recursive: true, force: true });
   }
 
-  console.log(JSON.stringify({ status: "pass", cases, schemaVersion: 3 }));
+  console.log(JSON.stringify({ status: "pass", cases, schemaVersion: 4 }));
 }
 
 function stableFileStatsEqual(left, right) {

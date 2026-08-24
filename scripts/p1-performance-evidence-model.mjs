@@ -10,6 +10,14 @@ export { BUILD_OUTPUT_DIGEST_DOMAIN };
 export const TWO_HOURS_MS = 2 * 60 * 60 * 1_000;
 export const MIN_NATIVE_HIDDEN_EVIDENCE_MS = 60_000;
 export const MIN_SIMULATED_AUTO_MINER_EVIDENCE_MS = 60_000;
+export const NATIVE_TIMER_HEARTBEAT_INTERVAL_MS = 100;
+export const NATIVE_TIMER_VISIBLE_CONTROL_MS = 15_000;
+export const NATIVE_TIMER_HIDDEN_PHASE_MS = 90_000;
+export const NATIVE_TIMER_VISIBLE_WARMUP_MS = 2_000;
+export const NATIVE_TIMER_HIDDEN_WARMUP_MS = 30_000;
+export const NATIVE_TIMER_HEARTBEAT_LIMIT = 4_096;
+export const NATIVE_TIMER_TRANSITION_LIMIT = 128;
+export const NATIVE_TIMER_LONG_TASK_LIMIT = 2_048;
 
 const CLEAN_PORCELAIN_DIGEST_SHA256 = createHash("sha256").update("", "utf8").digest("hex");
 const FULL_SHA_PATTERN = /^[a-f0-9]{40}$/;
@@ -401,6 +409,9 @@ export function createRuntimeApplicability({
   syntheticVisibilityOverrideInstalled,
   nativeHiddenObserved,
   nativeHiddenMeasurementDurationMs = 0,
+  nativeHiddenContinuityMeasured = false,
+  browserTimerThrottlingMeasured = false,
+  nativeHiddenApiRequestCount = 0,
   reactCommitObserverInstalled,
   reactRendererCount = 0,
   reactExperimentCommitCount = 0,
@@ -438,7 +449,9 @@ export function createRuntimeApplicability({
     && finiteHeapWindowMs >= minimumHeapWindowMs;
   const nativeHiddenPhaseMeasured = nativeHiddenObserved === true
     && Number.isFinite(nativeHiddenMeasurementDurationMs)
-    && nativeHiddenMeasurementDurationMs > 0;
+    && nativeHiddenMeasurementDurationMs >= NATIVE_TIMER_HIDDEN_PHASE_MS
+    && nativeHiddenContinuityMeasured === true
+    && browserTimerThrottlingMeasured === true;
   const simulatedAutoMinerPhaseMeasured = Number.isFinite(simulatedAutoMinerMeasurementDurationMs)
     && simulatedAutoMinerMeasurementDurationMs >= MIN_SIMULATED_AUTO_MINER_EVIDENCE_MS
     && Number.isInteger(simulatedAutoMinerTickCount)
@@ -451,7 +464,7 @@ export function createRuntimeApplicability({
   }
   if (!nativeHiddenPhaseMeasured) {
     blockers.push(nativeHiddenObserved
-      ? "A native hidden state was observed only during the background probe; no native hidden polling/throttling phase was measured."
+      ? "A native hidden state was observed, but continuous raw visibility and browser timer-throttling evidence did not pass."
       : "No native hidden state or native hidden polling/throttling phase was measured.");
   }
   if (!reactCommitObserverInstalled) {
@@ -526,10 +539,15 @@ export function createRuntimeApplicability({
             ? "probe-only"
             : "not-observed",
         nativeHiddenObserved,
-        pollingMeasured: nativeHiddenPhaseMeasured,
+        timerCadenceMeasured: nativeHiddenPhaseMeasured,
+        apiPollingCountMeasured: nativeHiddenPhaseMeasured,
+        apiPollingObserved: nativeHiddenPhaseMeasured && nativeHiddenApiRequestCount > 0,
+        apiRequestCount: nativeHiddenPhaseMeasured ? nativeHiddenApiRequestCount : 0,
         measuredDurationMs: nativeHiddenPhaseMeasured ? nativeHiddenMeasurementDurationMs : 0,
+        hiddenThroughout: nativeHiddenContinuityMeasured === true,
+        browserTimerThrottlingMeasured: browserTimerThrottlingMeasured === true,
         applicability: nativeHiddenPhaseMeasured
-          ? "native browser hidden-state polling/throttling"
+          ? "native browser hidden-state timer cadence plus API request-count measurement"
           : "no native hidden-state polling/throttling conclusion",
       },
     },
@@ -597,6 +615,310 @@ function isFinitePositive(value) {
 
 function sum(values) {
   return values.reduce((total, value) => total + value, 0);
+}
+
+const NATIVE_TIMER_PHASE_SPECS = [
+  ["native-visible-before", NATIVE_TIMER_VISIBLE_CONTROL_MS, "visible"],
+  ["native-hidden", NATIVE_TIMER_HIDDEN_PHASE_MS, "hidden"],
+  ["native-visible-after", NATIVE_TIMER_VISIBLE_CONTROL_MS, "visible"],
+];
+const FORBIDDEN_BACKGROUND_SWITCHES = new Set([
+  "--disable-background-timer-throttling",
+  "--disable-backgrounding-occluded-windows",
+  "--disable-renderer-backgrounding",
+]);
+
+function roundTimerMetric(value) {
+  return Number.isFinite(value) ? Math.round(value * 1_000) / 1_000 : null;
+}
+
+function nearestRank(sortedValues, quantile) {
+  if (!Array.isArray(sortedValues) || sortedValues.length === 0) return null;
+  const index = Math.max(0, Math.ceil(sortedValues.length * quantile) - 1);
+  return sortedValues[index];
+}
+
+function nativeObservationMatches(observation, expectedState, expectedTimeOriginMs) {
+  const expectedHidden = expectedState === "hidden";
+  return isRecord(observation)
+    && isFiniteNonNegative(expectedTimeOriginMs)
+    && isFiniteNonNegative(observation.atMs)
+    && observation.timeOriginMs === expectedTimeOriginMs
+    && observation.nativeState === expectedState
+    && observation.nativeHidden === expectedHidden
+    && observation.exposedState === expectedState
+    && observation.exposedHidden === expectedHidden
+    && observation.ownVisibilityState === false
+    && observation.ownHidden === false;
+}
+
+function auditSequenceIsValid(values, expectedTimeOriginMs, { transition = false } = {}) {
+  if (!Array.isArray(values)) return false;
+  let previousAtMs = -Infinity;
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
+    if (!isRecord(value)
+      || value.seq !== index
+      || !isFiniteNonNegative(value.atMs)
+      || value.atMs <= previousAtMs
+      || value.timeOriginMs !== expectedTimeOriginMs
+      || !["visible", "hidden"].includes(value.nativeState)
+      || typeof value.nativeHidden !== "boolean"
+      || value.nativeHidden !== (value.nativeState === "hidden")
+      || value.exposedState !== value.nativeState
+      || value.exposedHidden !== value.nativeHidden
+      || value.ownVisibilityState !== false
+      || value.ownHidden !== false
+      || (transition && typeof value.isTrusted !== "boolean")) {
+      return false;
+    }
+    previousAtMs = value.atMs;
+  }
+  return true;
+}
+
+function phaseTimerStats(audit, phaseName, warmupMs) {
+  const phase = audit?.phases?.[phaseName];
+  if (!isRecord(phase)) return null;
+  const analysisStartMs = phase.startPerformanceMs + warmupMs;
+  const ticks = audit.heartbeats.filter((heartbeat) =>
+    heartbeat.atMs >= analysisStartMs && heartbeat.atMs <= phase.endPerformanceMs);
+  const intervals = [];
+  for (let index = 1; index < ticks.length; index += 1) {
+    intervals.push(ticks[index].atMs - ticks[index - 1].atMs);
+  }
+  const sortedIntervals = [...intervals].sort((left, right) => left - right);
+  const observedWindowMs = ticks.length > 1 ? ticks.at(-1).atMs - ticks[0].atMs : 0;
+  return {
+    heartbeatCount: ticks.length,
+    intervalCount: intervals.length,
+    observedWindowMs: roundTimerMetric(observedWindowMs),
+    effectiveHz: observedWindowMs > 0 ? roundTimerMetric(intervals.length * 1_000 / observedWindowMs) : null,
+    medianDeltaMs: roundTimerMetric(nearestRank(sortedIntervals, 0.5)),
+    p90DeltaMs: roundTimerMetric(nearestRank(sortedIntervals, 0.9)),
+    p95DeltaMs: roundTimerMetric(nearestRank(sortedIntervals, 0.95)),
+    maxDeltaMs: roundTimerMetric(sortedIntervals.at(-1)),
+    slowIntervalFraction: intervals.length > 0
+      ? roundTimerMetric(intervals.filter((interval) => interval >= 750).length / intervals.length)
+      : null,
+    analysisStartGapMs: ticks.length > 0 ? roundTimerMetric(ticks[0].atMs - analysisStartMs) : null,
+    analysisEndGapMs: ticks.length > 0 ? roundTimerMetric(phase.endPerformanceMs - ticks.at(-1).atMs) : null,
+  };
+}
+
+function hiddenLongTaskStats(audit) {
+  const hidden = audit?.phases?.["native-hidden"];
+  if (!isRecord(hidden) || !Array.isArray(audit?.longTasks)) return null;
+  const analysisStartMs = hidden.startPerformanceMs + NATIVE_TIMER_HIDDEN_WARMUP_MS;
+  const analysisEndMs = hidden.endPerformanceMs;
+  const overlaps = audit.longTasks
+    .map((task) => ({
+      startMs: Math.max(analysisStartMs, task.startTime),
+      endMs: Math.min(analysisEndMs, task.startTime + task.duration),
+    }))
+    .filter((task) => task.endMs > task.startMs)
+    .sort((left, right) => left.startMs - right.startMs || left.endMs - right.endMs);
+  let occupiedMs = 0;
+  let currentStartMs = null;
+  let currentEndMs = null;
+  for (const overlap of overlaps) {
+    if (currentStartMs === null || overlap.startMs > currentEndMs) {
+      if (currentStartMs !== null) occupiedMs += currentEndMs - currentStartMs;
+      currentStartMs = overlap.startMs;
+      currentEndMs = overlap.endMs;
+    } else {
+      currentEndMs = Math.max(currentEndMs, overlap.endMs);
+    }
+  }
+  if (currentStartMs !== null) occupiedMs += currentEndMs - currentStartMs;
+  const analysisWindowMs = Math.max(0, analysisEndMs - analysisStartMs);
+  return {
+    count: overlaps.length,
+    occupiedMs: roundTimerMetric(occupiedMs),
+    occupancyRatio: analysisWindowMs > 0 ? roundTimerMetric(occupiedMs / analysisWindowMs) : null,
+    longestMs: roundTimerMetric(overlaps.length > 0
+      ? Math.max(...overlaps.map((overlap) => overlap.endMs - overlap.startMs))
+      : 0),
+  };
+}
+
+function nativeAuditContinuityIsValid(audit) {
+  if (!isRecord(audit)
+    || audit.clock !== "performance.now"
+    || audit.heartbeatIntervalMs !== NATIVE_TIMER_HEARTBEAT_INTERVAL_MS
+    || audit.heartbeatLimit !== NATIVE_TIMER_HEARTBEAT_LIMIT
+    || audit.transitionLimit !== NATIVE_TIMER_TRANSITION_LIMIT
+    || audit.longTaskLimit !== NATIVE_TIMER_LONG_TASK_LIMIT
+    || audit.heartbeatsTruncated !== false
+    || audit.transitionsTruncated !== false
+    || !isRecord(audit.browser)
+    || typeof audit.browser.product !== "string"
+    || audit.browser.product.length === 0
+    || typeof audit.browser.version !== "string"
+    || audit.browser.version.length === 0
+    || audit.browser.commandLineObserved !== true
+    || !Array.isArray(audit.browser.effectiveSwitchNames)
+    || !Array.isArray(audit.browser.disabledFeatures)
+    || audit.browser.effectiveSwitchNames.some((value) =>
+      typeof value !== "string" || FORBIDDEN_BACKGROUND_SWITCHES.has(value))
+    || audit.browser.disabledFeatures.some((value) =>
+      typeof value !== "string" || value.split(/[<:]/, 1)[0] === "IntensiveWakeUpThrottling")
+    || !Array.isArray(audit.heartbeats)
+    || audit.heartbeats.length === 0
+    || audit.heartbeats.length > NATIVE_TIMER_HEARTBEAT_LIMIT
+    || !Array.isArray(audit.transitions)
+    || audit.transitions.length === 0
+    || audit.transitions.length > NATIVE_TIMER_TRANSITION_LIMIT
+    || audit.longTasksTruncated !== false
+    || !Array.isArray(audit.longTasks)
+    || audit.longTasks.length > NATIVE_TIMER_LONG_TASK_LIMIT
+    || audit.longTasks.some((task) => !isRecord(task)
+      || !isFiniteNonNegative(task.startTime)
+      || !isFinitePositive(task.duration))
+    || audit.longTasks.some((task, index) =>
+      index > 0 && task.startTime < audit.longTasks[index - 1].startTime)
+    || !isRecord(audit.phases)) {
+    return false;
+  }
+  const timeOriginMs = audit.phases["native-visible-before"]?.timeOriginMs;
+  if (!isFiniteNonNegative(timeOriginMs)
+    || !auditSequenceIsValid(audit.heartbeats, timeOriginMs)
+    || !auditSequenceIsValid(audit.transitions, timeOriginMs, { transition: true })) {
+    return false;
+  }
+  let previousEndMs = -Infinity;
+  for (const [phaseName, requestedMs, expectedState] of NATIVE_TIMER_PHASE_SPECS) {
+    const phase = audit.phases[phaseName];
+    const maximumOverrunMs = Math.max(5_000, requestedMs * 0.15);
+    if (!isRecord(phase)
+      || phase.requestedMs !== requestedMs
+      || phase.timeOriginMs !== timeOriginMs
+      || !isFiniteNonNegative(phase.startPerformanceMs)
+      || !isFiniteNonNegative(phase.endPerformanceMs)
+      || phase.startPerformanceMs < previousEndMs
+      || (Number.isFinite(previousEndMs) && phase.startPerformanceMs - previousEndMs > 5_000)
+      || phase.endPerformanceMs <= phase.startPerformanceMs
+      || !isFinitePositive(phase.controllerDurationMs)
+      || phase.controllerDurationMs < requestedMs
+      || phase.controllerDurationMs > requestedMs + maximumOverrunMs
+      || Math.abs((phase.endPerformanceMs - phase.startPerformanceMs) - phase.controllerDurationMs)
+        > Math.max(2_000, phase.controllerDurationMs * 0.05)
+      || !nativeObservationMatches(phase.startSnapshot, expectedState, timeOriginMs)
+      || !nativeObservationMatches(phase.endSnapshot, expectedState, timeOriginMs)
+      || phase.startSnapshot.atMs !== phase.startPerformanceMs
+      || phase.endSnapshot.atMs !== phase.endPerformanceMs) {
+      return false;
+    }
+    const phaseHeartbeats = audit.heartbeats.filter((heartbeat) =>
+      heartbeat.atMs >= phase.startPerformanceMs && heartbeat.atMs <= phase.endPerformanceMs);
+    if (phaseHeartbeats.length === 0
+      || phaseHeartbeats.some((heartbeat) =>
+        heartbeat.nativeState !== expectedState || heartbeat.nativeHidden !== (expectedState === "hidden"))) {
+      return false;
+    }
+    previousEndMs = phase.endPerformanceMs;
+  }
+  const hiddenPhase = audit.phases["native-hidden"];
+  const hiddenStart = hiddenPhase.startPerformanceMs;
+  const hiddenEnd = hiddenPhase.endPerformanceMs;
+  if (!nativeObservationMatches(hiddenPhase.witnessStart, "visible", hiddenPhase.witnessStart?.timeOriginMs)
+    || !nativeObservationMatches(hiddenPhase.witnessEnd, "visible", hiddenPhase.witnessStart?.timeOriginMs)
+    || hiddenPhase.witnessStart.timeOriginMs !== hiddenPhase.witnessEnd.timeOriginMs
+    || hiddenPhase.witnessEnd.atMs <= hiddenPhase.witnessStart.atMs
+    || Math.abs(
+      (hiddenPhase.witnessEnd.atMs - hiddenPhase.witnessStart.atMs) - hiddenPhase.controllerDurationMs,
+    ) > Math.max(2_000, hiddenPhase.controllerDurationMs * 0.05)) {
+    return false;
+  }
+  const hiddenEntry = audit.transitions.find((transition) =>
+    transition.isTrusted === true
+      && transition.nativeState === "hidden"
+      && transition.atMs >= audit.phases["native-visible-before"].endPerformanceMs
+      && transition.atMs <= hiddenStart);
+  const visibleRecovery = audit.transitions.find((transition) =>
+    transition.isTrusted === true
+      && transition.nativeState === "visible"
+      && transition.atMs >= hiddenEnd
+      && transition.atMs <= audit.phases["native-visible-after"].startPerformanceMs);
+  return Boolean(hiddenEntry)
+    && Boolean(visibleRecovery)
+    && audit.transitions.every((transition) =>
+      transition.atMs <= hiddenStart || transition.atMs >= hiddenEnd);
+}
+
+export function analyzeNativeBackgroundAudit(audit) {
+  const continuityMeasured = nativeAuditContinuityIsValid(audit);
+  const visibleBefore = isRecord(audit) && Array.isArray(audit.heartbeats)
+    ? phaseTimerStats(audit, "native-visible-before", NATIVE_TIMER_VISIBLE_WARMUP_MS)
+    : null;
+  const nativeHidden = isRecord(audit) && Array.isArray(audit.heartbeats)
+    ? phaseTimerStats(audit, "native-hidden", NATIVE_TIMER_HIDDEN_WARMUP_MS)
+    : null;
+  const visibleAfter = isRecord(audit) && Array.isArray(audit.heartbeats)
+    ? phaseTimerStats(audit, "native-visible-after", NATIVE_TIMER_VISIBLE_WARMUP_MS)
+    : null;
+  const nativeHiddenLongTasks = hiddenLongTaskStats(audit);
+  const visibleHealthy = [visibleBefore, visibleAfter].every((stats) => isRecord(stats)
+    && stats.intervalCount >= 80
+    && stats.effectiveHz >= 5
+    && stats.effectiveHz <= 15
+    && stats.medianDeltaMs <= 200
+    && stats.p95DeltaMs <= 500
+    && stats.maxDeltaMs <= 2_000
+    && stats.analysisStartGapMs <= 500
+    && stats.analysisEndGapMs <= 500);
+  const hiddenHealthy = isRecord(nativeHidden)
+    && nativeHidden.intervalCount >= 30
+    && nativeHidden.effectiveHz >= 0.5
+    && nativeHidden.effectiveHz <= 1.5
+    && nativeHidden.medianDeltaMs >= 750
+    && nativeHidden.medianDeltaMs <= 1_500
+    && nativeHidden.p95DeltaMs <= 2_500
+    && nativeHidden.maxDeltaMs <= 10_000
+    && nativeHidden.slowIntervalFraction >= 0.75
+    && nativeHidden.analysisStartGapMs <= 2_500
+    && nativeHidden.analysisEndGapMs <= 2_500
+    && isRecord(nativeHiddenLongTasks)
+    && nativeHiddenLongTasks.occupancyRatio <= 0.1
+    && nativeHiddenLongTasks.longestMs <= 2_000;
+  const maximumVisibleMedianMs = Math.max(
+    visibleBefore?.medianDeltaMs ?? Infinity,
+    visibleAfter?.medianDeltaMs ?? Infinity,
+  );
+  const minimumVisibleRateHz = Math.min(
+    visibleBefore?.effectiveHz ?? 0,
+    visibleAfter?.effectiveHz ?? 0,
+  );
+  const hiddenToVisibleMedianRatio = Number.isFinite(nativeHidden?.medianDeltaMs)
+    && Number.isFinite(maximumVisibleMedianMs)
+    && maximumVisibleMedianMs > 0
+    ? roundTimerMetric(nativeHidden.medianDeltaMs / maximumVisibleMedianMs)
+    : null;
+  const hiddenToVisibleRateRatio = Number.isFinite(nativeHidden?.effectiveHz)
+    && minimumVisibleRateHz > 0
+    ? roundTimerMetric(nativeHidden.effectiveHz / minimumVisibleRateHz)
+    : null;
+  const timerThrottlingMeasured = continuityMeasured
+    && visibleHealthy
+    && hiddenHealthy
+    && hiddenToVisibleMedianRatio >= 4
+    && hiddenToVisibleRateRatio <= 0.3;
+  return {
+    continuityMeasured,
+    timerThrottlingMeasured,
+    timerThrottling: {
+      status: timerThrottlingMeasured ? "measured" : "not-measured",
+      policyVersion: 1,
+      phases: {
+        "native-visible-before": visibleBefore,
+        "native-hidden": nativeHidden,
+        "native-visible-after": visibleAfter,
+      },
+      nativeHiddenLongTasks,
+      hiddenToVisibleMedianRatio,
+      hiddenToVisibleRateRatio,
+    },
+  };
 }
 
 function validateRepositoryObservation(repository) {
@@ -691,18 +1013,62 @@ function validateMemoryCoverage(runtime) {
 }
 
 function validateNativeHiddenEvidence(runtime) {
-  const hidden = runtime?.visibility?.coverage?.nativeBrowserBackground;
+  const safety = runtime?.safety;
+  const visibility = runtime?.visibility;
+  const syntheticCapability = visibility?.syntheticCapability;
+  const nativeSnapshot = visibility?.nativeWhileBackgrounded;
+  const hidden = visibility?.coverage?.nativeBrowserBackground;
   const phase = runtime?.polling?.phases?.["native-hidden"];
-  return isRecord(hidden)
+  const auditHiddenPhase = visibility?.nativeAudit?.phases?.["native-hidden"];
+  const analysis = analyzeNativeBackgroundAudit(visibility?.nativeAudit);
+  return isRecord(safety)
+    && safety.browserMode === "headed-native-hidden"
+    && safety.headlessTemporaryProfile === false
+    && isRecord(visibility)
+    && isRecord(syntheticCapability)
+    && syntheticCapability.overrideInstalled === true
+    && visibility.nativeHiddenObserved === true
+    && isRecord(nativeSnapshot)
+    && nativeSnapshot.overrideInstalled === false
+    && nativeSnapshot.syntheticState === "hidden"
+    && nativeSnapshot.syntheticHidden === true
+    && nativeSnapshot.nativeState === "hidden"
+    && nativeSnapshot.nativeHidden === true
+    && isRecord(hidden)
     && hidden.status === "measured"
     && hidden.nativeHiddenObserved === true
-    && hidden.pollingMeasured === true
-    && hidden.measuredDurationMs >= MIN_NATIVE_HIDDEN_EVIDENCE_MS
+    && hidden.timerCadenceMeasured === true
+    && hidden.apiPollingCountMeasured === true
+    && hidden.hiddenThroughout === true
+    && hidden.browserTimerThrottlingMeasured === true
+    && hidden.measuredDurationMs >= NATIVE_TIMER_HIDDEN_PHASE_MS
     && isRecord(phase)
+    && isRecord(auditHiddenPhase)
+    && phase.requestedMs === NATIVE_TIMER_HIDDEN_PHASE_MS
+    && phase.requestedMs === auditHiddenPhase.requestedMs
     && phase.actualMs === hidden.measuredDurationMs
-    && phase.actualMs >= MIN_NATIVE_HIDDEN_EVIDENCE_MS
-    && isFiniteNonNegative(phase.total)
-    && isRecord(phase.byPath);
+    && phase.actualMs === auditHiddenPhase.controllerDurationMs
+    && phase.actualMs >= NATIVE_TIMER_HIDDEN_PHASE_MS
+    && Number.isInteger(phase.total)
+    && phase.total >= 0
+    && isRecord(phase.byPath)
+    && Object.keys(phase.byPath).every((pathname) => pathname.startsWith("/api/"))
+    && Object.values(phase.byPath).every((count) => Number.isInteger(count) && count > 0)
+    && sum(Object.values(phase.byPath)) === phase.total
+    && hidden.apiRequestCount === phase.total
+    && hidden.apiPollingObserved === (phase.total > 0)
+    && nativeSnapshot.nativeState === auditHiddenPhase.endSnapshot?.nativeState
+    && nativeSnapshot.nativeHidden === auditHiddenPhase.endSnapshot?.nativeHidden
+    && nativeSnapshot.syntheticState === auditHiddenPhase.endSnapshot?.exposedState
+    && nativeSnapshot.syntheticHidden === auditHiddenPhase.endSnapshot?.exposedHidden
+    && analysis.continuityMeasured === true;
+}
+
+function validateBackgroundTimerThrottling(runtime) {
+  const analysis = analyzeNativeBackgroundAudit(runtime?.visibility?.nativeAudit);
+  return analysis.timerThrottlingMeasured === true
+    && JSON.stringify(runtime?.visibility?.timerThrottling)
+      === JSON.stringify(analysis.timerThrottling);
 }
 
 function validateComponentProfilerEvidence(runtime) {
@@ -862,7 +1228,7 @@ export function assessStrictPerformanceEvidence(report) {
     profilingBuildAfter,
   });
 
-  requireCheck(isRecord(report) && report.schemaVersion === 3, "schema.version");
+  requireCheck(isRecord(report) && report.schemaVersion === 4, "schema.version");
   requireCheck(report?.status === "complete", "report.complete");
   requireCheck(validateRepositoryObservation(repositoryBefore)
     && validateRepositoryObservation(repositoryAfter), "provenance.repository.clean");
@@ -944,7 +1310,8 @@ export function assessStrictPerformanceEvidence(report) {
     && runtime?.safety?.apiWritesFulfilled === false, "runtime.safety.read-only");
   requireCheck(validateRuntimeMeasurements(runtime, build), "runtime.measurements.complete");
   requireCheck(validateMemoryCoverage(runtime), "runtime.memory.two-hour-coverage");
-  requireCheck(validateNativeHiddenEvidence(runtime), "runtime.visibility.native-hidden-timed");
+  requireCheck(validateNativeHiddenEvidence(runtime), "runtime.visibility.native-hidden-continuous");
+  requireCheck(validateBackgroundTimerThrottling(runtime), "runtime.visibility.browser-timer-throttling");
   requireCheck(validateComponentProfilerEvidence(runtime), "runtime.react.component-profiler");
   requireCheck(validateSimulatedAutoMinerEvidence(runtime), "runtime.auto-miner.safe-simulation");
 

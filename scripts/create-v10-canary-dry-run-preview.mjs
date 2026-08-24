@@ -1,10 +1,31 @@
 import { spawnSync } from "node:child_process";
-import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
-import { config as loadDotenv } from "dotenv";
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  openSync,
+  readSync,
+  realpathSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { parseEnv } from "node:util";
 import { redactProofText } from "./redact-proof-output.mjs";
 import { parseSummaryTimeoutEnv } from "./summary-timeout.mjs";
+import { verifyV10SepoliaDeploymentManifest } from "./verify-v10-sepolia-deployment-manifest.mjs";
+import { captureV10PreviewRepositoryState } from "./v10-preview-repository-state.mjs";
+import {
+  consentEnvelopeSha256,
+  createV10PreviewConsentEnvelope,
+  parseV10ConsentPlanOutput,
+  parseV10DryRunLogEvidence,
+  requireV10RedactedRpcLabel,
+} from "./v10-preview-consent-envelope.mjs";
 import {
   resolveTrustedNpmCli,
   trustedNpmCommand,
@@ -15,6 +36,9 @@ const DEFAULT_RPC_LABEL = "linea-sepolia-public-fallback";
 const PREVIEW_PATH = path.join("docs", "v10-canary-dry-run-preview.md");
 const MAX_CAPTURE_BYTES = 2 * 1024 * 1024;
 const MAX_DRY_RUN_LOG_BYTES = 256 * 1024;
+const MAX_PREVIEW_BYTES = 512 * 1024;
+const MAX_PUBLIC_ENV_BYTES = 128 * 1024;
+const MAX_PREVIEW_EVIDENCE_LAG_MS = 10 * 60 * 1000;
 const MAX_PREVIEW_FIELD_CHARS = 180;
 const CHILD_TIMEOUT_MS = parseSummaryTimeoutEnv("V10_CANARY_DRY_RUN_PREVIEW_TIMEOUT_MS", 240_000);
 const CHILD_ENV_INSPECTION_ARG = "--inspect-read-only-child-env";
@@ -82,9 +106,13 @@ const PUBLIC_READ_ONLY_ENV_KEYS = [
 ];
 const INSPECTED_PUBLIC_ENV_KEYS = [
   "LINEA_NETWORK",
+  "NEXT_PUBLIC_LINEA_NETWORK",
   "NEXT_PUBLIC_CONTRACT_ADDRESS",
   "NEXT_PUBLIC_LINEA_TOKEN_ADDRESS",
   "NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER",
+  "NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS",
+  "NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK",
+  "INDEXER_START_BLOCK",
   "V10_POSTDEPLOY_SCAN_EPOCHS",
   "V10_EXPECTED_CURRENT_OWNER",
   "LIVE_CANARY_RPC_LABEL",
@@ -98,7 +126,84 @@ const SAFE_NON_CREDENTIAL_ENV_NAMES = new Set([
 ]);
 const TRUSTED_NPM_LAUNCHER = resolveTrustedNpmCli();
 
-loadDotenv({ path: ".env.local", override: false, quiet: true });
+function hasSigningMaterial(environment) {
+  return Object.entries(environment).some(
+    ([name, value]) => String(value ?? "").trim() && SIGNING_ENV_NAME_RE.test(name),
+  );
+}
+
+function assertCanonicalGeneratorRoot() {
+  const requestedRoot = path.resolve(process.cwd());
+  const rootStats = lstatSync(requestedRoot);
+  if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+    throw new Error("V10 Preview generator working root must be an ordinary directory");
+  }
+  const canonicalRoot = realpathSync(requestedRoot);
+  if (
+    !samePath(requestedRoot, canonicalRoot)
+    || !samePath(canonicalRoot, TRUSTED_NPM_LAUNCHER.repoRoot)
+  ) {
+    throw new Error("V10 Preview generator must run from its canonical source repository root");
+  }
+}
+
+function loadPublicPreviewEnvironmentFile() {
+  const repositoryRoot = TRUSTED_NPM_LAUNCHER.repoRoot;
+  const envPath = path.join(repositoryRoot, ".env.local");
+  if (!existsSync(envPath)) return;
+  const initialPathStats = lstatSync(envPath);
+  if (
+    !initialPathStats.isFile()
+    || initialPathStats.isSymbolicLink()
+    || initialPathStats.nlink !== 1
+    || initialPathStats.size > MAX_PUBLIC_ENV_BYTES
+    || !samePath(path.dirname(realpathSync(envPath)), repositoryRoot)
+  ) {
+    throw new Error("Preview public environment file must be one ordinary bounded repository file");
+  }
+  const fd = openSync(envPath, "r");
+  const chunks = [];
+  let bytes = 0;
+  try {
+    const initialHandleStats = fstatSync(fd);
+    if (!initialHandleStats.isFile() || !sameFileFingerprint(initialPathStats, initialHandleStats)) {
+      throw new Error("Preview public environment file changed before it could be read");
+    }
+    const buffer = Buffer.alloc(Math.min(32 * 1024, Math.max(1, initialHandleStats.size)));
+    while (true) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      bytes += bytesRead;
+      if (bytes > MAX_PUBLIC_ENV_BYTES) throw new Error("Preview public environment file exceeded its safe bound");
+      chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+    }
+    const finalHandleStats = fstatSync(fd);
+    const finalPathStats = lstatSync(envPath);
+    if (
+      !sameFileFingerprint(initialHandleStats, finalHandleStats)
+      || !sameFileFingerprint(initialHandleStats, finalPathStats)
+    ) {
+      throw new Error("Preview public environment file changed while it was read");
+    }
+  } finally {
+    closeSync(fd);
+  }
+  const parsed = parseEnv(Buffer.concat(chunks).toString("utf8"));
+  if (hasSigningMaterial(parsed)) {
+    throw new Error("Preview public environment file must not contain signing material");
+  }
+  for (const key of PUBLIC_READ_ONLY_ENV_KEYS) {
+    if (process.env[key] === undefined && typeof parsed[key] === "string") {
+      process.env[key] = parsed[key];
+    }
+  }
+}
+
+if (hasSigningMaterial(process.env)) {
+  throw new Error("Preview generator refuses inherited signing material");
+}
+assertCanonicalGeneratorRoot();
+loadPublicPreviewEnvironmentFile();
 
 function npmRun(script) {
   const command = trustedNpmCommand(["run", script], TRUSTED_NPM_LAUNCHER);
@@ -121,6 +226,10 @@ function createReadOnlyChildBoundary(sourceEnv) {
   for (const key of [...PROCESS_RUNTIME_ENV_KEYS, ...PUBLIC_READ_ONLY_ENV_KEYS]) {
     if (typeof sourceEnv[key] === "string") env[key] = sourceEnv[key];
   }
+  const rpcLabel = requireV10RedactedRpcLabel(
+    sourceEnv.LIVE_CANARY_RPC_LABEL || sourceEnv.LINEA_RPC_LABEL || DEFAULT_RPC_LABEL,
+    "LIVE_CANARY_RPC_LABEL",
+  );
   Object.assign(env, {
     NO_UPDATE_NOTIFIER: "1",
     npm_config_update_notifier: "false",
@@ -129,7 +238,7 @@ function createReadOnlyChildBoundary(sourceEnv) {
     LIVE_TEST_EXECUTE: "0",
     SOAK_EXECUTE_LIVE: "0",
     TEST_WALLET_EXECUTE: "0",
-    LIVE_CANARY_RPC_LABEL: sourceEnv.LIVE_CANARY_RPC_LABEL || DEFAULT_RPC_LABEL,
+    LIVE_CANARY_RPC_LABEL: rpcLabel,
   });
   const sensitiveCredentialKeys = Object.entries(env)
     .filter(([name, value]) =>
@@ -163,8 +272,7 @@ if (process.argv.includes(CHILD_ENV_INSPECTION_ARG)) {
     childEnvKeys: Object.keys(READ_ONLY_CHILD_BOUNDARY.env).sort(),
     publicConfig: Object.fromEntries(
       INSPECTED_PUBLIC_ENV_KEYS
-        .filter((key) => READ_ONLY_CHILD_BOUNDARY.env[key] !== undefined)
-        .map((key) => [key, READ_ONLY_CHILD_BOUNDARY.env[key]]),
+        .map((key) => [key, READ_ONLY_CHILD_BOUNDARY.env[key] ?? null]),
     ),
     executionGates: {
       LIVE_TEST_EXECUTE: READ_ONLY_CHILD_BOUNDARY.env.LIVE_TEST_EXECUTE,
@@ -175,13 +283,19 @@ if (process.argv.includes(CHILD_ENV_INSPECTION_ARG)) {
   process.exit(0);
 }
 
-function runStep(name, spec) {
+const repositoryStateBefore = captureV10PreviewRepositoryState({ root: process.cwd() });
+const deploymentManifest = verifyV10SepoliaDeploymentManifest({
+  projectRoot: TRUSTED_NPM_LAUNCHER.repoRoot,
+  verifyGitArtifact: true,
+});
+
+function runStep(name, spec, { environment = READ_ONLY_CHILD_BOUNDARY.env } = {}) {
   const result = spawnSync(spec.command, spec.args, {
     cwd: TRUSTED_NPM_LAUNCHER.repoRoot,
     encoding: "utf8",
     maxBuffer: MAX_CAPTURE_BYTES,
     timeout: CHILD_TIMEOUT_MS,
-    env: READ_ONLY_CHILD_BOUNDARY.env,
+    env: environment,
   });
   const rawOutput = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   const output = redactProofText(rawOutput).trim();
@@ -298,10 +412,134 @@ function sameFileFingerprint(left, right) {
 
 function assertOrdinaryPath(filePath, label, directory) {
   const stats = lstatSync(filePath);
-  if (stats.isSymbolicLink() || (directory ? !stats.isDirectory() : !stats.isFile())) {
+  if (
+    stats.isSymbolicLink()
+    || (directory ? !stats.isDirectory() : !stats.isFile())
+    || (!directory && stats.nlink !== 1)
+  ) {
     throw new Error(`${label} must be an ordinary ${directory ? "directory" : "file"}`);
   }
   return stats;
+}
+
+function lstatIfPresent(filePath) {
+  try {
+    return lstatSync(filePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function assertCanonicalPreviewOutputBoundary() {
+  const repositoryRoot = path.resolve(process.cwd());
+  assertOrdinaryPath(repositoryRoot, "V10 Preview repository root", true);
+  if (!samePath(realpathSync(repositoryRoot), repositoryRoot)) {
+    throw new Error("V10 Preview repository root must not resolve through a reparse point");
+  }
+  const docsDirectory = path.join(repositoryRoot, "docs");
+  assertOrdinaryPath(docsDirectory, "V10 Preview docs directory", true);
+  if (!samePath(realpathSync(docsDirectory), docsDirectory)) {
+    throw new Error("V10 Preview docs directory must not resolve through a reparse point");
+  }
+  const previewPath = path.join(docsDirectory, path.basename(PREVIEW_PATH));
+  if (path.dirname(previewPath) !== docsDirectory) {
+    throw new Error("V10 Preview output escaped its docs directory");
+  }
+  const existing = lstatIfPresent(previewPath);
+  if (existing && (existing.isSymbolicLink() || !existing.isFile() || existing.nlink !== 1)) {
+    throw new Error("V10 Preview output must be absent or one ordinary file");
+  }
+  if (existing && !samePath(path.dirname(realpathSync(previewPath)), docsDirectory)) {
+    throw new Error("V10 Preview output must not resolve outside its canonical docs directory");
+  }
+  return { docsDirectory, previewPath };
+}
+
+function readStablePreviewOutput(previewPath) {
+  const initialPathStats = assertOrdinaryPath(previewPath, "V10 Preview output", false);
+  if (initialPathStats.size > MAX_PREVIEW_BYTES) throw new Error("V10 Preview output exceeds its safe byte bound");
+  const fd = openSync(previewPath, "r");
+  const chunks = [];
+  let bytes = 0;
+  try {
+    const initialHandleStats = fstatSync(fd);
+    if (!initialHandleStats.isFile() || !sameFileFingerprint(initialPathStats, initialHandleStats)) {
+      throw new Error("V10 Preview output changed before verification");
+    }
+    const buffer = Buffer.alloc(Math.min(64 * 1024, Math.max(1, initialHandleStats.size)));
+    while (true) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      bytes += bytesRead;
+      if (bytes > MAX_PREVIEW_BYTES) throw new Error("V10 Preview output exceeded its safe byte bound");
+      chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+    }
+    const finalHandleStats = fstatSync(fd);
+    const finalPathStats = assertOrdinaryPath(previewPath, "V10 Preview output", false);
+    if (!sameFileFingerprint(initialHandleStats, finalHandleStats) || !sameFileFingerprint(initialHandleStats, finalPathStats)) {
+      throw new Error("V10 Preview output changed during verification");
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function publishPreviewAtomically(contents) {
+  const serialized = Buffer.from(contents, "utf8");
+  if (serialized.length > MAX_PREVIEW_BYTES) throw new Error("V10 Preview output exceeds its safe byte bound");
+  const { docsDirectory, previewPath } = assertCanonicalPreviewOutputBoundary();
+  const temporaryPath = path.join(
+    docsDirectory,
+    `.v10-canary-dry-run-preview.${process.pid}.${randomUUID()}.tmp`,
+  );
+  let fd = null;
+  try {
+    fd = openSync(temporaryPath, "wx", 0o600);
+    writeFileSync(fd, serialized);
+    fsyncSync(fd);
+    const temporaryStats = fstatSync(fd);
+    if (!temporaryStats.isFile() || temporaryStats.nlink !== 1 || temporaryStats.size !== serialized.length) {
+      throw new Error("V10 Preview temporary output is incomplete");
+    }
+    closeSync(fd);
+    fd = null;
+    const boundaryBeforeRename = assertCanonicalPreviewOutputBoundary();
+    if (boundaryBeforeRename.docsDirectory !== docsDirectory || boundaryBeforeRename.previewPath !== previewPath) {
+      throw new Error("V10 Preview output boundary changed before publication");
+    }
+    renameSync(temporaryPath, previewPath);
+    const boundaryAfterRename = assertCanonicalPreviewOutputBoundary();
+    if (boundaryAfterRename.docsDirectory !== docsDirectory || boundaryAfterRename.previewPath !== previewPath) {
+      throw new Error("V10 Preview output boundary changed during publication");
+    }
+    if (process.platform !== "win32") {
+      const directoryFd = openSync(docsDirectory, "r");
+      try {
+        fsyncSync(directoryFd);
+      } finally {
+        closeSync(directoryFd);
+      }
+    }
+  } catch (error) {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Preserve the publication error below.
+      }
+    }
+    try {
+      if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "V10 Preview atomic publication failed");
+    }
+    throw error;
+  }
+  const published = readStablePreviewOutput(previewPath);
+  if (published !== contents) throw new Error("V10 Preview published contents do not match the generated evidence");
+  return published;
 }
 
 function readBoundedCanaryLogBinding(relativePath) {
@@ -321,6 +559,7 @@ function readBoundedCanaryLogBinding(relativePath) {
 
   const fd = openSync(absolutePath, "r");
   const digest = createHash("sha256");
+  const chunks = [];
   let bytes = 0;
   try {
     const initialHandleStats = fstatSync(fd);
@@ -336,7 +575,9 @@ function readBoundedCanaryLogBinding(relativePath) {
       if (bytesRead === 0) break;
       bytes += bytesRead;
       if (bytes > MAX_DRY_RUN_LOG_BYTES) throw new Error("dry-run canary log exceeded its safe bound");
-      digest.update(buffer.subarray(0, bytesRead));
+      const chunk = Buffer.from(buffer.subarray(0, bytesRead));
+      digest.update(chunk);
+      chunks.push(chunk);
     }
     const finalHandleStats = fstatSync(fd);
     const finalPathStats = assertOrdinaryPath(absolutePath, "dry-run canary log", false);
@@ -346,7 +587,12 @@ function readBoundedCanaryLogBinding(relativePath) {
   } finally {
     closeSync(fd);
   }
-  return { path: safePath, bytes, sha256: digest.digest("hex") };
+  return {
+    path: safePath,
+    bytes,
+    sha256: digest.digest("hex"),
+    text: Buffer.concat(chunks).toString("utf8"),
+  };
 }
 
 function compactLines(output, limit = 24) {
@@ -426,23 +672,33 @@ function summarizeMatrix(step) {
   };
 }
 
+function parseLastJsonObject(output) {
+  const line = String(output ?? "").trim().split(/\r?\n/).filter(Boolean).at(-1) ?? "";
+  try {
+    const value = JSON.parse(line);
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function summarizeAnalyzer(step) {
   const output = step.rawOutput ?? step.output;
+  const summary = parseLastJsonObject(output);
   return {
     status: step.status,
-    logName: extractValue(output, /^Log:\s*([^\r\n]+)$/m),
-    logSha256: extractValue(output, /^Log SHA-256:\s*([a-f0-9]{64})\s*$/mi),
-    logBytes: extractValue(output, /^Log bytes:\s*([0-9]+)\s*$/mi),
-    dryRunProofBlocksG10G11: /blocked gates:\s*G10,\s*G11/i.test(output) || /\bG10\b[\s\S]*\bG11\b/.test(output),
-    successfulBetTx:
-      extractValue(output, /\bsuccessful bet tx:\s*([0-9]+)/i) ??
-      extractValue(output, /\|\s*successful bet tx\s*\|\s*([0-9]+)\s*\|/i),
-    uniqueBetEpochs:
-      extractValue(output, /\bunique bet epochs:\s*([0-9]+)/i) ??
-      extractValue(output, /\|\s*unique bet epochs\s*\|\s*([0-9]+)\s*\|/i),
-    missingGasCases:
-      extractValue(output, /missing V10 gas cases:\s*([^\r\n]+)/i) ??
-      extractValue(output, /missing gas cases:\s*([^\r\n]+)/i),
+    summary,
+    logName: typeof summary?.logName === "string" ? summary.logName : null,
+    logSha256: typeof summary?.logSha256 === "string" ? summary.logSha256 : null,
+    logBytes: Number.isSafeInteger(summary?.logBytes) ? String(summary.logBytes) : null,
+    previewDryRunVerdict: summary?.previewDryRunVerdict ?? null,
+    liveLaunchGates: summary?.liveLaunchGates ?? null,
+    actionEvents: summary?.actionEvents ?? null,
+    successfulActionTx: summary?.successfulActionTx ?? null,
+    transactionEvidenceEvents: summary?.transactionEvidenceEvents ?? null,
+    runtimeIdentityPreflights: summary?.runtimeIdentityPreflights ?? null,
+    walletPreflights: summary?.walletPreflights ?? null,
+    issues: summary?.issues ?? null,
   };
 }
 
@@ -471,8 +727,25 @@ function renderBullets(items) {
 
 const planner = runStep("read-only planner", npmRun("plan:canary:v10:postdeploy:summary"));
 const pendingNonce = runStep("pending nonce dry-run", npmRun("soak:testnet:clear-pending:summary"));
-const matrix = runStep("V10 matrix dry-run", npmRun("live:canary:v10:matrix"));
+const authorizationRunId = randomUUID();
+const matrixEnvironment = Object.freeze({
+  ...READ_ONLY_CHILD_BOUNDARY.env,
+  LIVE_TEST_RUN_ID: authorizationRunId,
+});
+const matrix = runStep(
+  "V10 matrix dry-run",
+  npmRun("live:canary:v10:matrix"),
+  { environment: matrixEnvironment },
+);
 const matrixSummary = summarizeMatrix(matrix);
+
+let consentPlanBinding = null;
+let consentPlanIssue = null;
+try {
+  consentPlanBinding = parseV10ConsentPlanOutput(matrix.rawOutput, { deploymentManifest });
+} catch (error) {
+  consentPlanIssue = error instanceof Error ? error.message : "V10 consent plan validation failed";
+}
 
 let logBindingBefore = null;
 let logBindingIssue = null;
@@ -484,6 +757,19 @@ if (matrixSummary.log) {
   }
 }
 
+let runtimeEvidence = null;
+if (logBindingBefore && consentPlanBinding) {
+  try {
+    runtimeEvidence = parseV10DryRunLogEvidence(
+      logBindingBefore.text,
+      consentPlanBinding.consentPlan,
+      { expectedAdmissionRunId: authorizationRunId },
+    );
+  } catch (error) {
+    logBindingIssue = error instanceof Error ? error.message : "dry-run evidence does not match consent plan";
+  }
+}
+
 let analyzer = null;
 if (logBindingBefore) {
   analyzer = runStep(
@@ -492,10 +778,9 @@ if (logBindingBefore) {
       "scripts/analyze-live-canary-proof.mjs",
       matrixSummary.log,
       "--profile=v10-matrix",
-      "--strict",
+      "--preview-dry-run",
       "--summary-only",
       "--require-epoch-bound",
-      "--require-v10-gas-matrix",
     ]),
   );
 }
@@ -525,19 +810,61 @@ const analyzerBoundToCurrentLog = Boolean(
   analyzerSummary?.logBytes === String(logBindingAfter.bytes),
 );
 
+function sameCanaryLogBinding(left, right) {
+  return Boolean(
+    left &&
+    right &&
+    left.path === right.path &&
+    left.bytes === right.bytes &&
+    left.sha256 === right.sha256,
+  );
+}
+
+function revokePreviewAuthorization(source) {
+  return source
+    .replace(/^- status: pass$/m, "- status: fail")
+    .replace(/^- authorizationReady: true$/m, "- authorizationReady: false")
+    .replace(/^- canaryLogBound: true$/m, "- canaryLogBound: false");
+}
+
 const hardFailures = [planner, pendingNonce, matrix].filter((step) => !step.ok);
-const dryRunAnalyzerBlockedAsExpected =
-  analyzer &&
+const expectedAnalyzerSummaryKeys = [
+  "status",
+  "mode",
+  "previewDryRunVerdict",
+  "liveLaunchGates",
+  "logName",
+  "logSha256",
+  "logBytes",
+  "actionEvents",
+  "successfulActionTx",
+  "transactionEvidenceEvents",
+  "runtimeIdentityPreflights",
+  "walletPreflights",
+  "issues",
+];
+const dryRunAnalyzerPassed = Boolean(
+  analyzer?.ok &&
   analyzer.spawnError === false &&
-  Number.isInteger(analyzer.status) &&
-  analyzer.status !== 0 &&
+  analyzer.status === 0 &&
   analyzer.signal === null &&
   !analyzer.timedOut &&
   !analyzer.outputTooLarge &&
-  analyzerSummary?.dryRunProofBlocksG10G11 === true &&
-  analyzerSummary.successfulBetTx === "0" &&
-  analyzerSummary.uniqueBetEpochs === "0" &&
-  analyzerBoundToCurrentLog;
+  analyzerSummary?.summary &&
+  JSON.stringify(Object.keys(analyzerSummary.summary)) === JSON.stringify(expectedAnalyzerSummaryKeys) &&
+  analyzerSummary.summary.status === "pass" &&
+  analyzerSummary.summary.mode === "preview-dry-run" &&
+  analyzerSummary.previewDryRunVerdict === "passed" &&
+  JSON.stringify(analyzerSummary.liveLaunchGates) === JSON.stringify(["G10", "G11"]) &&
+  analyzerSummary.actionEvents === 0 &&
+  analyzerSummary.successfulActionTx === 0 &&
+  analyzerSummary.transactionEvidenceEvents === 0 &&
+  analyzerSummary.runtimeIdentityPreflights === 1 &&
+  analyzerSummary.walletPreflights === consentPlanBinding?.consentPlan.roles.selectedRoles.length &&
+  Array.isArray(analyzerSummary.issues) &&
+  analyzerSummary.issues.length === 0 &&
+  analyzerBoundToCurrentLog
+);
 const signingMaterialReports = [
   plannerSummary.signingMaterialLoaded,
   pendingSummary.signingMaterialLoaded,
@@ -582,19 +909,78 @@ const operationBoundaryVerified =
   !contractWriteSubmitted;
 const walletSetBound = /^[a-f0-9]{64}$/.test(matrixSummary.walletSetSha256 ?? "");
 const canaryPlanBound = /^[a-f0-9]{64}$/.test(matrixSummary.canaryPlanSha256 ?? "");
+const consentPlanBound = Boolean(
+  consentPlanBinding &&
+  consentPlanBinding.consentPlan.walletSetSha256 === matrixSummary.walletSetSha256 &&
+  consentPlanBinding.consentPlan.canaryPlanSha256 === matrixSummary.canaryPlanSha256 &&
+  consentPlanBinding.consentPlan.txCaps.bet === Number(matrixSummary.plannedBetTx) &&
+  consentPlanBinding.consentPlan.maxEpochs ===
+    Number(matrixSummary.rounds) + consentPlanBinding.consentPlan.txCaps.resolve &&
+  runtimeEvidence
+);
+
+const repositoryStateAfterChildren = captureV10PreviewRepositoryState({ root: process.cwd() });
+const repositoryStateStable =
+  repositoryStateAfterChildren.applicationGitSha === repositoryStateBefore.applicationGitSha &&
+  repositoryStateAfterChildren.sourceStateSha256 === repositoryStateBefore.sourceStateSha256;
+const repositoryState = {
+  ...repositoryStateBefore,
+  sourceTreeClean:
+    repositoryStateBefore.sourceTreeClean &&
+    repositoryStateAfterChildren.sourceTreeClean &&
+    repositoryStateStable,
+};
+let consentEnvelope = null;
+let consentEnvelopeDigest = null;
+let consentEnvelopeIssue = null;
+if (consentPlanBinding && runtimeEvidence) {
+  try {
+    consentEnvelope = createV10PreviewConsentEnvelope({
+      authorizationRunId,
+      repositoryState,
+      consentPlan: consentPlanBinding.consentPlan,
+      consentPlanSha256: consentPlanBinding.consentPlanSha256,
+      runtimeEvidence,
+      operationalBoundary: {
+        execution: "dry-run",
+        transactionSent,
+        signingMaterialLoaded,
+        walletClientCreated,
+        contractWriteSubmitted,
+      },
+    });
+    consentEnvelopeDigest = consentEnvelopeSha256(consentEnvelope);
+  } catch (error) {
+    consentEnvelopeIssue = error instanceof Error ? error.message : "V10 consent envelope validation failed";
+  }
+}
+const previewGeneratedAt = new Date().toISOString();
+const previewGeneratedMs = Date.parse(previewGeneratedAt);
+const evidenceCompletedMs = runtimeEvidence ? Date.parse(runtimeEvidence.evidenceCompletedAt) : Number.NaN;
+const evidenceTimingBound = Boolean(
+  runtimeEvidence
+  && Number.isFinite(evidenceCompletedMs)
+  && evidenceCompletedMs <= previewGeneratedMs
+  && previewGeneratedMs - evidenceCompletedMs <= MAX_PREVIEW_EVIDENCE_LAG_MS,
+);
 const status =
   hardFailures.length === 0 &&
   operationBoundaryVerified &&
   walletSetBound &&
   canaryPlanBound &&
+  consentPlanBound &&
+  consentEnvelope &&
+  consentEnvelopeDigest &&
+  evidenceTimingBound &&
+  repositoryStateStable &&
   !signingMaterialLoaded &&
-  (analyzer?.ok || dryRunAnalyzerBlockedAsExpected)
+  dryRunAnalyzerPassed
     ? "pass"
     : "fail";
 
 const markdown = `# V10 Canary Dry-Run Preview
 
-Last updated: ${new Date().toISOString()}.
+Last updated: ${previewGeneratedAt}.
 
 Scope: Linea Sepolia V10 read-only and dry-run readiness only. This document is
 not an authorization to send transactions, start a soak, deploy, or change
@@ -610,15 +996,24 @@ npm.cmd run preview:canary:v10:dry-run
 
 ${renderBullets([
   bullet("status", status),
-  bullet("rpcLabel", process.env.LIVE_CANARY_RPC_LABEL || DEFAULT_RPC_LABEL),
+  bullet("rpcLabel", READ_ONLY_CHILD_BOUNDARY.env.LIVE_CANARY_RPC_LABEL),
   bullet("transactionSent", transactionSent),
   bullet("signingMaterialLoaded", signingMaterialLoaded),
   bullet("operationalBoundaryVerified", operationBoundaryVerified),
   bullet("walletClientCreated", walletClientCreated),
   bullet("contractWriteSubmitted", contractWriteSubmitted),
-  bullet("dryRunProofBlocksG10G11", Boolean(dryRunAnalyzerBlockedAsExpected)),
+  bullet("dryRunPreviewVerdictPassed", dryRunAnalyzerPassed),
+  bullet("liveLaunchGatesBlocked", "G10,G11"),
+  bullet("consentPlanBound", consentPlanBound),
+  bullet("applicationGitSha", repositoryState.applicationGitSha),
+  bullet("sourceTreeClean", repositoryState.sourceTreeClean),
+  bullet("authorizationReady", status === "pass" && repositoryState.sourceTreeClean),
+  bullet("authorizationRunId", consentEnvelope?.authorizationRunId),
+  sha256Bullet("sourceStateSha256", repositoryState.sourceStateSha256),
   sha256Bullet("walletSetSha256", matrixSummary.walletSetSha256),
   sha256Bullet("canaryPlanSha256", matrixSummary.canaryPlanSha256),
+  sha256Bullet("consentPlanSha256", consentPlanBinding?.consentPlanSha256),
+  sha256Bullet("consentEnvelopeSha256", consentEnvelopeDigest),
   bullet("canaryLogBound", analyzerBoundToCurrentLog),
 ])}
 
@@ -713,22 +1108,40 @@ ${formatMatrixCodeBlock(matrix.output, matrixSummary.log)}
 Command:
 
 \`\`\`powershell
-node scripts/analyze-live-canary-proof.mjs ${matrixSummary.log ?? "<missing-log>"} --profile=v10-matrix --strict --summary-only --require-epoch-bound --require-v10-gas-matrix
+node scripts/analyze-live-canary-proof.mjs ${matrixSummary.log ?? "<missing-log>"} --profile=v10-matrix --preview-dry-run --summary-only --require-epoch-bound
 \`\`\`
 
 ${analyzer ? renderBullets([
   bullet("exit", analyzer.status),
-  bullet("dryRunProofBlocksG10G11", analyzerSummary.dryRunProofBlocksG10G11),
-  bullet("successfulBetTx", analyzerSummary.successfulBetTx),
-  bullet("uniqueBetEpochs", analyzerSummary.uniqueBetEpochs),
+  bullet("previewDryRunVerdict", analyzerSummary.previewDryRunVerdict),
+  bullet("liveLaunchGates", Array.isArray(analyzerSummary.liveLaunchGates) ? analyzerSummary.liveLaunchGates.join(",") : null),
+  bullet("actionEvents", analyzerSummary.actionEvents),
+  bullet("successfulActionTx", analyzerSummary.successfulActionTx),
+  bullet("transactionEvidenceEvents", analyzerSummary.transactionEvidenceEvents),
+  bullet("runtimeIdentityPreflights", analyzerSummary.runtimeIdentityPreflights),
+  bullet("walletPreflights", analyzerSummary.walletPreflights),
   sha256Bullet("logSha256", analyzerSummary.logSha256),
   bullet("logBytes", analyzerSummary.logBytes),
-  bullet("missingGasCases", analyzerSummary.missingGasCases),
 ]) : analyzerSkipMessage}
 
 Redacted excerpt:
 
 ${formatCodeBlock(analyzer?.output ?? "")}
+
+## Machine-Readable Consent Envelope
+
+${renderBullets([
+  bullet("authorizationRunId", consentEnvelope?.authorizationRunId),
+  bullet("applicationGitSha", consentEnvelope?.applicationGitSha),
+  bullet("sourceTreeClean", consentEnvelope?.sourceTreeClean),
+  sha256Bullet("sourceStateSha256", consentEnvelope?.sourceStateSha256),
+  sha256Bullet("walletSetSha256", consentEnvelope?.consentPlan.walletSetSha256),
+  sha256Bullet("canaryPlanSha256", consentEnvelope?.consentPlan.canaryPlanSha256),
+  sha256Bullet("consentPlanSha256", consentEnvelope?.consentPlanSha256),
+  sha256Bullet("consentEnvelopeSha256", consentEnvelopeDigest),
+])}
+
+${consentEnvelope ? `\`\`\`json\n${JSON.stringify(consentEnvelope)}\n\`\`\`` : "_Consent envelope unavailable; Preview is not authorization-ready._"}
 
 ## Fresh Consent Boundary
 
@@ -752,14 +1165,67 @@ Minimum fresh authorization fields:
 - permitted roles
 - stop criteria
 - confirmation that no already-completed transaction should be repeated
-- exact Preview SHA-256, walletSetSha256, and canaryPlanSha256 copied from this fresh output
+- exact authorizationRunId, Preview SHA-256, consentEnvelopeSha256,
+  consentPlanSha256, walletSetSha256, and canaryPlanSha256 copied from this fresh output
+- confirmation that the applicationGitSha/sourceTreeClean binding still passes and
+  that this authorizationRunId is unconsumed in the protected ledger of this canonical
+  repository; repository-local consumption is not a global one-shot guarantee
 `;
 
-writeFileSync(PREVIEW_PATH, markdown, "utf8");
-const previewSha256 = createHash("sha256").update(markdown, "utf8").digest("hex");
+let prePublicationLogBinding = null;
+try {
+  if (logBindingAfter && matrixSummary.log) {
+    prePublicationLogBinding = readBoundedCanaryLogBinding(matrixSummary.log);
+  }
+} catch (error) {
+  logBindingIssue ??= error instanceof Error ? error.message : "final dry-run canary log binding failed";
+}
+const prePublicationLogBoundaryVerified = sameCanaryLogBinding(
+  logBindingAfter,
+  prePublicationLogBinding,
+);
+if (logBindingAfter && !prePublicationLogBoundaryVerified) {
+  logBindingIssue ??= "dry-run canary log changed before Preview publication";
+}
+const publicationMarkdown = prePublicationLogBoundaryVerified
+  ? markdown
+  : revokePreviewAuthorization(markdown);
+const publishedMarkdown = publishPreviewAtomically(publicationMarkdown);
+let postPublicationLogBinding = null;
+try {
+  if (prePublicationLogBinding && matrixSummary.log) {
+    postPublicationLogBinding = readBoundedCanaryLogBinding(matrixSummary.log);
+  }
+} catch (error) {
+  logBindingIssue ??= error instanceof Error ? error.message : "final dry-run canary log binding failed";
+}
+const postPublicationLogBoundaryVerified = sameCanaryLogBinding(
+  prePublicationLogBinding,
+  postPublicationLogBinding,
+);
+if (prePublicationLogBinding && !postPublicationLogBoundaryVerified) {
+  logBindingIssue ??= "dry-run canary log changed during Preview publication";
+}
+const finalLogBoundaryVerified =
+  prePublicationLogBoundaryVerified && postPublicationLogBoundaryVerified;
+const repositoryStateAfterWrite = captureV10PreviewRepositoryState({ root: process.cwd() });
+const repositoryWriteBoundaryVerified =
+  repositoryStateAfterWrite.applicationGitSha === repositoryState.applicationGitSha &&
+  repositoryStateAfterWrite.sourceStateSha256 === repositoryState.sourceStateSha256;
+const finalStatus =
+  status === "pass" && repositoryWriteBoundaryVerified && finalLogBoundaryVerified
+    ? "pass"
+    : "fail";
+const finalMarkdown = finalStatus === status
+  ? publishedMarkdown
+  : revokePreviewAuthorization(publishedMarkdown);
+const finalPublishedMarkdown = finalMarkdown === publishedMarkdown
+  ? publishedMarkdown
+  : publishPreviewAtomically(finalMarkdown);
+const previewSha256 = createHash("sha256").update(finalPublishedMarkdown, "utf8").digest("hex");
 
 console.log(JSON.stringify({
-  status,
+  status: finalStatus,
   previewPath: PREVIEW_PATH,
   plannerExit: planner.status,
   pendingNonceExit: pendingNonce.status,
@@ -767,12 +1233,24 @@ console.log(JSON.stringify({
   analyzerExit: analyzer?.status ?? null,
   canaryLog: matrixSummary.log ?? null,
   canaryLogSha256: logBindingAfter?.sha256 ?? null,
-  canaryLogBound: analyzerBoundToCurrentLog,
+  canaryLogBound: analyzerBoundToCurrentLog && finalLogBoundaryVerified,
   previewSha256,
   walletSetSha256: matrixSummary.walletSetSha256 ?? null,
   canaryPlanSha256: matrixSummary.canaryPlanSha256 ?? null,
+  consentPlanSha256: consentPlanBinding?.consentPlanSha256 ?? null,
+  consentEnvelopeSha256: consentEnvelopeDigest,
+  authorizationRunId: consentEnvelope?.authorizationRunId ?? null,
+  applicationGitSha: repositoryState.applicationGitSha,
+  sourceTreeClean: repositoryState.sourceTreeClean,
+  authorizationReady: finalStatus === "pass" && repositoryState.sourceTreeClean,
+  finalLogBoundaryVerified,
+  repositoryWriteBoundaryVerified,
   logBindingIssue,
-  dryRunProofBlocksG10G11: Boolean(dryRunAnalyzerBlockedAsExpected),
+  consentPlanIssue,
+  consentEnvelopeIssue,
+  evidenceTimingBound,
+  dryRunPreviewVerdictPassed: dryRunAnalyzerPassed,
+  liveLaunchGates: ["G10", "G11"],
   transactionSent,
   signingMaterialLoaded,
   operationalBoundaryVerified: operationBoundaryVerified,
@@ -780,6 +1258,6 @@ console.log(JSON.stringify({
   contractWriteSubmitted,
 }));
 
-if (status !== "pass") {
+if (finalStatus !== "pass") {
   process.exitCode = 1;
 }

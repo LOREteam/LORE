@@ -35,6 +35,12 @@ export type KeeperDailyBudgetPolicy = {
   maxReservedCostWei: bigint;
 };
 
+export type LineaTransactionFeePolicyCaps = {
+  maxApprovalCostPerTransactionWei: bigint;
+  maxKeeperCostPerTransactionWei: bigint;
+  maxNormalCostPerTransactionWei: bigint;
+};
+
 type FeeFieldPolicy = {
   maxFeePerGas: bigint;
   maxPriorityFeePerGas: bigint;
@@ -210,6 +216,18 @@ function getNormalFeePolicy(chainId?: number): NormalFeePolicy {
   if (chainId === LINEA_MAINNET_CHAIN_ID) return LINEA_MAINNET_NORMAL_FEE_POLICY;
   if (chainId === LINEA_SEPOLIA_CHAIN_ID) return LINEA_SEPOLIA_NORMAL_FEE_POLICY;
   throw feePolicyError(`linea_fee_policy_unsupported_chain chainId=${String(chainId ?? "missing")}`);
+}
+
+export function getLineaTransactionFeePolicyCaps(
+  chainId?: number,
+): LineaTransactionFeePolicyCaps {
+  const keeperPolicy = getKeeperFeePolicy(chainId);
+  const normalPolicy = getNormalFeePolicy(chainId);
+  return {
+    maxApprovalCostPerTransactionWei: keeperPolicy.maxApprovalCostWei,
+    maxKeeperCostPerTransactionWei: keeperPolicy.maxKeeperCostWei,
+    maxNormalCostPerTransactionWei: normalPolicy.maxCostWei,
+  };
 }
 
 function assertFeeFieldsWithinPolicy(

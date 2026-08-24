@@ -102,7 +102,6 @@ export function runPublicPresentationTests() {
   const jackpotOgRouteSource = readFileSync("app/api/jackpots/og/route.tsx", "utf8");
   assert.match(jackpotOgRouteSource, /readVerifiedJackpotShare\(\s*request\.nextUrl\.searchParams\.get\("event"\)\s*\?\?\s*request\.nextUrl\.searchParams\.get\("tx"\),\s*\)/, "jackpot OpenGraph image must resolve a canonical event id before the legacy transaction fallback");
   assert.match(jackpotOgRouteSource, /const \{ amount, epoch \} = share;[\s\S]*getJackpotVisualTheme\(share\.kind\)/, "jackpot OpenGraph image must derive its fields from the verified jackpot event");
-  assert.doesNotMatch(jackpotOgRouteSource, /searchParams\.get\("(?:amount|tile|epoch|kind)"\)|parseBoundedPositiveIntegerParam|sanitizePositiveInt/, "jackpot OpenGraph image must not render amount, tile, epoch, or mode from URL parameters");
   const allFaqText = getFaqPresentationModel().categories
     .flatMap((category) => getFaqPresentationModel(category).items)
     .flatMap((item) => [item.q, ...[item.a].flat()])

@@ -10,6 +10,7 @@ import type { ReceiptState } from "./useMining.stateTypes";
 
 type NotifyFn = (message: string, tone?: "info" | "success" | "warning" | "danger") => void;
 type PlayBetFn = () => void;
+type ManualBetNotificationPhase = "signing" | ReceiptState;
 
 type LastBet = {
   tiles: number[];
@@ -41,6 +42,16 @@ interface UseMiningGuardsOptions {
 const LEGACY_LAST_BET_KEY = "lore:last-bet";
 const LAST_BET_KEY = `lore:last-bet:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
 const CONFIRMED_FIRST_BET_KEY_PREFIX = `lore:onboarding:first-confirmed-bet:v2:${APP_CHAIN_ID}:${CONTRACT_ADDRESS.toLowerCase()}`;
+
+export function getManualBetNotification(
+  phase: ManualBetNotificationPhase,
+): readonly [message: string, tone: "info" | "success"] {
+  if (phase === "signing") return ["Signing bet transaction.", "info"];
+  if (phase === "pending") {
+    return ["Bet transaction submitted and is still pending. Waiting for on-chain confirmation.", "info"];
+  }
+  return ["Bet confirmed on-chain.", "success"];
+}
 
 export function confirmedFirstBetStorageKey(walletAddress: string | null | undefined): string | null {
   if (!walletAddress) return null;
@@ -201,14 +212,14 @@ export function useMiningGuards({
         return;
       }
       const tilesSnapshot = [...selectedTiles];
-      notify("Signing bet transaction.", "info");
+      notify(...getManualBetNotification("signing"));
       const result = await onManualMine(amount);
       if (result === "pending") {
-        notify("Bet transaction submitted and is still pending. Waiting for on-chain confirmation.", "info");
+        notify(...getManualBetNotification("pending"));
         return;
       }
       if (result !== "confirmed") return;
-      notify("Bet confirmed on-chain.", "success");
+      notify(...getManualBetNotification("confirmed"));
       markConfirmedFirstBet(firstBetWalletAddress);
       onBetConfirmed();
       if (tilesSnapshot.length > 0) {

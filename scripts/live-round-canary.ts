@@ -32,6 +32,7 @@ import {
   assertKeeperFeeBudget,
   getFallbackFeeOverrides,
   getKeeperFeeOverrides,
+  getLineaTransactionFeePolicyCaps,
   getLineaFeeOverrides,
   isLineaFeePolicyError,
   type FeeOverrides,
@@ -59,6 +60,12 @@ import {
   loadLiveTestPublicWalletConfig,
 } from "./live-test-wallet-config.mjs";
 import { assertV10RuntimeIdentity, type V10RuntimeIdentity } from "./v10-runtime-identity";
+import {
+  acquireV10CanaryExecutionLease,
+  consumeV10PreviewConsent,
+  releaseV10CanaryExecutionLease,
+} from "./v10-preview-consent-store.mjs";
+import { requireV10RedactedRpcLabel } from "./v10-preview-consent-envelope.mjs";
 import { verifyV10SepoliaDeploymentManifest } from "./verify-v10-sepolia-deployment-manifest.mjs";
 
 const APP_NETWORK = getConfiguredLineaNetwork();
@@ -80,7 +87,9 @@ const DRY_RUN = !LIVE_EXECUTION_CONFIRMED || (V10_MATRIX_ONLY && !V10_MATRIX_EXE
 const CANONICAL_INTEGER_ENV_RE = /^(?:0|[1-9]\d{0,15})$/;
 const SIGNING_ENV_NAME_RE = /(?:^|_)(?:PRIVATE_KEY|MNEMONIC|SEED(?:_PHRASE)?|SIGNING_KEY)(?:_|$)/i;
 const PREVIEW_CHECK_SCRIPT = fileURLToPath(new URL("./check-v10-dry-run-preview.mjs", import.meta.url));
+const PROJECT_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const SHA256_RE = /^[a-f0-9]{64}$/;
+const CANARY_RUN_ID_RE = /^(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/;
 
 function hasSigningMaterialInEnvironment() {
   return Object.entries(process.env).some(
@@ -102,7 +111,9 @@ const RESOLVE_RETRY_COOLDOWN_MS = parseIntegerEnv("LIVE_TEST_RESOLVE_RETRY_COOLD
 const RESOLVE_GAS_FLOOR = BigInt(parseIntegerEnv("LIVE_TEST_RESOLVE_GAS_FLOOR", 500_000, 100_000, 1_000_000));
 const LIVE_GAS_BUFFER_PERCENT = 150n;
 const LOOP_PAUSE_MS = parseIntegerEnv("LIVE_TEST_LOOP_PAUSE_MS", 1_500, 0, 120_000);
-const MAX_FAILURES = parseIntegerEnv("LIVE_TEST_MAX_FAILURES", 20, 1, 10_000);
+const MAX_FAILURES = V10_MATRIX_ONLY
+  ? 1
+  : parseIntegerEnv("LIVE_TEST_MAX_FAILURES", 20, 1, 10_000);
 const LIVE_LOG_MAX_BYTES = parseIntegerEnv(
   "LIVE_TEST_LOG_MAX_BYTES",
   48 * 1024 * 1024,
@@ -189,6 +200,50 @@ type PublicWalletAdmission = {
 type ExecutionWalletAdmission = PublicWalletAdmission & {
   accountsByRole: Map<string, PrivateKeyAccount>;
 };
+
+type V10PreviewBinding = {
+  authorizationRunId: string;
+  previewSha256: string;
+  walletSetSha256: string;
+  canaryPlanSha256: string;
+  consentPlanSha256: string;
+  deploymentManifestSha256: string;
+  compilationManifestSha256: string;
+  runtimeSha256: string;
+  sourceArtifactGitSha: string;
+};
+
+type V10CanaryExecutionLease = Readonly<{
+  status: "acquired";
+  runId: string;
+  markerPath: string;
+}>;
+
+const acquireValidatedV10CanaryExecutionLease = acquireV10CanaryExecutionLease as unknown as (options: {
+  root: string;
+  binding: {
+    runId: string;
+    previewSha256: string;
+    walletSetSha256: string;
+    canaryPlanSha256: string;
+    consentPlanSha256: string;
+  };
+}) => V10CanaryExecutionLease;
+
+const releaseValidatedV10CanaryExecutionLease = releaseV10CanaryExecutionLease as unknown as (
+  lease: V10CanaryExecutionLease,
+) => unknown;
+
+const consumeValidatedPreviewConsent = consumeV10PreviewConsent as unknown as (options: {
+  root: string;
+  binding: {
+    runId: string;
+    previewSha256: string;
+    walletSetSha256: string;
+    canaryPlanSha256: string;
+    consentPlanSha256: string;
+  };
+}) => unknown;
 
 const loadExecutionWalletAdmission = loadLiveTestExecutionWalletConfig as unknown as (options: {
   cwd?: string;
@@ -293,9 +348,87 @@ type RoundEvent = {
 type V10DeploymentManifestBinding = {
   contractAddress: string;
   deployBlock: string;
+  deploymentTransactionHash: string;
   deploymentManifestSha256: string;
+  compilationManifestSha256: string;
   normalizedExecutableRuntimeSha256: string;
   sourceArtifactGitSha: string;
+  epochBoundBetsRequired: true;
+};
+
+type V10ConsentRoleCap = {
+  role: string;
+  spendCapWei: string;
+  allowanceCapWei: string;
+};
+
+type V10ConsentPolicy = {
+  schema: 1;
+  tranche: "v10-matrix";
+  profile: "v10-matrix";
+  target: {
+    network: "sepolia";
+    chainId: 59141;
+    contractAddress: string;
+    contractDeployBlock: string;
+    epochBoundBetsRequired: true;
+  };
+  roles: {
+    selectedRoles: string[];
+    resolverCandidateRoles: string[];
+    roleCaps: V10ConsentRoleCap[];
+  };
+  txCaps: {
+    approval: number;
+    bet: number;
+    resolve: number;
+    pendingReplacement: 0;
+    total: number;
+  };
+  valueCaps: {
+    totalSpendWei: string;
+    maxApprovalCostPerTxWei: string;
+    maxKeeperCostPerTxWei: string;
+    maxNativeGasWei: string;
+  };
+  maxEpochs: number;
+  stopPolicy: {
+    maxFailures: 1;
+    maxResolveTransactions: number;
+    safeWindowTimeoutMs: number;
+    transactionReceiptTimeoutMs: number;
+    liveLogMaxBytes: number;
+    stopOnBindingFailure: true;
+    stopOnPreflightFailure: true;
+    stopOnPendingNonce: true;
+    stopOnBetFailure: true;
+    stopOnRepeatFailure: true;
+    stopOnResolveFailure: true;
+    stopOnSafeWindowTimeout: true;
+  };
+  liveExecutionRequiresFreshAuthorization: true;
+};
+
+type V10ConsentPlan = Omit<
+  V10ConsentPolicy,
+  "roles" | "txCaps" | "valueCaps" | "maxEpochs" | "stopPolicy" | "liveExecutionRequiresFreshAuthorization"
+> & {
+  provenance: {
+    deploymentTransactionHash: string;
+    deploymentManifestSha256: string;
+    compilationManifestSha256: string;
+    normalizedExecutableRuntimeSha256: string;
+    sourceArtifactGitSha: string;
+    canonicalDeploymentManifestVerified: true;
+  };
+  walletSetSha256: string;
+  canaryPlanSha256: string;
+  roles: V10ConsentPolicy["roles"];
+  txCaps: V10ConsentPolicy["txCaps"];
+  valueCaps: V10ConsentPolicy["valueCaps"];
+  maxEpochs: number;
+  stopPolicy: V10ConsentPolicy["stopPolicy"];
+  liveExecutionRequiresFreshAuthorization: true;
 };
 
 type CanaryAdmission = {
@@ -328,25 +461,277 @@ let activeAdmission: {
 const attemptedResolveEpochs = new Map<string, number>();
 const pendingResolveEpochs = new Set<string>();
 let emptyResolveBootstrapUsed = false;
-let submittedResolveTransactions = 0;
 const BATCH_GAS_FALLBACK = 700_000n;
-const GENERIC_RPC_LABEL_RE = /^(?:configured|default|fallback|mainnet|rpc|redacted|target|unlabeled)(?:[-_ ]?rpc(?:[-_ ]?label)?(?:[-_ ]?required)?)?$/i;
-
 function getRpcLabel() {
-  const label = process.env.LIVE_CANARY_RPC_LABEL?.trim() || process.env.LINEA_RPC_LABEL?.trim();
-  if (!label || /^https?:\/\//i.test(label) || GENERIC_RPC_LABEL_RE.test(label)) {
-    throw new Error(
-      "LIVE_CANARY_RPC_LABEL must be a concrete redacted RPC label, not a raw URL or generic placeholder",
-    );
-  }
-  return label;
+  return requireV10RedactedRpcLabel(
+    process.env.LIVE_CANARY_RPC_LABEL || process.env.LINEA_RPC_LABEL,
+    "LIVE_CANARY_RPC_LABEL",
+  );
 }
 
 const RPC_LABEL = getRpcLabel();
 
+function createV10ConsentPolicy(): V10ConsentPolicy {
+  if (!V10_MATRIX_ONLY || MAX_RESOLVE_TRANSACTIONS === null) {
+    throw new Error("A bounded consent plan is only available for the V10 matrix profile");
+  }
+  if (!CONTRACT_REQUIRES_EPOCH_BOUND_BETS || MAX_FAILURES !== 1) {
+    throw new Error("V10 matrix consent requires epoch-bound bets and a one-failure stop limit");
+  }
+
+  const selectedRoles = [...ROLES].sort();
+  const plannedSpendByRole = getPlannedSpendByRoles(ROLES);
+  const roleCaps = selectedRoles.map((role) => {
+    const cap = plannedSpendByRole.get(role) ?? 0n;
+    if (cap <= 0n) throw new Error(`V10 matrix role ${role} must have a positive spend cap`);
+    return { role, spendCapWei: cap.toString(), allowanceCapWei: cap.toString() };
+  });
+  const approval = roleCaps.length;
+  const bet = TARGET_ROUNDS * (REPEAT_SAME_BET ? 2 : 1);
+  const resolve = MAX_RESOLVE_TRANSACTIONS;
+  const pendingReplacement = 0 as const;
+  const total = approval + bet + resolve + pendingReplacement;
+  const totalSpendWei = roleCaps.reduce((sum, cap) => sum + BigInt(cap.spendCapWei), 0n);
+  const feeCaps = getLineaTransactionFeePolicyCaps(APP_CHAIN.id);
+  const maxNativeGasWei =
+    BigInt(approval) * feeCaps.maxApprovalCostPerTransactionWei
+    + BigInt(bet + resolve + pendingReplacement) * feeCaps.maxKeeperCostPerTransactionWei;
+
+  return {
+    schema: 1,
+    tranche: "v10-matrix",
+    profile: "v10-matrix",
+    target: {
+      network: "sepolia",
+      chainId: 59141,
+      contractAddress: CONTRACT_ADDRESS.toLowerCase(),
+      contractDeployBlock: String(CONTRACT_DEPLOY_BLOCK),
+      epochBoundBetsRequired: true,
+    },
+    roles: {
+      selectedRoles,
+      resolverCandidateRoles: ["RESOLVER", ...selectedRoles],
+      roleCaps,
+    },
+    txCaps: { approval, bet, resolve, pendingReplacement, total },
+    valueCaps: {
+      totalSpendWei: totalSpendWei.toString(),
+      maxApprovalCostPerTxWei: feeCaps.maxApprovalCostPerTransactionWei.toString(),
+      maxKeeperCostPerTxWei: feeCaps.maxKeeperCostPerTransactionWei.toString(),
+      maxNativeGasWei: maxNativeGasWei.toString(),
+    },
+    maxEpochs: TARGET_ROUNDS + MAX_RESOLVE_TRANSACTIONS,
+    stopPolicy: {
+      maxFailures: 1,
+      maxResolveTransactions: MAX_RESOLVE_TRANSACTIONS,
+      safeWindowTimeoutMs: SAFE_WINDOW_TIMEOUT_MS,
+      transactionReceiptTimeoutMs: TX_RECEIPT_TIMEOUT_MS,
+      liveLogMaxBytes: LIVE_LOG_MAX_BYTES,
+      stopOnBindingFailure: true,
+      stopOnPreflightFailure: true,
+      stopOnPendingNonce: true,
+      stopOnBetFailure: true,
+      stopOnRepeatFailure: true,
+      stopOnResolveFailure: true,
+      stopOnSafeWindowTimeout: true,
+    },
+    liveExecutionRequiresFreshAuthorization: true,
+  };
+}
+
+type V10RuntimeTransactionKind = "approval" | "bet" | "resolve";
+type V10RuntimeTransactionCounters = Record<V10RuntimeTransactionKind | "total", number>;
+
+const V10_RUNTIME_TRANSACTION_COUNTERS: V10RuntimeTransactionCounters = {
+  approval: 0,
+  bet: 0,
+  resolve: 0,
+  total: 0,
+};
+
+function reserveV10RuntimeTransaction(
+  kind: V10RuntimeTransactionKind,
+  counters = V10_RUNTIME_TRANSACTION_COUNTERS,
+) {
+  if (!V10_MATRIX_ONLY) return;
+  const caps = createV10ConsentPolicy().txCaps;
+  const nextKindCount = counters[kind] + 1;
+  const nextTotalCount = counters.total + 1;
+  if (nextKindCount > caps[kind] || nextTotalCount > caps.total) {
+    throw new Error(
+      `V10 matrix transaction cap reached kind=${kind} kindCap=${caps[kind]} totalCap=${caps.total}`,
+    );
+  }
+  counters[kind] = nextKindCount;
+  counters.total = nextTotalCount;
+}
+
+function assertV10NonceQueueClear(
+  nonceLatest: number,
+  noncePending: number,
+  operation: "approval" | "resolver",
+) {
+  if (V10_MATRIX_ONLY && noncePending > nonceLatest) {
+    throw new Error(
+      `V10 matrix ${operation} blocked by pending nonce: latest=${nonceLatest} pending=${noncePending}`,
+    );
+  }
+}
+
+function assertV10SafeWindowDeadline(
+  deadlineAtMs: number | undefined,
+  stage: "before-resolve" | "before-resolve-write",
+  nowMs = Date.now(),
+) {
+  if (!V10_MATRIX_ONLY) return;
+  if (!Number.isSafeInteger(deadlineAtMs) || deadlineAtMs === undefined || nowMs >= deadlineAtMs) {
+    throw new Error(`V10 matrix safe-window deadline reached stage=${stage}`);
+  }
+}
+
+class CountedRoundFailure extends Error {
+  readonly errorKind: string;
+
+  constructor(errorKind: string, message: string) {
+    super(message);
+    this.name = "CountedRoundFailure";
+    this.errorKind = errorKind;
+  }
+}
+
+function shouldCountCaughtRoundFailure(error: unknown) {
+  return !(error instanceof CountedRoundFailure);
+}
+
+function expectV10RuntimeEnforcementFailure(action: () => void, expectedMessage: RegExp) {
+  try {
+    action();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!expectedMessage.test(message)) {
+      throw new Error(`Unexpected V10 runtime enforcement failure: ${message}`);
+    }
+    return;
+  }
+  throw new Error(`Expected V10 runtime enforcement failure matching ${expectedMessage.source}`);
+}
+
+function inspectV10RuntimeEnforcement() {
+  if (!V10_MATRIX_ONLY) {
+    throw new Error("Runtime enforcement inspection requires --v10-matrix-only");
+  }
+  const policy = createV10ConsentPolicy();
+  const exactCaps: V10RuntimeTransactionCounters = { approval: 0, bet: 0, resolve: 0, total: 0 };
+  for (const kind of ["approval", "bet", "resolve"] as const) {
+    for (let count = 0; count < policy.txCaps[kind]; count += 1) {
+      reserveV10RuntimeTransaction(kind, exactCaps);
+    }
+  }
+
+  let rejectionPreservedState = true;
+  const verifyKindOverflow = (kind: V10RuntimeTransactionKind) => {
+    const counters: V10RuntimeTransactionCounters = { approval: 0, bet: 0, resolve: 0, total: 0 };
+    for (let count = 0; count < policy.txCaps[kind]; count += 1) {
+      reserveV10RuntimeTransaction(kind, counters);
+    }
+    const before = JSON.stringify(counters);
+    expectV10RuntimeEnforcementFailure(
+      () => reserveV10RuntimeTransaction(kind, counters),
+      /V10 matrix transaction cap reached/,
+    );
+    rejectionPreservedState = rejectionPreservedState && JSON.stringify(counters) === before;
+  };
+  verifyKindOverflow("approval");
+  verifyKindOverflow("bet");
+  verifyKindOverflow("resolve");
+  const totalCapCounters: V10RuntimeTransactionCounters = {
+    approval: 0,
+    bet: 0,
+    resolve: 0,
+    total: policy.txCaps.total,
+  };
+  const totalBefore = JSON.stringify(totalCapCounters);
+  expectV10RuntimeEnforcementFailure(
+    () => reserveV10RuntimeTransaction("approval", totalCapCounters),
+    /V10 matrix transaction cap reached/,
+  );
+  rejectionPreservedState = rejectionPreservedState && JSON.stringify(totalCapCounters) === totalBefore;
+
+  assertV10NonceQueueClear(7, 7, "resolver");
+  expectV10RuntimeEnforcementFailure(
+    () => assertV10NonceQueueClear(7, 8, "resolver"),
+    /V10 matrix resolver blocked by pending nonce/,
+  );
+  expectV10RuntimeEnforcementFailure(
+    () => assertV10NonceQueueClear(7, 8, "approval"),
+    /V10 matrix approval blocked by pending nonce/,
+  );
+
+  assertV10SafeWindowDeadline(101, "before-resolve", 100);
+  expectV10RuntimeEnforcementFailure(
+    () => assertV10SafeWindowDeadline(100, "before-resolve", 100),
+    /V10 matrix safe-window deadline reached/,
+  );
+  expectV10RuntimeEnforcementFailure(
+    () => assertV10SafeWindowDeadline(99, "before-resolve-write", 100),
+    /V10 matrix safe-window deadline reached/,
+  );
+  expectV10RuntimeEnforcementFailure(
+    () => assertV10SafeWindowDeadline(undefined, "before-resolve-write", 100),
+    /V10 matrix safe-window deadline reached/,
+  );
+
+  console.log(JSON.stringify({
+    status: "pass",
+    mode: "runtime-enforcement-inspection",
+    policy: {
+      txCaps: policy.txCaps,
+      valueCaps: policy.valueCaps,
+      maxEpochs: policy.maxEpochs,
+      stopPolicy: policy.stopPolicy,
+    },
+    counters: {
+      exactCaps,
+      approvalOverflowRejected: true,
+      betOverflowRejected: true,
+      resolveOverflowRejected: true,
+      totalOverflowRejected: true,
+      rejectionPreservedState,
+    },
+    nonce: {
+      equalAccepted: true,
+      resolverPendingRejected: true,
+      approvalPendingRejected: true,
+    },
+    deadline: {
+      beforeAccepted: true,
+      atRejected: true,
+      afterRejected: true,
+      invalidRejected: true,
+    },
+    failureAccounting: {
+      countedPrimaryCatchIncrement: shouldCountCaughtRoundFailure(
+        new CountedRoundFailure("tx-reverted", "counted primary failure"),
+      ) ? 1 : 0,
+      countedRepeatCatchIncrement: shouldCountCaughtRoundFailure(
+        new CountedRoundFailure("repeat-tx-reverted", "counted repeat failure"),
+      ) ? 1 : 0,
+      ordinaryCatchIncrement: shouldCountCaughtRoundFailure(new Error("uncounted failure")) ? 1 : 0,
+    },
+    operationalBoundary: {
+      signingMaterialLoaded: hasSigningMaterialInEnvironment(),
+      signatureRequested: false,
+      walletClientCreated: false,
+      networkRequests: 0,
+      contractWrites: 0,
+      transactionSent: false,
+    },
+  }));
+}
+
 function createCanaryPlanSha256() {
   const plan = {
-    schema: 1,
+    schema: 2,
     profile: V10_MATRIX_ONLY ? "v10-matrix" : "managed-soak",
     network: APP_NETWORK,
     chainId: APP_CHAIN.id,
@@ -386,11 +771,72 @@ function createCanaryPlanSha256() {
     healthBaseUrl: HEALTH_BASE_URL ? String(HEALTH_BASE_URL) : null,
     healthSampleEveryRounds: HEALTH_SAMPLE_EVERY_ROUNDS,
     healthTimeoutMs: HEALTH_TIMEOUT_MS,
+    consentPolicy: V10_MATRIX_ONLY ? createV10ConsentPolicy() : null,
   };
   return createHash("sha256").update(JSON.stringify(plan), "utf8").digest("hex");
 }
 
 const CANARY_PLAN_SHA256 = createCanaryPlanSha256();
+
+function createV10ConsentPlan(publicConfig: PublicWalletAdmission): V10ConsentPlan {
+  if (!SHA256_RE.test(publicConfig.walletSetSha256)) {
+    throw new Error("V10 consent plan requires a canonical public wallet-set SHA-256");
+  }
+  const policy = createV10ConsentPolicy();
+  const deploymentManifest = verifyV10SepoliaDeploymentManifest({
+    projectRoot: PROJECT_ROOT,
+    verifyGitArtifact: true,
+  }) as V10DeploymentManifestBinding;
+  if (
+    deploymentManifest.contractAddress !== policy.target.contractAddress
+    || deploymentManifest.deployBlock !== policy.target.contractDeployBlock
+    || deploymentManifest.epochBoundBetsRequired !== true
+  ) {
+    throw new Error("V10 consent target does not match the canonical Sepolia deployment manifest");
+  }
+
+  return {
+    schema: policy.schema,
+    tranche: policy.tranche,
+    profile: policy.profile,
+    target: policy.target,
+    provenance: {
+      deploymentTransactionHash: deploymentManifest.deploymentTransactionHash,
+      deploymentManifestSha256: deploymentManifest.deploymentManifestSha256,
+      compilationManifestSha256: deploymentManifest.compilationManifestSha256,
+      normalizedExecutableRuntimeSha256: deploymentManifest.normalizedExecutableRuntimeSha256,
+      sourceArtifactGitSha: deploymentManifest.sourceArtifactGitSha,
+      canonicalDeploymentManifestVerified: true,
+    },
+    walletSetSha256: publicConfig.walletSetSha256,
+    canaryPlanSha256: CANARY_PLAN_SHA256,
+    roles: policy.roles,
+    txCaps: policy.txCaps,
+    valueCaps: policy.valueCaps,
+    maxEpochs: policy.maxEpochs,
+    stopPolicy: policy.stopPolicy,
+    liveExecutionRequiresFreshAuthorization: policy.liveExecutionRequiresFreshAuthorization,
+  };
+}
+
+function createV10ConsentEnvelope(publicConfig: PublicWalletAdmission) {
+  const consentPlan = createV10ConsentPlan(publicConfig);
+  const canonicalConsentPlan = JSON.stringify(consentPlan);
+  return {
+    consentPlan,
+    canonicalConsentPlan,
+    consentPlanSha256: createHash("sha256").update(canonicalConsentPlan, "utf8").digest("hex"),
+  };
+}
+
+function writeConsentPlanSummary(publicConfig: PublicWalletAdmission) {
+  const envelope = createV10ConsentEnvelope(publicConfig);
+  console.log(
+    `[live-canary] consentPlan=${envelope.canonicalConsentPlan} `
+      + `consentPlanSha256=${envelope.consentPlanSha256}`,
+  );
+  return envelope;
+}
 
 function isEstimateGasOutOfGasError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -522,11 +968,19 @@ function inspectExecutionWalletBinding() {
 }
 
 function inspectCanaryPlan() {
+  const publicConfig = loadLiveTestPublicWalletConfig({
+    cwd: process.cwd(),
+    environment: process.env,
+  }) as PublicWalletAdmission;
+  const envelope = createV10ConsentEnvelope(publicConfig);
   console.log(JSON.stringify({
     status: "pass",
     mode: "canary-plan-inspection",
     profile: V10_MATRIX_ONLY ? "v10-matrix" : "managed-soak",
+    walletSetSha256: publicConfig.walletSetSha256,
     canaryPlanSha256: CANARY_PLAN_SHA256,
+    consentPlanSha256: envelope.consentPlanSha256,
+    consentPlan: envelope.consentPlan,
     signingMaterialLoaded: hasSigningMaterialInEnvironment(),
     signatureRequested: false,
     walletClientCreated: false,
@@ -547,7 +1001,11 @@ function inspectFreshPreviewBinding() {
   console.log(JSON.stringify({
     status: "pass",
     mode: "fresh-preview-binding-inspection",
-    ...previewBinding,
+    authorizationRunId: previewBinding.authorizationRunId,
+    previewSha256: previewBinding.previewSha256,
+    walletSetSha256: previewBinding.walletSetSha256,
+    canaryPlanSha256: previewBinding.canaryPlanSha256,
+    consentPlanSha256: previewBinding.consentPlanSha256,
     signingMaterialLoaded: false,
     signatureRequested: false,
     walletClientCreated: false,
@@ -596,20 +1054,55 @@ function assertFreshPreviewBinding(publicConfig: PublicWalletAdmission) {
   } catch {
     throw new Error("Fresh V10 Preview validator returned invalid evidence");
   }
+  const localConsentEnvelope = createV10ConsentEnvelope(publicConfig);
+  const authorizationRunId = typeof summary.authorizationRunId === "string"
+    ? summary.authorizationRunId.trim()
+    : "";
   if (
     summary.status !== "pass" ||
     summary.authorizationFreshnessRequired !== true ||
+    summary.authorizationReady !== true ||
+    summary.sourceTreeClean !== true ||
+    !CANARY_RUN_ID_RE.test(authorizationRunId) ||
     summary.previewSha256 !== expectedPreviewSha256 ||
     summary.walletSetSha256 !== publicConfig.walletSetSha256 ||
-    summary.canaryPlanSha256 !== CANARY_PLAN_SHA256
+    summary.canaryPlanSha256 !== CANARY_PLAN_SHA256 ||
+    summary.consentPlanSha256 !== localConsentEnvelope.consentPlanSha256
   ) {
     throw new Error("Fresh V10 Preview identity does not match this execution wallet set and canary plan");
   }
   return {
+    authorizationRunId,
     previewSha256: expectedPreviewSha256,
     walletSetSha256: publicConfig.walletSetSha256,
     canaryPlanSha256: CANARY_PLAN_SHA256,
-  };
+    consentPlanSha256: localConsentEnvelope.consentPlanSha256,
+    deploymentManifestSha256: localConsentEnvelope.consentPlan.provenance.deploymentManifestSha256,
+    compilationManifestSha256: localConsentEnvelope.consentPlan.provenance.compilationManifestSha256,
+    runtimeSha256: localConsentEnvelope.consentPlan.provenance.normalizedExecutableRuntimeSha256,
+    sourceArtifactGitSha: localConsentEnvelope.consentPlan.provenance.sourceArtifactGitSha,
+  } satisfies V10PreviewBinding;
+}
+
+function assertIdenticalV10PreviewBinding(
+  expected: V10PreviewBinding,
+  actual: V10PreviewBinding,
+) {
+  for (const field of [
+    "authorizationRunId",
+    "previewSha256",
+    "walletSetSha256",
+    "canaryPlanSha256",
+    "consentPlanSha256",
+    "deploymentManifestSha256",
+    "compilationManifestSha256",
+    "runtimeSha256",
+    "sourceArtifactGitSha",
+  ] as const) {
+    if (actual[field] !== expected[field]) {
+      throw new Error(`Fresh V10 Preview binding changed before wallet writes (${field})`);
+    }
+  }
 }
 
 function createRunLogPath() {
@@ -644,7 +1137,7 @@ function canonicalAdmissionPayload(admission: CanaryAdmission) {
 function getCanaryRunId() {
   const configured = process.env.LIVE_TEST_RUN_ID?.trim();
   if (!configured) return randomUUID();
-  if (!/^(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/.test(configured)) {
+  if (!CANARY_RUN_ID_RE.test(configured)) {
     throw new Error("LIVE_TEST_RUN_ID must be a canonical lowercase UUID or 32-character hex identifier");
   }
   return configured;
@@ -652,7 +1145,7 @@ function getCanaryRunId() {
 
 function writeCanaryAdmission(params: {
   logPath: string;
-  previewBinding: { previewSha256: string; walletSetSha256: string; canaryPlanSha256: string } | null;
+  previewBinding: V10PreviewBinding | null;
   runtimeIdentity: V10RuntimeIdentity;
   deploymentManifest: V10DeploymentManifestBinding;
   plannedSpendByRole: Map<string, bigint>;
@@ -661,12 +1154,12 @@ function writeCanaryAdmission(params: {
 }) {
   const selectedRoles = params.wallets.map((wallet) => wallet.role).sort();
   const execution = DRY_RUN ? "dry-run" : "live";
-  if (execution === "live" && !params.previewBinding) {
+  if (execution === "live" && V10_MATRIX_ONLY && !params.previewBinding) {
     throw new Error("Live admission requires a fresh Preview binding");
   }
   const admission: CanaryAdmission = {
     schema: 2,
-    runId: getCanaryRunId(),
+    runId: params.previewBinding?.authorizationRunId ?? getCanaryRunId(),
     execution,
     profile: V10_MATRIX_ONLY ? "v10-matrix" : "managed-soak",
     network: APP_NETWORK,
@@ -860,17 +1353,21 @@ function pickRoundPlan(round: number, walletIndex: number, mode: BetMode): Round
   return { amount, amounts, targetTotalAmount, tileCount, totalAmount };
 }
 
-function getPlannedSpendByRole(wallets: CanaryWallet[]) {
+function getPlannedSpendByRoles(roles: readonly string[]) {
   const plannedSpendByRole = new Map<string, bigint>();
   for (let round = 0; round < TARGET_ROUNDS; round += 1) {
-    const walletIndex = round % wallets.length;
-    const wallet = wallets[walletIndex];
+    const walletIndex = round % roles.length;
+    const role = roles[walletIndex];
     const mode = pickMode(round);
     const plan = pickRoundPlan(round, walletIndex, mode);
     const plannedSpend = REPEAT_SAME_BET ? plan.totalAmount * 2n : plan.totalAmount;
-    plannedSpendByRole.set(wallet.role, (plannedSpendByRole.get(wallet.role) ?? 0n) + plannedSpend);
+    plannedSpendByRole.set(role, (plannedSpendByRole.get(role) ?? 0n) + plannedSpend);
   }
   return plannedSpendByRole;
+}
+
+function getPlannedSpendByRole(wallets: CanaryWallet[]) {
+  return getPlannedSpendByRoles(wallets.map((wallet) => wallet.role));
 }
 
 async function getFeeOverrides(publicClient: PublicClient) {
@@ -915,10 +1412,14 @@ async function resolveIfNeeded(params: {
   logPath: string;
   publicClient: PublicClient;
   resolvers: LiveWallet[];
+  safeWindowDeadlineAtMs?: number;
   transport: ReturnType<typeof fallback>;
 }) {
   const { logPath, publicClient, resolvers, transport } = params;
-  if (resolvers.length === 0) return;
+  if (resolvers.length === 0) {
+    if (V10_MATRIX_ONLY) throw new Error("V10 matrix resolver candidates are unavailable");
+    return;
+  }
   const { epoch, secondsLeft } = await readEpochWindow(publicClient);
   if (secondsLeft > 0) return;
   const epochData = await publicClient.readContract({
@@ -941,6 +1442,7 @@ async function resolveIfNeeded(params: {
   for (const [resolverIndex, resolver] of resolvers.entries()) {
     const startedAt = Date.now();
     let pendingHash: Hash | undefined;
+    let terminalFailureRecorded = false;
     const walletClient = createWalletClient({ account: resolver.account, chain: APP_CHAIN, transport });
     const [nonceLatest, noncePending] = await Promise.all([
       publicClient.getTransactionCount({ address: resolver.account.address, blockTag: "latest" }),
@@ -948,6 +1450,7 @@ async function resolveIfNeeded(params: {
     ]);
     if (noncePending > nonceLatest) {
       writeEvent(logPath, { amount: "0", epoch: epoch.toString(), error: "resolver candidate has pending transactions", errorKind: "pending-nonce", mode: "resolver-candidate", ok: false, role: resolver.role, round: -1, secondsLeft, timestamp: new Date().toISOString() });
+      assertV10NonceQueueClear(nonceLatest, noncePending, "resolver");
       continue;
     }
     try {
@@ -988,12 +1491,18 @@ async function resolveIfNeeded(params: {
         continue;
       }
       gas = budgetedGasLimit;
-      if (
-        MAX_RESOLVE_TRANSACTIONS !== null &&
-        submittedResolveTransactions >= MAX_RESOLVE_TRANSACTIONS
-      ) {
-        throw new Error("V10 matrix resolve transaction limit reached");
+      assertV10SafeWindowDeadline(
+        params.safeWindowDeadlineAtMs,
+        "before-resolve-write",
+      );
+      if (V10_MATRIX_ONLY) {
+        const [writeNonceLatest, writeNoncePending] = await Promise.all([
+          publicClient.getTransactionCount({ address: resolver.account.address, blockTag: "latest" }),
+          publicClient.getTransactionCount({ address: resolver.account.address, blockTag: "pending" }),
+        ]);
+        assertV10NonceQueueClear(writeNonceLatest, writeNoncePending, "resolver");
       }
+      reserveV10RuntimeTransaction("resolve");
       const hash = await walletClient.writeContract({
         account: resolver.account,
         chain: APP_CHAIN,
@@ -1005,7 +1514,6 @@ async function resolveIfNeeded(params: {
         ...fees,
       } as never);
       pendingHash = hash;
-      submittedResolveTransactions += 1;
       const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
       if (emptyEpoch && receipt.status === "success") emptyResolveBootstrapUsed = true;
       writeEvent(logPath, {
@@ -1027,25 +1535,37 @@ async function resolveIfNeeded(params: {
         timestamp: new Date().toISOString(),
         txStatus: receipt.status,
       });
+      if (receipt.status !== "success" && V10_MATRIX_ONLY) {
+        terminalFailureRecorded = true;
+        throw new Error("V10 matrix resolver transaction reverted");
+      }
       return;
     } catch (error) {
       const classified = classifyError(error);
       if (pendingHash && /timed out while waiting for transaction/i.test(classified.message)) pendingResolveEpochs.add(epochKey);
-      writeEvent(logPath, {
-        amount: "0",
-        durationMs: Date.now() - startedAt,
-        epoch: epoch.toString(),
-        error: classified.message,
-        errorKind: classified.kind,
-        mode: "resolve",
-        ok: false,
-        role: resolver.role,
-        round: -1,
-        secondsLeft,
-        timestamp: new Date().toISOString(),
-      });
+      if (!terminalFailureRecorded) {
+        writeEvent(logPath, {
+          amount: "0",
+          durationMs: Date.now() - startedAt,
+          epoch: epoch.toString(),
+          error: classified.message,
+          errorKind: classified.kind,
+          mode: "resolve",
+          ok: false,
+          role: resolver.role,
+          round: -1,
+          secondsLeft,
+          timestamp: new Date().toISOString(),
+        });
+      }
+      if (V10_MATRIX_ONLY) {
+        throw new Error(`V10 matrix resolver failure: ${classified.kind}`);
+      }
       return;
     }
+  }
+  if (V10_MATRIX_ONLY) {
+    throw new Error("V10 matrix resolver candidates exhausted");
   }
 }
 
@@ -1068,10 +1588,12 @@ async function waitForSafeWindow(params: {
   transport: ReturnType<typeof fallback>;
 }) {
   const startedAt = Date.now();
+  const deadlineAtMs = startedAt + SAFE_WINDOW_TIMEOUT_MS;
   let nextHeartbeatAt = startedAt + SAFE_WINDOW_HEARTBEAT_MS;
   let lastWindow: Awaited<ReturnType<typeof readEpochWindow>> | null = null;
   for (;;) {
-    await resolveIfNeeded(params);
+    assertV10SafeWindowDeadline(deadlineAtMs, "before-resolve");
+    await resolveIfNeeded({ ...params, safeWindowDeadlineAtMs: deadlineAtMs });
     const window = await readEpochWindow(params.publicClient);
     lastWindow = window;
     if (
@@ -1158,7 +1680,15 @@ async function ensureAllowance(params: {
   if (gas == null) {
     throw new Error("approval has insufficient native balance for the fixed fee budget");
   }
+  if (V10_MATRIX_ONLY) {
+    const [nonceLatest, noncePending] = await Promise.all([
+      publicClient.getTransactionCount({ address: wallet.account.address, blockTag: "latest" }),
+      publicClient.getTransactionCount({ address: wallet.account.address, blockTag: "pending" }),
+    ]);
+    assertV10NonceQueueClear(nonceLatest, noncePending, "approval");
+  }
   const walletClient = createWalletClient({ account: wallet.account, chain: APP_CHAIN, transport });
+  reserveV10RuntimeTransaction("approval");
   const hash = await walletClient.writeContract({
     account: wallet.account,
     chain: APP_CHAIN,
@@ -1282,6 +1812,7 @@ async function placeRound(params: {
   if (noncePending > nonceLatest) {
     throw new Error(`Pending transaction blocked by nonce: latest=${nonceLatest} pending=${noncePending}`);
   }
+  reserveV10RuntimeTransaction("bet");
   const hash = await walletClient.writeContract({
     account: wallet.account,
     chain: APP_CHAIN,
@@ -1467,6 +1998,8 @@ async function runPreflight(
 }
 
 async function main() {
+  let executionLease: V10CanaryExecutionLease | null = null;
+  try {
   const signingMaterialLoaded = hasSigningMaterialInEnvironment();
   if (DRY_RUN && signingMaterialLoaded) {
     throw new Error("Dry-run canary refuses signing material");
@@ -1475,7 +2008,32 @@ async function main() {
     cwd: process.cwd(),
     environment: process.env,
   }) as PublicWalletAdmission;
-  const previewBinding = DRY_RUN ? null : assertFreshPreviewBinding(publicWalletConfig);
+  if (V10_MATRIX_ONLY && DRY_RUN) writeConsentPlanSummary(publicWalletConfig);
+  const previewBinding = DRY_RUN || !V10_MATRIX_ONLY
+    ? null
+    : assertFreshPreviewBinding(publicWalletConfig);
+  if (previewBinding) {
+    executionLease = acquireValidatedV10CanaryExecutionLease({
+      root: process.cwd(),
+      binding: {
+        runId: previewBinding.authorizationRunId,
+        previewSha256: previewBinding.previewSha256,
+        walletSetSha256: previewBinding.walletSetSha256,
+        canaryPlanSha256: previewBinding.canaryPlanSha256,
+        consentPlanSha256: previewBinding.consentPlanSha256,
+      },
+    });
+    consumeValidatedPreviewConsent({
+      root: process.cwd(),
+      binding: {
+        runId: previewBinding.authorizationRunId,
+        previewSha256: previewBinding.previewSha256,
+        walletSetSha256: previewBinding.walletSetSha256,
+        canaryPlanSha256: previewBinding.canaryPlanSha256,
+        consentPlanSha256: previewBinding.consentPlanSha256,
+      },
+    });
+  }
   const readRpcUrls = getStableLineaReadRpcs(process.env.LIVE_TEST_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
   const broadcastRpcUrls = getPreferredLineaRpcs(process.env.LIVE_TEST_RPC_URL ?? process.env.NEXT_PUBLIC_LINEA_RPCS, APP_NETWORK);
   const readTransport = createCanaryTransport(readRpcUrls);
@@ -1528,13 +2086,26 @@ async function main() {
   ) {
     throw new Error("V10 runtime identity does not match the canonical Sepolia deployment manifest");
   }
+  if (
+    previewBinding
+    && (
+      deploymentManifest.deploymentManifestSha256 !== previewBinding.deploymentManifestSha256
+      || deploymentManifest.compilationManifestSha256 !== previewBinding.compilationManifestSha256
+      || deploymentManifest.normalizedExecutableRuntimeSha256 !== previewBinding.runtimeSha256
+      || deploymentManifest.sourceArtifactGitSha !== previewBinding.sourceArtifactGitSha
+      || runtimeIdentity.manifestDigest !== previewBinding.compilationManifestSha256
+      || runtimeIdentity.normalizedRuntimeSha256 !== previewBinding.runtimeSha256
+    )
+  ) {
+    throw new Error("V10 runtime provenance changed after the fresh Preview authorization");
+  }
 
   // The public, pinned wallet set is sufficient to make the plan and persist the
   // admission record. Keep the execution keys out of this phase entirely.
   const admissionWallets = loadDryRunWallets(publicWalletConfig);
   const plannedSpendByRole = getPlannedSpendByRole(admissionWallets);
   const plannedStake = [...plannedSpendByRole.values()].reduce((sum, value) => sum + value, 0n);
-  if (!DRY_RUN && !previewBinding) {
+  if (V10_MATRIX_ONLY && !DRY_RUN && !previewBinding) {
     throw new Error("Live admission requires a fresh Preview binding");
   }
   // This is the sole run admission record. It is appended after the read-only
@@ -1596,6 +2167,9 @@ async function main() {
 
   await runPreflight(logPath, publicClient, wallets, plannedSpendByRole);
   if (DRY_RUN) return;
+  if (V10_MATRIX_ONLY && !previewBinding) {
+    throw new Error("Live wallet writes require the consumed fresh Preview binding");
+  }
   if (!executionWalletConfig) throw new Error("Validated execution wallet configuration is unavailable");
   const liveWallets = wallets as LiveWallet[];
   const resolverAccount = executionWalletConfig.accountsByRole.get("RESOLVER");
@@ -1609,6 +2183,18 @@ async function main() {
     throw new Error("HEALTH_DIAGNOSTICS_SECRET is required when LIVE_TEST_HEALTH_BASE_URL is configured");
   }
   await sampleHealth(logPath, 0);
+
+  if (previewBinding) {
+    const publicWalletConfigBeforeWrites = loadLiveTestPublicWalletConfig({
+      cwd: process.cwd(),
+      environment: process.env,
+    }) as PublicWalletAdmission;
+    if (publicWalletConfigBeforeWrites.walletSetSha256 !== publicWalletConfig.walletSetSha256) {
+      throw new Error("V10 public wallet binding changed before wallet writes");
+    }
+    const previewBindingBeforeWrites = assertFreshPreviewBinding(publicWalletConfigBeforeWrites);
+    assertIdenticalV10PreviewBinding(previewBinding, previewBindingBeforeWrites);
+  }
 
   for (const wallet of liveWallets) {
     await ensureAllowance({
@@ -1673,9 +2259,11 @@ async function main() {
             wallet,
           });
           if (!repeatEvent.ok) {
+            const errorKind = repeatEvent.errorKind
+              ?? (repeatEvent.txStatus === "reverted" ? "repeat-tx-reverted" : "repeat-tx-failed");
             failures += 1;
-            errorKinds.set("repeat-tx-reverted", (errorKinds.get("repeat-tx-reverted") ?? 0) + 1);
-            throw new Error(`Repeat fee measurement reverted; see ${logPath}`);
+            errorKinds.set(errorKind, (errorKinds.get(errorKind) ?? 0) + 1);
+            throw new CountedRoundFailure(errorKind, `Repeat fee measurement failed; see ${logPath}`);
           }
           successes += 1;
           console.log(
@@ -1695,28 +2283,30 @@ async function main() {
           `[live-canary] fail round=${round + 1}/${TARGET_ROUNDS} role=${wallet.role} mode=${mode} status=${event.txStatus} epoch=${epoch} tx=${event.hash}`,
         );
         if (failures >= MAX_FAILURES) {
-          throw new Error(`Stopping after ${failures} failures; see ${logPath}`);
+          throw new CountedRoundFailure(errorKind, `Stopping after ${failures} failures; see ${logPath}`);
         }
       }
     } catch (error) {
-      const classified = classifyError(error);
-      failures += 1;
-      errorKinds.set(classified.kind, (errorKinds.get(classified.kind) ?? 0) + 1);
-      writeEvent(logPath, {
-        amount: formatUnits(plan.amount, 18),
-        amounts: mode === "arrays" ? plan.amounts.map((value) => formatUnits(value, 18)) : undefined,
-        error: classified.message,
-        errorKind: classified.kind,
-        mode,
-        ok: false,
-        role: wallet.role,
-        round,
-        targetTotalAmount: formatUnits(plan.targetTotalAmount, 18),
-        timestamp: new Date().toISOString(),
-        tileCount: plan.tileCount,
-        totalAmount: formatUnits(plan.totalAmount, 18),
-      });
-      console.warn(`[live-canary] fail round=${round + 1}/${TARGET_ROUNDS} role=${wallet.role} mode=${mode} kind=${classified.kind}: ${classified.message}`);
+      if (shouldCountCaughtRoundFailure(error)) {
+        const classified = classifyError(error);
+        failures += 1;
+        errorKinds.set(classified.kind, (errorKinds.get(classified.kind) ?? 0) + 1);
+        writeEvent(logPath, {
+          amount: formatUnits(plan.amount, 18),
+          amounts: mode === "arrays" ? plan.amounts.map((value) => formatUnits(value, 18)) : undefined,
+          error: classified.message,
+          errorKind: classified.kind,
+          mode,
+          ok: false,
+          role: wallet.role,
+          round,
+          targetTotalAmount: formatUnits(plan.targetTotalAmount, 18),
+          timestamp: new Date().toISOString(),
+          tileCount: plan.tileCount,
+          totalAmount: formatUnits(plan.totalAmount, 18),
+        });
+        console.warn(`[live-canary] fail round=${round + 1}/${TARGET_ROUNDS} role=${wallet.role} mode=${mode} kind=${classified.kind}: ${classified.message}`);
+      }
       if (REPEAT_SAME_BET) throw error;
       if (failures >= MAX_FAILURES) {
         throw new Error(`Stopping after ${failures} failures; see ${logPath}`);
@@ -1746,9 +2336,20 @@ async function main() {
     errorKinds: Object.fromEntries(errorKinds.entries()),
     logPath,
   }, null, 2));
+  } finally {
+    if (executionLease) releaseValidatedV10CanaryExecutionLease(executionLease);
+  }
 }
 
-if (process.argv.includes("--inspect-canary-plan")) {
+if (process.argv.includes("--inspect-runtime-enforcement")) {
+  try {
+    inspectV10RuntimeEnforcement();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error(`[live-canary] failed: ${redactCanaryErrorMessage(message)}`);
+    process.exitCode = 1;
+  }
+} else if (process.argv.includes("--inspect-canary-plan")) {
   try {
     inspectCanaryPlan();
   } catch (error) {

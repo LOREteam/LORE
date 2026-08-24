@@ -13,6 +13,24 @@ import {
   stripChunkReloadCacheParam,
 } from "../lib/chunkReloadRecovery";
 
+export function isPrivyAuthSessionTimeout(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("auth.privy.io/api/v1/sessions") &&
+    (normalized.includes("timeout") ||
+      normalized.includes("timed out") ||
+      normalized.includes("aborted due to timeout") ||
+      normalized.includes("<no response>"))
+  );
+}
+
+export function suppressPrivyAuthSessionTimeoutEvent(
+  event: Pick<Event, "preventDefault" | "stopImmediatePropagation">,
+): void {
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
+
 export function ErrorCatcher() {
   useEffect(() => {
     stripChunkReloadCacheParam(window.location, window.history);
@@ -108,20 +126,8 @@ export function ErrorCatcher() {
       return true;
     };
 
-    const isPrivyAuthSessionTimeout = (message: string): boolean => {
-      const normalized = message.toLowerCase();
-      return (
-        normalized.includes("auth.privy.io/api/v1/sessions") &&
-        (normalized.includes("timeout") ||
-          normalized.includes("timed out") ||
-          normalized.includes("aborted due to timeout") ||
-          normalized.includes("<no response>"))
-      );
-    };
-
     const suppressPrivyAuthSessionTimeout = (event: Event, message: string) => {
-      event.preventDefault();
-      event.stopImmediatePropagation();
+      suppressPrivyAuthSessionTimeoutEvent(event);
       log.warn("Global", "privy auth session timeout suppressed", { message: message.slice(0, 180) });
     };
 

@@ -566,8 +566,8 @@ async function testPageAndApiContracts() {
   await runtimeCheck.assert(jsonResponse(runtimePayload, 200, runtimeHeaders), JSON.stringify(runtimePayload));
   const wrongChain = structuredClone(runtimePayload);
   wrongChain.publicConfig.chainId = 1;
-  await assert.rejects(
-    runtimeCheck.assert(jsonResponse(wrongChain, 200, runtimeHeaders), JSON.stringify(wrongChain)),
+  assert.throws(
+    () => runtimeCheck.assert(jsonResponse(wrongChain, 200, runtimeHeaders), JSON.stringify(wrongChain)),
     /must match configured Linea chain id/,
   );
 }

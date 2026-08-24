@@ -45,6 +45,11 @@ import {
   assertCanaryApprovalPostcondition,
   resolveCanaryAllowancePlan,
 } from "./live-canary-approval-policy.mjs";
+import { resolveCanaryProofProfile } from "./canary-proof-profile.mjs";
+import {
+  isPositiveInteger,
+  parsePositiveInteger,
+} from "./collect-proof-common.mjs";
 
 const safetyPoolClaimThreshold = safetyPoolClaimThresholdModule.default ?? safetyPoolClaimThresholdModule;
 const analyticsDepositsStatus = analyticsDepositsStatusModule.default ?? analyticsDepositsStatusModule;
@@ -54,6 +59,387 @@ const chatAuth = chatAuthModule.default ?? chatAuthModule;
 const chatSession = chatSessionModule.default ?? chatSessionModule;
 const indexerNormalization = indexerNormalizationModule.default ?? indexerNormalizationModule;
 const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+
+function readBehaviorArtifactText(filePath) {
+  return readFileSync(filePath, "utf8");
+}
+
+const LIVE_CANARY_CONFIGURATION_FETCH_GUARD = `data:text/javascript,${encodeURIComponent(
+  'globalThis.fetch=async()=>{throw new Error("NETWORK_CALL_FORBIDDEN")}',
+)}`;
+const LIVE_CANARY_CONFIGURATION_REPOSITORY_ENV_PREFIX = /^(?:ADMIN_|ALLOW_|BOOTSTRAP_|CANARY_|CHAT_|CONTRACT_|EIP7702_|HEALTH_|INDEXER_|KEEPER_|LINEA_|LIVE_|LORE_|NEXT_PUBLIC_|PRELAUNCH_|PRIVY_|PROD_|PROOF_|RATE_LIMIT_|RESEND_|RUNTIME_|SMOKE_|SOURCE_VERSION$|UPSTASH_|V10_|VERCEL_|WEB_REPLICA_)/;
+const LIVE_CANARY_CONFIGURATION_SIGNING_ENV_NAME_RE = /(?:^|_)(?:PRIVATE_KEY|MNEMONIC|SEED(?:_PHRASE)?|SIGNING_KEY)(?:_|$)/;
+
+function liveCanaryConfigurationProbeEnvironment(extraEnvironment = {}) {
+  const inherited = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => {
+      const normalized = name.toUpperCase();
+      return normalized !== "NODE_ENV"
+        && normalized !== "NODE_OPTIONS"
+        && normalized !== "GITHUB_SHA"
+        && !LIVE_CANARY_CONFIGURATION_SIGNING_ENV_NAME_RE.test(normalized)
+        && !LIVE_CANARY_CONFIGURATION_REPOSITORY_ENV_PREFIX.test(normalized);
+    }),
+  );
+  return {
+    ...inherited,
+    HEALTH_DIAGNOSTICS_SECRET: "",
+    LINEA_CHAIN_ID: "59141",
+    LINEA_NETWORK: "sepolia",
+    LIVE_CANARY_RPC_LABEL: "offline-release-configuration-inspection",
+    LIVE_TEST_APPROVE_AMOUNT: "",
+    LIVE_TEST_EXECUTE: "0",
+    LIVE_TEST_HEALTH_BASE_URL: "",
+    NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS: "1",
+    NEXT_PUBLIC_LINEA_CHAIN_ID: "59141",
+    NEXT_PUBLIC_LINEA_NETWORK: "sepolia",
+    NODE_ENV: "test",
+    NODE_OPTIONS: "",
+    TSX_DISABLE_CACHE: "1",
+    ...extraEnvironment,
+  };
+}
+
+function runLiveCanaryConfigurationProbe(extraEnvironment = {}) {
+  return spawnSync(
+    process.execPath,
+    [
+      `--import=${LIVE_CANARY_CONFIGURATION_FETCH_GUARD}`,
+      join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs"),
+      join(process.cwd(), "scripts", "live-round-canary.ts"),
+      "--v10-matrix-only",
+      "--inspect-runtime-enforcement",
+    ],
+    {
+      cwd: process.cwd(),
+      env: liveCanaryConfigurationProbeEnvironment(extraEnvironment),
+      encoding: "utf8",
+      timeout: 20_000,
+      maxBuffer: 1024 * 1024,
+      windowsHide: true,
+    },
+  );
+}
+
+function summarizeLiveCanaryConfigurationProbe(result, expectedError = null) {
+  const stdout = String(result.stdout ?? "");
+  const stderr = String(result.stderr ?? "");
+  const output = `${stdout}\n${stderr}`;
+  if (expectedError !== null) {
+    return {
+      spawnError: result.error?.message ?? null,
+      status: result.status,
+      signal: result.signal,
+      stdoutEmpty: stdout.trim() === "",
+      expectedError: output.includes(expectedError),
+      networkGuardTriggered: output.includes("NETWORK_CALL_FORBIDDEN"),
+    };
+  }
+  let summary = null;
+  try {
+    const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+    const parsed = JSON.parse(lines.at(-1) ?? "null");
+    summary = {
+      status: parsed?.status ?? null,
+      mode: parsed?.mode ?? null,
+      operationalBoundary: parsed?.operationalBoundary ?? null,
+    };
+  } catch {
+    summary = null;
+  }
+  return {
+    spawnError: result.error?.message ?? null,
+    status: result.status,
+    signal: result.signal,
+    stderrEmpty: stderr.trim() === "",
+    summary,
+    networkGuardTriggered: output.includes("NETWORK_CALL_FORBIDDEN"),
+  };
+}
+
+const LIVE_CANARY_CONFIGURATION_SUCCESS_RECEIPT = {
+  spawnError: null,
+  status: 0,
+  signal: null,
+  stderrEmpty: true,
+  summary: {
+    status: "pass",
+    mode: "runtime-enforcement-inspection",
+    operationalBoundary: {
+      signingMaterialLoaded: false,
+      signatureRequested: false,
+      walletClientCreated: false,
+      networkRequests: 0,
+      contractWrites: 0,
+      transactionSent: false,
+    },
+  },
+  networkGuardTriggered: false,
+};
+
+function liveCanaryConfigurationFailureReceipt() {
+  return {
+    spawnError: null,
+    status: 1,
+    signal: null,
+    stdoutEmpty: true,
+    expectedError: true,
+    networkGuardTriggered: false,
+  };
+}
+
+export function runLiveCanaryConfigurationBehaviorTests() {
+  assert.deepEqual(
+    [
+      ...["MANUAL", "AUTOMINER_A", "AUTOMINER_B", "AUTOMINER_C"].map((role) => (
+        summarizeLiveCanaryConfigurationProbe(runLiveCanaryConfigurationProbe({ LIVE_TEST_ROLES: role }))
+      )),
+      summarizeLiveCanaryConfigurationProbe(
+        runLiveCanaryConfigurationProbe({ LIVE_TEST_ROLES: "AUTOMINER_Z" }),
+        "LIVE_TEST_ROLES contains unsupported role AUTOMINER_Z",
+      ),
+    ],
+    [
+      LIVE_CANARY_CONFIGURATION_SUCCESS_RECEIPT,
+      LIVE_CANARY_CONFIGURATION_SUCCESS_RECEIPT,
+      LIVE_CANARY_CONFIGURATION_SUCCESS_RECEIPT,
+      LIVE_CANARY_CONFIGURATION_SUCCESS_RECEIPT,
+      liveCanaryConfigurationFailureReceipt(),
+    ],
+    "live canary must accept every supported role and reject unsupported roles before wallet or network setup",
+  );
+
+  assert.deepEqual(
+    [
+      summarizeLiveCanaryConfigurationProbe(
+        runLiveCanaryConfigurationProbe({ LIVE_TEST_ROLES: "" }),
+        "LIVE_TEST_ROLES must include at least one supported role",
+      ),
+      summarizeLiveCanaryConfigurationProbe(
+        runLiveCanaryConfigurationProbe({ LIVE_TEST_ROLES: "MANUAL,MANUAL" }),
+        "LIVE_TEST_ROLES contains duplicate roles",
+      ),
+    ],
+    [liveCanaryConfigurationFailureReceipt(), liveCanaryConfigurationFailureReceipt()],
+    "live canary must reject empty and duplicate role overrides before wallet or network setup",
+  );
+
+  const canonicalIntegerError = "LIVE_TEST_SAFE_SECONDS_LEFT must be a canonical integer in [5, 600]";
+  assert.deepEqual(
+    ["5", "600", "4", "601"].map((value) => summarizeLiveCanaryConfigurationProbe(
+      runLiveCanaryConfigurationProbe({
+        LIVE_TEST_ROLES: "MANUAL",
+        LIVE_TEST_SAFE_SECONDS_LEFT: value,
+      }),
+      value === "4" || value === "601" ? canonicalIntegerError : null,
+    )),
+    [
+      LIVE_CANARY_CONFIGURATION_SUCCESS_RECEIPT,
+      LIVE_CANARY_CONFIGURATION_SUCCESS_RECEIPT,
+      liveCanaryConfigurationFailureReceipt(),
+      liveCanaryConfigurationFailureReceipt(),
+    ],
+    "live canary must accept canonical integer boundaries and reject values outside the configured range",
+  );
+
+  assert.deepEqual(
+    ["05", "5.0", "5e0", "9007199254740992"].map((value) => summarizeLiveCanaryConfigurationProbe(
+      runLiveCanaryConfigurationProbe({
+        LIVE_TEST_ROLES: "MANUAL",
+        LIVE_TEST_SAFE_SECONDS_LEFT: value,
+      }),
+      canonicalIntegerError,
+    )),
+    Array.from({ length: 4 }, () => liveCanaryConfigurationFailureReceipt()),
+    "live canary integer parsing must reject leading-zero, fractional, exponent, and unsafe values before wallet or network setup",
+  );
+}
+
+function runV10BenchmarkConfigurationProbe({ timeoutValue, v10Runs } = {}) {
+  const extraEnvironment = {};
+  if (timeoutValue !== undefined) {
+    extraEnvironment.V10_BEHAVIOR_TIMEOUT_MS = timeoutValue;
+  }
+  return spawnSync(
+    process.execPath,
+    [
+      `--import=${LIVE_CANARY_CONFIGURATION_FETCH_GUARD}`,
+      join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs"),
+      join(process.cwd(), "scripts", "benchmark-v10-linea-gas.ts"),
+      "--diagnostics-only",
+      ...(v10Runs === undefined ? [] : [`--v10-runs=${v10Runs}`]),
+    ],
+    {
+      cwd: process.cwd(),
+      env: liveCanaryConfigurationProbeEnvironment(extraEnvironment),
+      encoding: "utf8",
+      timeout: 60_000,
+      maxBuffer: 2 * 1024 * 1024,
+      windowsHide: true,
+    },
+  );
+}
+
+function summarizeV10BenchmarkConfigurationProbe(result, expectedError = null) {
+  const stdout = String(result.stdout ?? "");
+  const stderr = String(result.stderr ?? "");
+  const output = `${stdout}\n${stderr}`;
+  if (expectedError !== null) {
+    return {
+      spawnError: result.error?.message ?? null,
+      status: result.status,
+      signal: result.signal,
+      stdoutEmpty: stdout.trim() === "",
+      expectedError: output.includes(expectedError),
+      networkGuardTriggered: output.includes("NETWORK_CALL_FORBIDDEN"),
+    };
+  }
+  let summary = null;
+  try {
+    const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+    const parsed = JSON.parse(lines.at(-1) ?? "null");
+    summary = {
+      status: parsed?.status ?? null,
+      compilerVersionPinned: /^0\.8\.36\+/.test(String(parsed?.compilerVersion ?? "")),
+      transactionSent: parsed?.transactionSent ?? null,
+      rpcUsed: parsed?.rpcUsed ?? null,
+      environmentFilesLoaded: parsed?.environmentFilesLoaded ?? null,
+      harnessFunctions: parsed?.harnessFunctions ?? null,
+    };
+  } catch {
+    summary = null;
+  }
+  return {
+    spawnError: result.error?.message ?? null,
+    status: result.status,
+    signal: result.signal,
+    stderrEmpty: stderr.trim() === "",
+    summary,
+    networkGuardTriggered: output.includes("NETWORK_CALL_FORBIDDEN"),
+  };
+}
+
+const V10_BENCHMARK_CONFIGURATION_SUCCESS_RECEIPT = {
+  spawnError: null,
+  status: 0,
+  signal: null,
+  stderrEmpty: true,
+  summary: {
+    status: "passed",
+    compilerVersionPinned: true,
+    transactionSent: false,
+    rpcUsed: false,
+    environmentFilesLoaded: false,
+    harnessFunctions: 17,
+  },
+  networkGuardTriggered: false,
+};
+
+function v10BenchmarkConfigurationFailureReceipt() {
+  return {
+    spawnError: null,
+    status: 1,
+    signal: null,
+    stdoutEmpty: true,
+    expectedError: true,
+    networkGuardTriggered: false,
+  };
+}
+
+export function runReleaseCliConfigurationBehaviorTests() {
+  const timeoutMinimumResult = runV10BenchmarkConfigurationProbe({ timeoutValue: "1000", v10Runs: "1" });
+  const timeoutMaximumResult = runV10BenchmarkConfigurationProbe({ timeoutValue: "900000", v10Runs: "1000000" });
+  assert.deepEqual(
+    summarizeLiveCanaryConfigurationProbe(
+      runLiveCanaryConfigurationProbe({
+        LINEA_CHAIN_ID: "59144",
+        LINEA_NETWORK: "mainnet",
+        LIVE_CANARY_RPC_LABEL: "offline-network-preflight",
+        NEXT_PUBLIC_CONTRACT_ADDRESS: "0x1111111111111111111111111111111111111111",
+        NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK: "1",
+        NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS: "1",
+        NEXT_PUBLIC_LINEA_CHAIN_ID: "59144",
+        NEXT_PUBLIC_LINEA_NETWORK: "mainnet",
+        NEXT_PUBLIC_LINEA_TOKEN_ADDRESS: "0x2222222222222222222222222222222222222222",
+      }),
+      "live-round-canary is testnet-only and requires Linea Sepolia (chain ID 59141).",
+    ),
+    liveCanaryConfigurationFailureReceipt(),
+    "live canary must reject Linea mainnet before wallet, RPC, or transaction setup",
+  );
+
+  const timeoutRangeError = "V10_BEHAVIOR_TIMEOUT_MS must be between 1000 and 900000";
+  assert.deepEqual(
+    [
+      summarizeV10BenchmarkConfigurationProbe(timeoutMinimumResult),
+      summarizeV10BenchmarkConfigurationProbe(timeoutMaximumResult),
+      summarizeV10BenchmarkConfigurationProbe(
+        runV10BenchmarkConfigurationProbe({ timeoutValue: "999", v10Runs: "1" }),
+        timeoutRangeError,
+      ),
+      summarizeV10BenchmarkConfigurationProbe(
+        runV10BenchmarkConfigurationProbe({ timeoutValue: "900001", v10Runs: "1" }),
+        timeoutRangeError,
+      ),
+    ],
+    [
+      V10_BENCHMARK_CONFIGURATION_SUCCESS_RECEIPT,
+      V10_BENCHMARK_CONFIGURATION_SUCCESS_RECEIPT,
+      v10BenchmarkConfigurationFailureReceipt(),
+      v10BenchmarkConfigurationFailureReceipt(),
+    ],
+    "V10 diagnostics must accept timeout boundaries and reject values outside the configured range without operational work",
+  );
+
+  const runsRangeError = "--v10-runs must be between 1 and 1000000";
+  assert.deepEqual(
+    [
+      summarizeV10BenchmarkConfigurationProbe(timeoutMinimumResult),
+      summarizeV10BenchmarkConfigurationProbe(timeoutMaximumResult),
+      summarizeV10BenchmarkConfigurationProbe(
+        runV10BenchmarkConfigurationProbe({ timeoutValue: "1000", v10Runs: "0" }),
+        runsRangeError,
+      ),
+      summarizeV10BenchmarkConfigurationProbe(
+        runV10BenchmarkConfigurationProbe({ timeoutValue: "1000", v10Runs: "1000001" }),
+        runsRangeError,
+      ),
+    ],
+    [
+      V10_BENCHMARK_CONFIGURATION_SUCCESS_RECEIPT,
+      V10_BENCHMARK_CONFIGURATION_SUCCESS_RECEIPT,
+      v10BenchmarkConfigurationFailureReceipt(),
+      v10BenchmarkConfigurationFailureReceipt(),
+    ],
+    "V10 diagnostics must accept optimizer-run boundaries and reject values outside the configured range without operational work",
+  );
+
+  const timeoutCanonicalError = "V10_BEHAVIOR_TIMEOUT_MS must be a canonical decimal integer";
+  const runsCanonicalError = "--v10-runs must be a canonical decimal integer";
+  assert.deepEqual(
+    [
+      ...["01000", "1e3", "1000.0"].map((timeoutValue) => summarizeV10BenchmarkConfigurationProbe(
+        runV10BenchmarkConfigurationProbe({ timeoutValue, v10Runs: "1" }),
+        timeoutCanonicalError,
+      )),
+      summarizeV10BenchmarkConfigurationProbe(
+        runV10BenchmarkConfigurationProbe({ timeoutValue: "9007199254740992", v10Runs: "1" }),
+        timeoutRangeError,
+      ),
+      ...["01", "1e2", "1.0"].map((v10Runs) => summarizeV10BenchmarkConfigurationProbe(
+        runV10BenchmarkConfigurationProbe({ timeoutValue: "1000", v10Runs }),
+        runsCanonicalError,
+      )),
+      summarizeV10BenchmarkConfigurationProbe(
+        runV10BenchmarkConfigurationProbe({ timeoutValue: "1000", v10Runs: "9007199254740992" }),
+        runsRangeError,
+      ),
+    ],
+    Array.from({ length: 8 }, () => v10BenchmarkConfigurationFailureReceipt()),
+    "V10 diagnostics must reject leading-zero, exponent, fractional, and unsafe timeout or run values without broad coercion",
+  );
+}
+
 function campaignFixtureGitEnvironment() {
   const environment = { ...process.env };
   for (const key of Object.keys(environment)) {
@@ -506,7 +892,7 @@ export function assertLocalCampaignSourceProvenance() {
     const p1CommandPath = join(scriptDirectory, "run-p1-hardening-tests.mjs");
     const finalCommandPath = join(scriptDirectory, "test-hermetic-build.mjs");
     const activeP1Path = join(root, "scripts", "run-p1-hardening-tests.mjs");
-    const activeP1Original = readFileSync(activeP1Path, "utf8");
+    const activeP1Original = readBehaviorArtifactText(activeP1Path);
     const activeP1Stat = statSync(activeP1Path);
     writeFileSync(firstCommandPath, [
       'import { execFileSync } from "node:child_process";',
@@ -536,7 +922,7 @@ export function assertLocalCampaignSourceProvenance() {
     assert.deepEqual(parentTransientEvents.map((event) => event.status), ["started", ...Array(7).fill("passed"), "completed"]);
     assertBoundSourceSha(parentTransientEvents, parentTransientSourceSha);
     assert.equal(parentTransientEvents[0].executionSource, "detached-worktree");
-    assert.equal(readFileSync(activeP1Path, "utf8"), activeP1Original, "the original source must be restored unchanged");
+    assert.equal(readBehaviorArtifactText(activeP1Path), activeP1Original, "the original source must be restored unchanged");
     assert.equal(statSync(activeP1Path).mtimeMs, activeP1Stat.mtimeMs, "the original source mtime must be restored exactly");
     assert.equal(
       runCampaignFixtureGit(root, ["status", "--porcelain=v1", "--untracked-files=no"]),
@@ -630,7 +1016,7 @@ export function assertLocalCampaignSourceProvenance() {
     removeFixtureSnapshot(runtimeSwapId, runtimeSwapSourceSha);
 
     const lockfilePath = join(root, "package-lock.json");
-    const lockfileOriginal = readFileSync(lockfilePath, "utf8");
+    const lockfileOriginal = readBehaviorArtifactText(lockfilePath);
     const lockfileStat = statSync(lockfilePath);
     const lockfileSourceSha = commitFixtureCommand("fixture package lock metadata drift", [
       'import { readFileSync, writeFileSync } from "node:fs";',
@@ -640,7 +1026,7 @@ export function assertLocalCampaignSourceProvenance() {
       'writeFileSync(lockfile, original, "utf8");',
     ].join("\n"));
     assertStoppedForIntegrityFailure("fixture-package-lock-drift", lockfileSourceSha, "tracked-tree-dirty");
-    assert.equal(readFileSync(lockfilePath, "utf8"), lockfileOriginal, "package lock fixture must restore tracked content before the next case");
+    assert.equal(readBehaviorArtifactText(lockfilePath), lockfileOriginal, "package lock fixture must restore tracked content before the next case");
     utimesSync(lockfilePath, lockfileStat.atime, lockfileStat.mtime);
     removeFixtureSnapshot("fixture-package-lock-drift", lockfileSourceSha);
 
@@ -706,7 +1092,9 @@ export function assertLocalCampaignSourceProvenance() {
     resetProtectedDatabaseFixture({ wal: false, shm: false });
 
     const campaignFixtureDirectory = (campaignId) => join(root, "artifacts", "test-campaign-2026-08-20", campaignId);
-    const readFixtureFaultMarker = (campaignId) => readFileSync(join(campaignFixtureDirectory(campaignId), "fixture-post-child-mutation"), "utf8");
+    const readFixtureFaultMarker = (campaignId) => readBehaviorArtifactText(
+      join(campaignFixtureDirectory(campaignId), "fixture-post-child-mutation"),
+    );
 
     const snapshotSubstitutionId = "fixture-snapshot-directory-substitution";
     const snapshotSubstitutionSourceSha = commitFixtureCommand("fixture snapshot directory substitution", "process.exit(0);\n");
@@ -877,6 +1265,154 @@ function withTemporaryEnv(values, fn) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+  }
+}
+
+export function runSignoffFinalityEvidenceTests() {
+  const signoffFinalityProbeRoot = mkdtempSync(join(tmpdir(), "lore-signoff-finality-"));
+  try {
+    const envLogPath = join(signoffFinalityProbeRoot, "mainnet-env.log");
+    const chainLogPath = join(signoffFinalityProbeRoot, "chain-comparison.log");
+    writeFileSync(envLogPath, "Summary: all checked env gates passed.\n", "utf8");
+    writeFileSync(
+      chainLogPath,
+      "Summary: direct-chain comparison jackpot safetyPool deposits rewards rebates resolve.\n",
+      "utf8",
+    );
+    const finalityProbeCases = [String(Number.MAX_SAFE_INTEGER), "9999999999999999", "1e3"];
+    const signoffFinalityProbeStatuses = [];
+    const signoffFinalityProbeResults = { collector: [], draft: [] };
+    for (const [name, scriptPath, commonArgs] of [
+      [
+        "collector",
+        "scripts/collect-signoff-evidence.mjs",
+        ["--epochs=1", "--user=0x1111111111111111111111111111111111111111"],
+      ],
+      ["draft", "scripts/create-signoff-proof-draft.mjs", []],
+    ]) {
+      for (const [caseIndex, finalityBlocks] of finalityProbeCases.entries()) {
+        const outPath = join(signoffFinalityProbeRoot, `${name}-${caseIndex}.json`);
+        const environment = {
+          INDEXER_FINALITY_BLOCKS: finalityBlocks,
+          NODE_ENV: "test",
+        };
+        for (const environmentName of ["SystemRoot", "TEMP", "TMP", "WINDIR"]) {
+          const value = process.env[environmentName];
+          if (value) environment[environmentName] = value;
+        }
+        const result = spawnSync(process.execPath, [
+          scriptPath,
+          ...commonArgs,
+          `--env-log=${envLogPath}`,
+          `--chain-log=${chainLogPath}`,
+          `--out=${outPath}`,
+        ], {
+          cwd: process.cwd(),
+          env: environment,
+          encoding: "utf8",
+          timeout: 30_000,
+        });
+        signoffFinalityProbeStatuses.push(result.status);
+        signoffFinalityProbeResults[name].push(
+          result.status === 0
+            ? JSON.parse(readFileSync(outPath, "utf8")).contractEnv.finalityBlocksPositive
+            : null,
+        );
+      }
+    }
+    assert.deepEqual(
+      signoffFinalityProbeStatuses,
+      [0, 0, 0, 0, 0, 0],
+      "signoff finality probes must complete without external services",
+    );
+    assert.deepEqual(
+      signoffFinalityProbeResults.collector,
+      [true, false, false],
+      "signoff collector must accept only safe canonical positive finality block evidence",
+    );
+    assert.deepEqual(
+      signoffFinalityProbeResults.draft,
+      [true, false, false],
+      "signoff draft must accept only safe canonical positive finality block evidence",
+    );
+  } finally {
+    rmSync(signoffFinalityProbeRoot, { recursive: true, force: true });
+  }
+}
+
+export function runSignoffArtifactBoundaryEvidenceTests() {
+  const signoffArtifactProbeRoot = mkdtempSync(join(tmpdir(), "lore-signoff-artifact-"));
+  try {
+    const chainLogPath = join(signoffArtifactProbeRoot, "chain-comparison.log");
+    const oversizedEnvLogPath = join(signoffArtifactProbeRoot, "oversized-mainnet-env.log");
+    writeFileSync(
+      chainLogPath,
+      "Summary: direct-chain comparison jackpot safetyPool deposits rewards rebates resolve.\n",
+      "utf8",
+    );
+    writeFileSync(oversizedEnvLogPath, Buffer.alloc((512 * 1024) + 1, 0x61));
+    const artifactBoundaryCases = [
+      {
+        envLogPath: signoffArtifactProbeRoot,
+        expectedIssue: "--env-log must point to an existing redacted artifact",
+      },
+      {
+        envLogPath: oversizedEnvLogPath,
+        expectedIssue: "--env-log artifact is too large to validate safely",
+      },
+    ];
+    const signoffArtifactProbeStatuses = [];
+    const signoffArtifactProbeResults = { collector: [], draft: [] };
+    for (const [name, scriptPath, commonArgs] of [
+      [
+        "collector",
+        "scripts/collect-signoff-evidence.mjs",
+        ["--epochs=1", "--user=0x1111111111111111111111111111111111111111"],
+      ],
+      ["draft", "scripts/create-signoff-proof-draft.mjs", []],
+    ]) {
+      for (const [caseIndex, boundaryCase] of artifactBoundaryCases.entries()) {
+        const outPath = join(signoffArtifactProbeRoot, `${name}-${caseIndex}.json`);
+        const environment = { NODE_ENV: "test" };
+        for (const environmentName of ["SystemRoot", "TEMP", "TMP", "WINDIR"]) {
+          const value = process.env[environmentName];
+          if (value) environment[environmentName] = value;
+        }
+        const result = spawnSync(process.execPath, [
+          scriptPath,
+          ...commonArgs,
+          `--env-log=${boundaryCase.envLogPath}`,
+          `--chain-log=${chainLogPath}`,
+          `--out=${outPath}`,
+        ], {
+          cwd: process.cwd(),
+          env: environment,
+          encoding: "utf8",
+          timeout: 30_000,
+        });
+        signoffArtifactProbeStatuses.push(result.status);
+        signoffArtifactProbeResults[name].push(
+          `${result.stdout ?? ""}\n${result.stderr ?? ""}`.includes(boundaryCase.expectedIssue),
+        );
+      }
+    }
+    assert.deepEqual(
+      signoffArtifactProbeStatuses,
+      [1, 1, 1, 1],
+      "signoff artifact boundary probes must fail closed without external services",
+    );
+    assert.deepEqual(
+      signoffArtifactProbeResults.collector,
+      [true, true],
+      "signoff collector must reject directory and oversized evidence inputs",
+    );
+    assert.deepEqual(
+      signoffArtifactProbeResults.draft,
+      [true, true],
+      "signoff draft must reject directory and oversized evidence inputs",
+    );
+  } finally {
+    rmSync(signoffArtifactProbeRoot, { recursive: true, force: true });
   }
 }
 
@@ -1257,11 +1793,7 @@ export function runReleaseOperationsTests() {
     /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function parseInteger\(value\)[\s\S]*CANONICAL_NON_NEGATIVE_INTEGER_RE\.test\(text\)[\s\S]*const parsed = BigInt\(text\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*return Number\(parsed\)[\s\S]*requestedEpochs,/,
     "indexer evidence collector must publish the same canonical parsed epoch count it validates",
   );
-  assert.match(
-    liveRoundCanarySource,
-    /APP_NETWORK !== "sepolia" \|\| APP_CHAIN\.id !== 59141/,
-    "live canary must fail closed outside Linea Sepolia before transaction-capable setup",
-  );
+  runReleaseCliConfigurationBehaviorTests();
   assert.match(
     liveTestWalletConfigSource,
     /function readIsolatedEnvFile\(cwd, filename, label\)[\s\S]*lstatSync\(filePath\)[\s\S]*stat\.isSymbolicLink\(\) \|\| !stat\.isFile\(\)[\s\S]*openSync\(filePath, "r"\)[\s\S]*fstatSync\(fd\)[\s\S]*export function loadLiveTestExecutionWalletConfig[\s\S]*readIsolatedEnvFile\(cwd, "\.env\.live-test-wallets", "wallet"\)/,
@@ -1555,7 +2087,12 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     analyzeCanarySource,
-    /import \{ closeSync, existsSync, openSync, readFileSync, readSync, statSync \}[\s\S]*function regularFileStat\(filePath\)[\s\S]*stats\.isFile\(\) \? stats : null[\s\S]*function findMissingLocalArtifactRefs[\s\S]*regularFileStat\(resolvedArtifact\)[\s\S]*function artifactBackedEvidenceText[\s\S]*regularFileStat\(resolved\)/,
+    /function assertPreviewLogStats\(stats\)[\s\S]*!stats\.isFile\(\) \|\| stats\.isSymbolicLink\?\.\(\)[\s\S]*Preview dry-run log must be an ordinary non-symlink file[\s\S]*function previewLogPathFingerprint\(filePath\)[\s\S]*lstatSync\(filePath, \{ bigint: true \}\)[\s\S]*function previewLogDescriptorFingerprint\(fd\)[\s\S]*fstatSync\(fd, \{ bigint: true \}\)/,
+    "canary proof analyzer must reject unsafe Preview logs before reading their evidence",
+  );
+  assert.match(
+    analyzeCanarySource,
+    /function regularFileStat\(filePath\)[\s\S]*stats\.isFile\(\) \? stats : null[\s\S]*function findMissingLocalArtifactRefs[\s\S]*regularFileStat\(resolvedArtifact\)[\s\S]*function artifactBackedEvidenceText[\s\S]*regularFileStat\(resolved\)/,
     "canary proof analyzer must reject directory artifact references before reading manifest-backed evidence",
   );
   assert.match(
@@ -1623,8 +2160,8 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     liveRoundCanarySource,
-    /GENERIC_RPC_LABEL_RE[\s\S]*LIVE_CANARY_RPC_LABEL must be a concrete redacted RPC label/,
-    "live canary must fail before transactions when the redacted RPC label is missing or generic",
+    /import \{ requireV10RedactedRpcLabel \} from "\.\/v10-preview-consent-envelope\.mjs";[\s\S]*function getRpcLabel\(\)[\s\S]*requireV10RedactedRpcLabel\([\s\S]*"LIVE_CANARY_RPC_LABEL"/,
+    "live canary must validate a short non-credential RPC label before logs or transactions",
   );
   assert.match(
     liveRoundCanarySource,
@@ -1641,10 +2178,18 @@ export function runReleaseOperationsTests() {
     /BET_MODES\.has\(event\.mode\)/,
     "canary analyzer must not count preflight, resolve, wait, or summary events as bet transactions",
   );
-  assert.match(
-    readFileSync("scripts/canary-proof-profile.mjs", "utf8"),
-    /launch:[\s\S]*requiredRoles:\s*\["MANUAL",\s*"AUTOMINER_A",\s*"AUTOMINER_B"\][\s\S]*testnet:[\s\S]*requiredRoles:\s*\["MANUAL",\s*"AUTOMINER_A",\s*"AUTOMINER_B"\][\s\S]*"v10-matrix":(?![\s\S]*requiredRoles)/,
-    "launch/testnet canary proof must require MANUAL/AUTOMINER_A/AUTOMINER_B role coverage while keeping V10 matrix exempt",
+  const requiredCanaryRoles = ["MANUAL", "AUTOMINER_A", "AUTOMINER_B"];
+  assert.deepEqual(resolveCanaryProofProfile(" launch ").requiredRoles, requiredCanaryRoles);
+  assert.deepEqual(resolveCanaryProofProfile("TESTNET").requiredRoles, requiredCanaryRoles);
+  assert.equal(
+    Object.hasOwn(resolveCanaryProofProfile("v10-matrix"), "requiredRoles"),
+    false,
+    "V10 matrix proof must remain exempt from launch/testnet role coverage",
+  );
+  assert.throws(
+    () => resolveCanaryProofProfile("managed-soak"),
+    /--profile must be one of: launch, testnet, v10-matrix/,
+    "unknown canary proof profiles must fail closed",
   );
   assert.match(
     analyzeCanarySource,
@@ -1811,21 +2356,7 @@ export function runReleaseOperationsTests() {
     /randomness-decision[\s\S]*randomness-operator[\s\S]*randomness-signed-at[\s\S]*randomness-evidence[\s\S]*randomness-risk-accepted/,
     "signoff collector must support reproducible CLI-provided randomness acceptance evidence",
   );
-  assert.match(
-    collectSignoffSource,
-    /MAX_SIGNOFF_LOG_BYTES = 512 \* 1024[\s\S]*function regularFileStat\(filePath\)[\s\S]*statSync\(filePath\)[\s\S]*stat\.isFile\(\) \? stat : null[\s\S]*function readRequiredLog\(name, filePath\)[\s\S]*const stat = regularFileStat\(resolved\)[\s\S]*if \(!stat\)[\s\S]*stat\.size > MAX_SIGNOFF_LOG_BYTES[\s\S]*artifact is too large to validate safely[\s\S]*readFileSync\(resolved, "utf8"\)/,
-    "signoff collector must reject directory and oversized paths before reading evidence artifacts",
-  );
-  assert.match(
-    createSignoffDraftSource,
-    /MAX_SIGNOFF_LOG_BYTES = 512 \* 1024[\s\S]*function regularFileStat\(filePath\)[\s\S]*statSync\(filePath\)[\s\S]*stat\.isFile\(\) \? stat : null[\s\S]*function readRequiredLog\(name, filePath\)[\s\S]*const stat = regularFileStat\(resolved\)[\s\S]*if \(!stat\)[\s\S]*stat\.size > MAX_SIGNOFF_LOG_BYTES[\s\S]*artifact is too large to validate safely[\s\S]*readFileSync\(resolved, "utf8"\)/,
-    "signoff proof draft must reject directory and oversized paths before reading evidence artifacts",
-  );
-  assert.doesNotMatch(
-    `${collectSignoffSource}\n${createSignoffDraftSource}`,
-    /existsSync\(resolved\)|statSync\(resolved\)\.isFile\(\)/,
-    "signoff collector and draft generator must not bypass regularFileStat for resolved artifact paths",
-  );
+  runSignoffArtifactBoundaryEvidenceTests();
   assert.match(
     collectSignoffSource,
     /function requireChainComparisonLog[\s\S]*proof:chain[\s\S]*direct\[-\\s\]\?chain[\s\S]*jackpot, safetyPool, deposits, rewards, rebates, and resolve/,
@@ -1856,25 +2387,19 @@ export function runReleaseOperationsTests() {
     /protected-bets-required[\s\S]*NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS[\s\S]*protectedBetsRequired: isTruthyEnvValue/,
     "signoff collector must carry the V10 protected-bet flag into final signoff evidence",
   );
-  assert.match(
-    collectSignoffSource,
-    /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function isPositiveIntegerString\(value\)[\s\S]*\^\[1-9\]\\d\{0,15\}\$[\s\S]*const parsed = BigInt\(normalized\)[\s\S]*parsed <= MAX_SAFE_INTEGER_BIGINT[\s\S]*finalityBlocksPositive: isPositiveIntegerString\(finalityBlocks\)/,
-    "signoff collector must BigInt-bound finality block evidence before setting the finality-positive proof flag",
-  );
-  assert.match(
-    readFileSync("scripts/collect-proof-common.mjs", "utf8"),
-    /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*export function parsePositiveInteger\(value\)[\s\S]*\^\[1-9\]\\d\{0,15\}\$[\s\S]*const parsed = BigInt\(normalized\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*return Number\(parsed\)[\s\S]*export function isPositiveInteger\(value\)[\s\S]*parsePositiveInteger\(value\) !== null/,
-    "proof collectors must share parsed positive-integer evidence with boolean validation",
-  );
+  runSignoffFinalityEvidenceTests();
+  for (const [input, expected] of [["1", 1], [" 42 ", 42], [String(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER]]) {
+    assert.equal(parsePositiveInteger(input), expected);
+    assert.equal(isPositiveInteger(input), true);
+  }
+  for (const input of [null, "", "0", "01", "1.0", "1e3", "9999999999999999"]) {
+    assert.equal(parsePositiveInteger(input), null);
+    assert.equal(isPositiveInteger(input), false);
+  }
   assert.match(
     collectSignoffSource,
     /parsePositiveInteger[\s\S]*const requestedEpochs = parsePositiveInteger\(epochs\)[\s\S]*requireCondition\(requestedEpochs !== null[\s\S]*requestedEpochs,/,
     "signoff collector must publish the same canonical parsed --epochs value it validates",
-  );
-  assert.doesNotMatch(
-    `${readFileSync("scripts/collect-proof-common.mjs", "utf8")}\n${collectSignoffSource}`,
-    /function (?:parsePositiveInteger|isPositiveIntegerString)\(value\)[\s\S]*\^\[1-9\]\\d\*\$|const requestedEpochs = Number\(epochs\)/,
-    "signoff collector must not broadly coerce finality block or requested epoch evidence",
   );
   assert.match(
     readFileSync("scripts/check-proof-drafts.mjs", "utf8"),
@@ -1895,16 +2420,6 @@ export function runReleaseOperationsTests() {
     createSignoffDraftSource,
     /protected-bets-required[\s\S]*NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS[\s\S]*protectedBetsRequired: isTruthyEnvValue/,
     "signoff draft generator must carry the V10 protected-bet flag into final signoff evidence",
-  );
-  assert.match(
-    createSignoffDraftSource,
-    /MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*function isPositiveInteger\(value\)[\s\S]*\^\[1-9\]\\d\{0,15\}\$[\s\S]*const parsed = BigInt\(normalized\)[\s\S]*parsed <= MAX_SAFE_INTEGER_BIGINT[\s\S]*finalityBlocksPositive: isPositiveInteger\(finalityBlocks\)/,
-    "signoff draft generator must BigInt-bound finality block evidence before setting the finality-positive proof flag",
-  );
-  assert.doesNotMatch(
-    createSignoffDraftSource,
-    /function isPositiveInteger\(value\)[\s\S]*\^\[1-9\]\\d\*\$|function isPositiveInteger\(value\)[\s\S]*Number\(String\(value \?\? ""\)\.trim\(\)\)[\s\S]*parsed > 0/,
-    "signoff draft generator must not broadly coerce finality block evidence",
   );
   assert.match(
     readFileSync("scripts/check-signoff-proof.mjs", "utf8"),
@@ -1943,7 +2458,7 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     liveRoundCanarySource,
-    /MAX_RESOLVE_TRANSACTIONS = V10_MATRIX_ONLY \? TARGET_ROUNDS - 1 : null[\s\S]*submittedResolveTransactions >= MAX_RESOLVE_TRANSACTIONS[\s\S]*submittedResolveTransactions \+= 1/,
+    /MAX_RESOLVE_TRANSACTIONS = V10_MATRIX_ONLY \? TARGET_ROUNDS - 1 : null[\s\S]*const V10_RUNTIME_TRANSACTION_COUNTERS[\s\S]*nextKindCount > caps\[kind\][\s\S]*reserveV10RuntimeTransaction\("resolve"\);\s*const hash = await walletClient\.writeContract/,
     "V10 matrix mode must cap submitted resolve transactions before wallet writes",
   );
   assert.match(
@@ -3665,7 +4180,7 @@ export function runReleaseOperationsTests() {
       timeout: 30_000,
     });
     assert.equal(diskPreflightResult.status, 1, "unsafe disk capacity must stop before managed runtime startup");
-    assert.equal(readFileSync(join(soakPreflightDir, "status.json"), "utf8"), previousStatusText);
+    assert.equal(readBehaviorArtifactText(join(soakPreflightDir, "status.json")), previousStatusText);
     assert.equal(existsSync(join(soakPreflightDir, "supervisor.lock")), false);
     assert.equal(existsSync(join(soakPreflightDir, "server.log")), false);
     assert.equal(existsSync(join(soakPreflightDir, "canary.log")), false);
@@ -3684,16 +4199,7 @@ export function runReleaseOperationsTests() {
     /LIVE_TEST_ROLES \?\? "MANUAL,AUTOMINER_A,AUTOMINER_B"/,
     "live canary default role set must stay MANUAL/AUTOMINER_A/AUTOMINER_B unless explicitly overridden",
   );
-  assert.match(
-    liveRoundCanarySource,
-    /SAFE_ROLE_NAMES[\s\S]*MANUAL[\s\S]*AUTOMINER_A[\s\S]*AUTOMINER_B[\s\S]*AUTOMINER_C[\s\S]*LIVE_TEST_ROLES contains unsupported role/,
-    "live canary must reject unsupported role overrides before wallet lookup",
-  );
-  assert.match(
-    liveRoundCanarySource,
-    /ROLES\.length === 0[\s\S]*LIVE_TEST_ROLES must include at least one supported role[\s\S]*new Set\(ROLES\)\.size !== ROLES\.length[\s\S]*LIVE_TEST_ROLES contains duplicate roles/,
-    "live canary must reject empty and duplicate role overrides before wallet lookup",
-  );
+  runLiveCanaryConfigurationBehaviorTests();
   assert.match(
     liveRoundCanarySource,
     /LIVE_TEST_INJECT_RPC_FAILOVER[\s\S]*Injected RPC transport failure before dispatch[\s\S]*fallback\(transports\)/,
@@ -3728,16 +4234,6 @@ export function runReleaseOperationsTests() {
     liveRoundCanarySource,
     /LIVE_TEST_VERBOSE_TARGETS[\s\S]*contract=\$\{VERBOSE_TARGETS \? CONTRACT_ADDRESS : "configured"\}[\s\S]*token=\$\{VERBOSE_TARGETS \? LINEA_TOKEN_ADDRESS : "configured"\}/,
     "live canary must keep contract and token addresses behind an explicit opt-in for routine dry-runs",
-  );
-  assert.match(
-    liveRoundCanarySource,
-    /CANONICAL_INTEGER_ENV_RE[\s\S]*function parseIntegerEnv\(name: string, fallbackValue: number, min: number, max: number\)[\s\S]*CANONICAL_INTEGER_ENV_RE\.test\(raw\)[\s\S]*Number\.isSafeInteger\(parsed\)/,
-    "live canary integer env parsing must require canonical safe integers before dry-run or live setup",
-  );
-  assert.doesNotMatch(
-    liveRoundCanarySource,
-    /function parseIntegerEnv\(name: string, fallbackValue: number, min: number, max: number\)[\s\S]*const parsed = Number\(raw\);\s*if \(!Number\.isInteger\(parsed\)/,
-    "live canary integer env parsing must not accept exponent, fractional, or leading-zero values through broad Number(raw) coercion",
   );
   assert.match(
     liveRoundCanarySource,
@@ -3914,12 +4410,8 @@ export function runReleaseOperationsTests() {
     /const singleTx = useEpochBoundBets[\s\S]*const batchTx = useEpochBoundBets/,
     "wallet playtest must keep both V10 sends on the protected path",
   );
-  const liveCanaryDryRunPolicy = [
-    "const LIVE_EXECUTION_CONFIRMED =",
-    '  process.env.LIVE_TEST_EXECUTE === "1" && process.argv.includes("--execute-live");',
-    "const DRY_RUN = !LIVE_EXECUTION_CONFIRMED || (V10_MATRIX_ONLY && !V10_MATRIX_EXECUTE);",
-  ].join("\n");
-  const liveCanaryDryRunPolicyOffset = liveRoundCanarySource.indexOf(liveCanaryDryRunPolicy);
+  const liveCanaryDryRunPolicy = /const V10_MATRIX_EXECUTE\s*=\s*process\.argv\.includes\("--execute"\);[\s\S]*const LIVE_EXECUTION_CONFIRMED\s*=\s*process\.env\.LIVE_TEST_EXECUTE === "1" && process\.argv\.includes\("--execute-live"\);[\s\S]*const DRY_RUN\s*=\s*!LIVE_EXECUTION_CONFIRMED \|\| \(V10_MATRIX_ONLY && !V10_MATRIX_EXECUTE\);/;
+  const liveCanaryDryRunPolicyOffset = liveRoundCanarySource.search(liveCanaryDryRunPolicy);
   const liveCanaryMainStart = liveRoundCanarySource.indexOf("async function main() {");
   assert.ok(
     liveCanaryDryRunPolicyOffset >= 0 && liveCanaryDryRunPolicyOffset < liveCanaryMainStart,
@@ -3927,34 +4419,25 @@ export function runReleaseOperationsTests() {
   );
   assert.notEqual(liveCanaryMainStart, -1, "live canary must retain its entry point");
   const liveCanaryMainSource = liveRoundCanarySource.slice(liveCanaryMainStart);
-  const liveOnlyExecutionBranch = [
-    "if (!DRY_RUN) {",
-    "    // The public file is re-read while loading the signing keys so a",
-    "    // post-Preview address-set change fails closed after the recorded admission.",
-    "    executionWalletConfig = loadExecutionWalletAdmission({",
-    "      cwd: process.cwd(),",
-    "      environment: process.env,",
-    "      expectedWalletSetSha256: publicWalletConfig.walletSetSha256,",
-    "      publicConfig: publicWalletConfig,",
-    "    }) as ExecutionWalletAdmission;",
-    "    wallets = loadWallets(executionWalletConfig);",
-    "    console.log(",
-    '      `[live-canary] executionWalletBinding walletSetSha256=${executionWalletConfig.walletSetSha256} ` +',
-    '        "signingMaterialLoaded=true signatureRequested=false",',
-    "    );",
-    "  }",
-  ].join("\n");
+  const liveOnlyExecutionBranch = /if \(!DRY_RUN\) \{[\s\S]*executionWalletConfig = loadExecutionWalletAdmission\(\{[\s\S]*expectedWalletSetSha256: publicWalletConfig\.walletSetSha256,[\s\S]*publicConfig: publicWalletConfig,[\s\S]*\}\) as ExecutionWalletAdmission;[\s\S]*wallets = loadWallets\(executionWalletConfig\);/;
   const canaryMainOffsets = Object.fromEntries([
     ["dryRunSigningCheck", liveCanaryMainSource.indexOf("const signingMaterialLoaded = hasSigningMaterialInEnvironment();")],
-    ["dryRunSigningRefusal", liveCanaryMainSource.indexOf('if (DRY_RUN && signingMaterialLoaded) {\n    throw new Error("Dry-run canary refuses signing material");\n  }')],
+    ["dryRunSigningRefusal", liveCanaryMainSource.search(/if \(DRY_RUN && signingMaterialLoaded\) \{\s*throw new Error\("Dry-run canary refuses signing material"\);\s*\}/)],
     ["publicWalletAdmission", liveCanaryMainSource.indexOf("const publicWalletConfig = loadLiveTestPublicWalletConfig({")],
+    ["freshPreviewBinding", liveCanaryMainSource.search(/const previewBinding = DRY_RUN \|\| !V10_MATRIX_ONLY\s*\? null\s*:\s*assertFreshPreviewBinding\(publicWalletConfig\);/)],
+    ["singleFlightLease", liveCanaryMainSource.indexOf("executionLease = acquireValidatedV10CanaryExecutionLease({")],
+    ["oneShotPreviewConsent", liveCanaryMainSource.indexOf("consumeValidatedPreviewConsent({")],
+    ["rpcSetup", liveCanaryMainSource.indexOf("const readRpcUrls = getStableLineaReadRpcs(")],
     ["runtimeProof", liveCanaryMainSource.indexOf("const runtimeIdentity = await assertV10RuntimeIdentity({")],
     ["publicOnlyWallets", liveCanaryMainSource.indexOf("const admissionWallets = loadDryRunWallets(publicWalletConfig);")],
-    ["pinnedAdmission", liveCanaryMainSource.indexOf("writeCanaryAdmission({\n    logPath,\n    previewBinding,\n    runtimeIdentity,\n    deploymentManifest,\n    plannedSpendByRole,\n    walletSetSha256: publicWalletConfig.walletSetSha256,\n    wallets: admissionWallets,\n  });")],
-    ["liveOnlyExecutionBranch", liveCanaryMainSource.indexOf(liveOnlyExecutionBranch)],
+    ["pinnedAdmission", liveCanaryMainSource.search(/writeCanaryAdmission\(\{[\s\S]*logPath,[\s\S]*previewBinding,[\s\S]*runtimeIdentity,[\s\S]*deploymentManifest,[\s\S]*plannedSpendByRole,[\s\S]*walletSetSha256: publicWalletConfig\.walletSetSha256,[\s\S]*wallets: admissionWallets,[\s\S]*\}\);/)],
+    ["liveOnlyExecutionBranch", liveCanaryMainSource.search(liveOnlyExecutionBranch)],
     ["tokenRead", liveCanaryMainSource.indexOf("const contractToken = await publicClient.readContract({")],
     ["preflight", liveCanaryMainSource.indexOf("await runPreflight(logPath, publicClient, wallets, plannedSpendByRole);")],
     ["dryRunReturn", liveCanaryMainSource.indexOf("if (DRY_RUN) return;")],
+    ["freshPreviewBeforeWrites", liveCanaryMainSource.indexOf("const previewBindingBeforeWrites = assertFreshPreviewBinding(publicWalletConfigBeforeWrites);")],
+    ["firstWalletWrite", liveCanaryMainSource.indexOf("await ensureAllowance({")],
+    ["leaseRelease", liveCanaryMainSource.indexOf("releaseValidatedV10CanaryExecutionLease(executionLease)")],
   ]);
   for (const [name, offset] of Object.entries(canaryMainOffsets)) {
     assert.ok(offset >= 0, `live canary main is missing ${name} security anchor`);
@@ -3963,14 +4446,36 @@ export function runReleaseOperationsTests() {
   assert.ok(
     canaryMainOffsets.dryRunSigningCheck < canaryMainOffsets.dryRunSigningRefusal
       && canaryMainOffsets.dryRunSigningRefusal < canaryMainOffsets.publicWalletAdmission
-      && canaryMainOffsets.publicWalletAdmission < canaryMainOffsets.runtimeProof
+      && canaryMainOffsets.publicWalletAdmission < canaryMainOffsets.freshPreviewBinding
+      && canaryMainOffsets.freshPreviewBinding < canaryMainOffsets.singleFlightLease
+      && canaryMainOffsets.singleFlightLease < canaryMainOffsets.oneShotPreviewConsent
+      && canaryMainOffsets.oneShotPreviewConsent < canaryMainOffsets.rpcSetup
+      && canaryMainOffsets.rpcSetup < canaryMainOffsets.runtimeProof
       && canaryMainOffsets.runtimeProof < canaryMainOffsets.publicOnlyWallets
       && canaryMainOffsets.publicOnlyWallets < canaryMainOffsets.pinnedAdmission
       && canaryMainOffsets.pinnedAdmission < canaryMainOffsets.liveOnlyExecutionBranch
       && canaryMainOffsets.liveOnlyExecutionBranch < canaryMainOffsets.tokenRead
       && canaryMainOffsets.tokenRead < canaryMainOffsets.preflight
-      && canaryMainOffsets.preflight < canaryMainOffsets.dryRunReturn,
-    "live canary must reject dry-run signing material and admit runtime-verified pinned public wallets before execution keys, token reads, or preflight",
+      && canaryMainOffsets.preflight < canaryMainOffsets.dryRunReturn
+      && canaryMainOffsets.dryRunReturn < canaryMainOffsets.freshPreviewBeforeWrites
+      && canaryMainOffsets.freshPreviewBeforeWrites < canaryMainOffsets.firstWalletWrite
+      && canaryMainOffsets.firstWalletWrite < canaryMainOffsets.leaseRelease,
+    "live canary must acquire its single-flight lease and consume fresh consent before RPC, then revalidate the exact Preview before wallet writes and release the lease in finally",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /deploymentManifest\.deploymentManifestSha256 !== previewBinding\.deploymentManifestSha256[\s\S]*deploymentManifest\.compilationManifestSha256 !== previewBinding\.compilationManifestSha256[\s\S]*deploymentManifest\.normalizedExecutableRuntimeSha256 !== previewBinding\.runtimeSha256[\s\S]*deploymentManifest\.sourceArtifactGitSha !== previewBinding\.sourceArtifactGitSha[\s\S]*runtimeIdentity\.manifestDigest !== previewBinding\.compilationManifestSha256[\s\S]*runtimeIdentity\.normalizedRuntimeSha256 !== previewBinding\.runtimeSha256/,
+    "live canary must compare late runtime and deployment provenance with the exact fresh Preview binding",
+  );
+  assert.match(
+    liveCanaryMainSource,
+    /try \{[\s\S]*executionLease = acquireValidatedV10CanaryExecutionLease\([\s\S]*consumeValidatedPreviewConsent\([\s\S]*\} finally \{\s*if \(executionLease\) releaseValidatedV10CanaryExecutionLease\(executionLease\);\s*\}/,
+    "live canary must hold the repository-local execution lease across the complete controlled run",
+  );
+  assert.match(
+    liveRoundCanarySource,
+    /execution === "live" && V10_MATRIX_ONLY && !params\.previewBinding[\s\S]*profile: V10_MATRIX_ONLY \? "v10-matrix" : "managed-soak"/,
+    "the V10 Preview contract must not disable the separate managed-soak profile",
   );
   assert.match(
     liveRoundCanarySource,
@@ -4059,21 +4564,6 @@ export function runReleaseOperationsTests() {
     v10BenchmarkSource,
     /BEHAVIOR_ONLY_TIMEOUT_MS[\s\S]*withBenchmarkTimeout[\s\S]*behavior-benchmark-timeout/,
     "V10 behavior benchmark must fail closed instead of hanging indefinitely",
-  );
-  assert.match(
-    v10BenchmarkSource,
-    /DECIMAL_INTEGER_RE[\s\S]*MAX_SAFE_INTEGER_BIGINT = BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*BEHAVIOR_ONLY_TIMEOUT_MS = parsePositiveIntegerEnv\("V10_BEHAVIOR_TIMEOUT_MS", 90_000, 1_000, 900_000\)[\s\S]*function parsePositiveIntegerEnv\(name: string, fallback: number, min: number, max: number\): number[\s\S]*function parsePositiveIntegerValue\(name: string, raw: string, min: number, max: number\): number[\s\S]*const parsed = BigInt\(raw\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*const numeric = Number\(parsed\)[\s\S]*Number\.isSafeInteger\(numeric\)/,
-    "V10 behavior benchmark timeout env must be canonical decimal and range checked before the timeout guard",
-  );
-  assert.match(
-    v10BenchmarkSource,
-    /function parsePositiveIntegerValue\(name: string, raw: string, min: number, max: number\): number[\s\S]*must be a canonical decimal integer[\s\S]*const parsed = BigInt\(raw\)[\s\S]*parsed > MAX_SAFE_INTEGER_BIGINT[\s\S]*const numeric = Number\(parsed\)[\s\S]*Number\.isSafeInteger\(numeric\)[\s\S]*v10RunsArg !== undefined[\s\S]*parsePositiveIntegerValue\("--v10-runs", v10RunsArg, 1, 1_000_000\)/,
-    "V10 gas benchmark optimizer run CLI override must reject partial, malformed, and out-of-range values",
-  );
-  assert.doesNotMatch(
-    v10BenchmarkSource,
-    /behaviorOnlyTimeoutOverride|Number\.parseInt\(process\.env\.V10_BEHAVIOR_TIMEOUT_MS|Number\.parseInt\(v10RunsArg|const parsed = Number\(raw\)/,
-    "V10 behavior benchmark timeout env and optimizer run override must not use partial parseInt coercion",
   );
   assert.match(
     v10BenchmarkSource,

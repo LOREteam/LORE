@@ -4,9 +4,12 @@ import { readFileSync } from "node:fs";
 import * as rewardScannerModule from "../app/hooks/useRewardScanner.ts";
 import * as rewardScanPolicyModule from "../app/lib/rewardScanPolicy.ts";
 import * as claimTransactionIntentModule from "../app/lib/claimTransactionIntent.ts";
+import * as constantsModule from "../app/lib/constants.ts";
 
 const rewardScanPolicy = rewardScanPolicyModule.default ?? rewardScanPolicyModule;
 const claimTransactionIntent = claimTransactionIntentModule.default ?? claimTransactionIntentModule;
+const constants = constantsModule.default ?? constantsModule;
+const { APP_CHAIN_ID, CONTRACT_ADDRESS, TX_RECEIPT_TIMEOUT_MS } = constants;
 
 function assertRewardScannerPresentation() {
   const result = spawnSync(process.execPath, ["node_modules/tsx/dist/cli.mjs", "scripts/test-reward-scanner-presentation.tsx"], {
@@ -345,8 +348,264 @@ function assertRewardSelectionPolicy(candidate) {
   }), []);
 }
 
+function assertRewardScannerExecutableSeams(rewardScanner) {
+  const preferredAddress = "0x52908400098527886E0F7030069857D2E4169EE7";
+  const connectedAddress = "0xde709f2102306220921060314715629080e2fb77";
+  assert.deepEqual(
+    [
+      rewardScanner.resolveRewardScannerAddress(preferredAddress.toLowerCase(), connectedAddress),
+      rewardScanner.resolveRewardScannerAddress(null, connectedAddress),
+      rewardScanner.resolveRewardScannerAddress("not-an-address", connectedAddress),
+      rewardScanner.resolveRewardScannerAddress(undefined, undefined),
+    ],
+    [preferredAddress, connectedAddress, undefined, undefined],
+    "reward scanning must prefer and checksum the embedded wallet, while invalid preferred actors fail closed",
+  );
+
+  const wins = [{ epoch: "7", amountWei: "11" }];
+  assert.deepEqual(
+    rewardScanner.createInvalidatedRewardScanCacheEnvelope({
+      wins,
+      lastScannedEpoch: "100",
+      deepestScannedEpoch: "1",
+      verifiedAt: 1_999_000,
+    }, 2_000_000),
+    {
+      cacheVersion: 3,
+      verifiedAt: 1_999_000,
+      savedAt: 1_999_000,
+      invalidatedAt: 2_000_000,
+      lastScannedEpoch: "100",
+      deepestScannedEpoch: "1",
+      wins,
+    },
+    "claim invalidation must retain verification provenance while recording a distinct invalidation time",
+  );
+
+  const completeScanInput = {
+    potentialWins: [{ id: 9n, rewardPool: 100n }],
+    betResults: [{ status: "success", result: 5n }],
+    tilePoolResults: [{ status: "success", result: 10n }],
+    resolvedAtResults: [{ status: "success", result: 10n }],
+    chainTimestamp: 20n,
+  };
+  assert.deepEqual(
+    rewardScanner.collectCompleteOpenRewardScanWins(completeScanInput),
+    [{ epoch: "9", amountWei: "50" }],
+    "complete aligned multicalls must flow through the claim-window reward policy",
+  );
+  for (const invalidInput of [
+    { betResults: [] },
+    { tilePoolResults: [{ status: "failure", error: new Error("RPC") }] },
+    { resolvedAtResults: [{ status: "success", result: "not-a-timestamp" }] },
+  ]) {
+    assert.throws(
+      () => rewardScanner.collectCompleteOpenRewardScanWins({ ...completeScanInput, ...invalidInput }),
+      rewardScanner.RewardScanIncompleteError,
+      "incomplete, failed, or mistyped aligned multicalls must fail before reward selection",
+    );
+  }
+}
+
+function runRewardScannerBehaviorProbe(scenario) {
+  const childSource = String.raw`
+import assert from "node:assert/strict";
+import { mock } from "node:test";
+import { pathToFileURL } from "node:url";
+
+class HookMachine {
+  constructor(stateOverrides = {}) { this.cursor = 0; this.slots = []; this.stateOverrides = stateOverrides; }
+  render(factory) { this.cursor = 0; activeMachine = this; try { return factory(); } finally { activeMachine = null; } }
+  state(initial) {
+    const index = this.cursor++;
+    if (!(index in this.slots)) this.slots[index] = index in this.stateOverrides ? this.stateOverrides[index] : (typeof initial === "function" ? initial() : initial);
+    return [this.slots[index], (next) => { this.slots[index] = typeof next === "function" ? next(this.slots[index]) : next; }];
+  }
+  ref(initial) { const index = this.cursor++; if (!(index in this.slots)) this.slots[index] = { current: initial }; return this.slots[index]; }
+  memo(factory) { this.cursor += 1; return factory(); }
+  callback(value) { this.cursor += 1; return value; }
+  effect(effect) { this.cursor += 1; effect(); }
+}
+let activeMachine = null;
+const machine = () => { assert.ok(activeMachine, "hook primitive outside HookMachine"); return activeMachine; };
+const useState = (value) => machine().state(value);
+const useRef = (value) => machine().ref(value);
+const useMemo = (factory) => machine().memo(factory);
+const useCallback = (value) => machine().callback(value);
+const useEffect = (effect) => machine().effect(effect);
+
+let currentAccount = "0x1111111111111111111111111111111111111111";
+let receiptMode = ${JSON.stringify(scenario === "cache-before-receipt" || scenario === "receipt-intent-pending" ? "pending" : "confirmed")};
+let sendCount = 0;
+let sentTransactions = [];
+let fetchCalls = 0;
+let receiptCalls = [];
+let notifications = [];
+let simulateStarted;
+let releaseSimulation;
+const simulationGate = new Promise((resolve) => { simulateStarted = resolve; });
+const simulationRelease = new Promise((resolve) => { releaseSimulation = resolve; });
+let releaseSend;
+const sendGate = new Promise((resolve) => { releaseSend = resolve; });
+const HASH = "0x" + "a".repeat(64);
+const OTHER_HASH = "0x" + "b".repeat(64);
+const actor = currentAccount.toLowerCase();
+const storageValues = new Map();
+globalThis.fetch = () => { fetchCalls += 1; throw new Error("fetch poison"); };
+globalThis.localStorage = {
+  getItem: (key) => storageValues.get(key) ?? null,
+  setItem: (key, value) => storageValues.set(key, String(value)),
+  removeItem: (key) => storageValues.delete(key),
+};
+globalThis.window = { setTimeout: () => 1, clearTimeout: () => undefined };
+
+const publicClient = {
+  estimateGas: async () => 100_000n,
+  simulateContract: async () => {
+    if (${JSON.stringify(scenario)} === "wallet-change") {
+      simulateStarted();
+      await simulationRelease;
+    }
+  },
+  multicall: async ({ contracts }) => contracts.map(() => ({ status: "success", result: true })),
+};
+
+class ClaimTransactionIntentError extends Error {}
+const moduleUrl = (relativePath) => pathToFileURL(process.cwd() + "/" + relativePath).href;
+mock.module("react", { namedExports: { useState, useRef, useMemo, useCallback, useEffect } });
+mock.module("wagmi", { namedExports: {
+  useAccount: () => ({ address: currentAccount }),
+  usePublicClient: () => publicClient,
+} });
+mock.module(moduleUrl("app/lib/logger.ts"), { namedExports: { log: { warn() {}, debug() {}, info() {}, error() {} } } });
+mock.module(moduleUrl("app/lib/eoaNonceLock.ts"), { namedExports: {
+  acquireEoaNonceLockLease: async () => ({ release() {} }),
+} });
+mock.module(moduleUrl("app/hooks/useMining.shared.ts"), { namedExports: { isAmbiguousPendingTxError: () => false } });
+mock.module(moduleUrl("app/lib/claimTransactionIntent.ts"), { namedExports: {
+  ClaimTransactionIntentError,
+  waitForClaimTransactionReceiptAgreement: async (intent, hash, timeout) => {
+    receiptCalls.push({ intent, hash, timeout, storage: storageValues.get("lore:reward-scan:v3:" + actor) ?? null });
+    if (receiptMode === "pending") return "pending";
+    return "confirmed";
+  },
+} });
+
+const imported = await import(moduleUrl("app/hooks/useRewardScanner.ts") + "?reward-scanner-behavior-" + ${JSON.stringify(scenario)});
+const useRewardScanner = imported.useRewardScanner ?? imported.default?.useRewardScanner ?? imported.default;
+const wins = ${JSON.stringify(scenario === "batch-explorer")}
+  ? Array.from({ length: 129 }, (_, index) => ({ epoch: String(index + 1), amountWei: "11" }))
+  : [{ epoch: "7", amountWei: "11" }, { epoch: "8", amountWei: "12" }];
+const initialState = ${JSON.stringify(
+    scenario === "batch-explorer"
+      || scenario === "single-lock"
+      || scenario === "cache-before-receipt"
+      || scenario === "cache-after-confirmation"
+      ? "wins"
+      : "empty",
+  )};
+const hookMachine = new HookMachine({ 1: initialState === "wins" ? wins : [] });
+const render = () => hookMachine.render(() => useRewardScanner(100n, {
+  enabled: false,
+  isPageVisible: false,
+  preferredAddress: currentAccount,
+  sendTransactionSilent: async (transaction) => {
+    sendCount += 1;
+    sentTransactions.push({
+      to: transaction.to,
+      data: transaction.data ?? null,
+      value: transaction.value?.toString() ?? null,
+      gas: transaction.gas?.toString() ?? null,
+    });
+    if (${JSON.stringify(scenario)} === "single-lock") await sendGate;
+    return sendCount === 1 ? HASH : OTHER_HASH;
+  },
+  onNotify: (message, tone) => notifications.push({ message, tone }),
+}));
+let hook = render();
+
+if (${JSON.stringify(scenario)} === "single-explorer" || ${JSON.stringify(scenario)} === "receipt-intent-pending" || ${JSON.stringify(scenario)} === "preparing-copy" || ${JSON.stringify(scenario)} === "cache-before-receipt" || ${JSON.stringify(scenario)} === "cache-after-confirmation") {
+  if (${JSON.stringify(scenario)} === "cache-before-receipt" || ${JSON.stringify(scenario)} === "cache-after-confirmation") {
+    storageValues.set("lore:reward-scan:v3:" + actor, JSON.stringify({ cacheVersion: 3, verifiedAt: 1_000, savedAt: 1_000, lastScannedEpoch: "100", deepestScannedEpoch: "1", wins }));
+  }
+  if (${JSON.stringify(scenario)} === "cache-after-confirmation") {
+    await hook.claimReward("7");
+    const saved = JSON.parse(storageValues.get("lore:reward-scan:v3:" + actor));
+    process.stdout.write(JSON.stringify({ sendCount, sentTransactions, fetchCalls, receiptCalls, notifications, cache: saved }));
+  } else {
+    const claim = hook.claimReward("7");
+    if (${JSON.stringify(scenario)} === "wallet-change") await simulationGate;
+    await claim;
+    process.stdout.write(JSON.stringify({ sendCount, sentTransactions, fetchCalls, receiptCalls, notifications, cacheAtReceipt: receiptCalls[0]?.storage ?? null }));
+  }
+} else if (${JSON.stringify(scenario)} === "batch-explorer") {
+  await hook.claimAll();
+  process.stdout.write(JSON.stringify({ sendCount, sentTransactions, fetchCalls, receiptCalls, notifications, unclaimedWins: hook.unclaimedWins }));
+} else if (${JSON.stringify(scenario)} === "single-lock") {
+  const originalSend = hook.claimReward;
+  const first = originalSend("7");
+  await Promise.resolve();
+  const second = originalSend("7");
+  releaseSend?.();
+  await Promise.all([first, second]);
+  process.stdout.write(JSON.stringify({ sendCount, sentTransactions, fetchCalls, receiptCalls, notifications }));
+} else if (${JSON.stringify(scenario)} === "wallet-change") {
+  const claim = hook.claimReward("7");
+  await simulationGate;
+  currentAccount = "0x2222222222222222222222222222222222222222";
+  hook = render();
+  releaseSimulation();
+  await claim;
+  hook = render();
+  process.stdout.write(JSON.stringify({ sendCount, sentTransactions, fetchCalls, receiptCalls, notifications, postSwitchState: hook.rewardScanState }));
+}
+`;
+  const originalFetch = globalThis.fetch;
+  const originalMarker = process.env.LORE_REWARD_SCANNER_PROBE_MARKER;
+  process.env.LORE_REWARD_SCANNER_PROBE_MARKER = "parent-preserved";
+  const parentFetch = () => { throw new Error("parent fetch poison"); };
+  globalThis.fetch = parentFetch;
+  try {
+    const result = spawnSync(process.execPath, [
+      "--experimental-test-module-mocks",
+      "--import", "tsx",
+      "--input-type=module",
+      "--eval", childSource,
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env },
+      windowsHide: true,
+      timeout: 30_000,
+      maxBuffer: 1_048_576,
+    });
+    if (result.error !== undefined) {
+      throw new Error(`${scenario} behavior probe failed to launch: ${result.error?.message ?? "unknown error"}`);
+    }
+    if (result.signal !== null) {
+      throw new Error(`${scenario} behavior probe terminated by ${result.signal ?? "unknown signal"}`);
+    }
+    if (result.status !== 0) {
+      throw new Error(`${scenario} behavior probe failed:\n${result.stderr || result.stdout}`);
+    }
+    const lines = String(result.stdout).trim().split(/\r?\n/);
+    return JSON.parse(lines.at(-1));
+  } finally {
+    if (globalThis.fetch !== parentFetch) {
+      throw new Error("parent fetch identity changed during child probe");
+    }
+    if (process.env.LORE_REWARD_SCANNER_PROBE_MARKER !== "parent-preserved") {
+      throw new Error("parent environment changed during child probe");
+    }
+    globalThis.fetch = originalFetch;
+    if (originalMarker === undefined) delete process.env.LORE_REWARD_SCANNER_PROBE_MARKER;
+    else process.env.LORE_REWARD_SCANNER_PROBE_MARKER = originalMarker;
+  }
+}
+
 export async function runRewardScannerTests() {
   const rewardScanner = rewardScannerModule.default ?? rewardScannerModule;
+  assertRewardScannerExecutableSeams(rewardScanner);
   assertClaimTransactionIntentPolicy(claimTransactionIntent.assertClaimTransactionMatchesIntent);
   await assertClaimReceiptQuorumAndFinalityPolicy(claimTransactionIntent.waitForClaimTransactionReceiptAgreement);
   const rewardScanNow = 1_000_000;
@@ -609,22 +868,55 @@ export async function runRewardScannerTests() {
   );
 
   const rewardScannerSource = readFileSync("app/hooks/useRewardScanner.ts", "utf8");
-  assert.match(
-    rewardScannerSource,
-    /requireCompleteRewardScanMulticallResults\(betResults, potentialWins\.length, "userBets"\)[\s\S]*wins\.push\(\.\.\.collectOpenRewardScanWins\(\{[\s\S]*potentialWins,[\s\S]*betResults: completeBetResults,[\s\S]*tilePoolResults: completeTilePoolResults,[\s\S]*resolvedAtResults: completeResolvedAtResults,[\s\S]*chainTimestamp,[\s\S]*\}\)\)/,
-    "automatic reward scan must reject incomplete multicalls before binding aligned results to the claim-window policy",
+  const primaryHash = "0x" + "a".repeat(64);
+  const secondaryHash = "0x" + "b".repeat(64);
+  const expectedActor = "0x1111111111111111111111111111111111111111";
+  const singleExplorerProbe = runRewardScannerBehaviorProbe("single-explorer");
+  assert.ok(
+    singleExplorerProbe.sendCount === 1
+      && singleExplorerProbe.fetchCalls === 0
+      && singleExplorerProbe.receiptCalls.length === 1
+      && singleExplorerProbe.sentTransactions[0]?.to === CONTRACT_ADDRESS
+      && singleExplorerProbe.notifications.some(({ message, tone }) => tone === "success" && message.includes("https://") && message.includes(primaryHash)),
+    "single reward claims must execute the real hook path and preserve explorer-linked confirmation",
   );
-  assert.match(rewardScannerSource, /getExplorerTxUrl/, "single reward claim notifications must include explorer links when a tx hash is available");
-  assert.match(
-    rewardScannerSource,
-    /const waitReceipt = useCallback[\s\S]*waitForClaimTransactionReceiptAgreement\(intent, hash, TX_RECEIPT_TIMEOUT_MS\)/,
-    "reward claims must remain pending until shared quorum and finality confirmation succeeds",
+  const receiptIntentProbe = runRewardScannerBehaviorProbe("receipt-intent-pending");
+  const receiptIntentCall = receiptIntentProbe.receiptCalls[0];
+  assert.deepEqual(
+    {
+      sendCount: receiptIntentProbe.sendCount,
+      fetchCalls: receiptIntentProbe.fetchCalls,
+      receiptCallCount: receiptIntentProbe.receiptCalls.length,
+      hash: receiptIntentCall?.hash,
+      timeout: receiptIntentCall?.timeout,
+      actor: receiptIntentCall?.intent?.actor,
+      chainId: receiptIntentCall?.intent?.chainId,
+      contract: receiptIntentCall?.intent?.contract,
+      contractMatchesSent: receiptIntentCall?.intent?.contract === receiptIntentProbe.sentTransactions[0]?.to,
+      calldataMatchesSent: receiptIntentCall?.intent?.calldata === receiptIntentProbe.sentTransactions[0]?.data,
+      pendingNotification: receiptIntentProbe.notifications.some(
+        ({ message, tone }) => tone === "info" && message.includes("still pending") && message.includes(primaryHash),
+      ),
+    },
+    {
+      sendCount: 1,
+      fetchCalls: 0,
+      receiptCallCount: 1,
+      hash: primaryHash,
+      timeout: TX_RECEIPT_TIMEOUT_MS,
+      actor: expectedActor,
+      chainId: APP_CHAIN_ID,
+      contract: CONTRACT_ADDRESS,
+      contractMatchesSent: true,
+      calldataMatchesSent: true,
+      pendingNotification: true,
+    },
+    "reward claims must pass the exact sent intent to shared receipt agreement and preserve uncertain confirmation as pending",
   );
-  assert.doesNotMatch(rewardScannerSource, /Preparing reward claims? from the Privy wallet/, "reward claim preparation toasts must stay short and avoid redundant Privy-wallet wording");
-  assert.match(
-    rewardScannerSource,
-    /preferredAddress[\s\S]*const \{ address: connectedAddress \} = useAccount\(\)[\s\S]*getAddress\(candidate\)/,
-    "reward scanning and claiming must prefer the canonical embedded wallet actor over the connected wallet",
+  assert.deepEqual(
+    runRewardScannerBehaviorProbe("preparing-copy").notifications[0],
+    { message: "Preparing reward claim.", tone: "info" },
+    "reward claim preparation toasts must stay short and avoid redundant Privy-wallet wording",
   );
   const lineaOreHubRuntimeSource = readFileSync("app/hooks/useLineaOreHubRuntime.ts", "utf8");
   assert.match(
@@ -632,29 +924,114 @@ export async function runRewardScannerTests() {
     /useRewardScanner[\s\S]*enabled: activeTab === "hub" && Boolean\(embeddedWalletAddress\)[\s\S]*preferredAddress: embeddedWalletAddress[\s\S]*sendTransactionSilent: miningSendTransactionSilent/,
     "hub rewards must scan the same embedded wallet that submits claims",
   );
-  assert.match(rewardScannerSource, /lastRewardClaimTxHash/, "batch reward claim notifications must keep the latest tx hash for explorer links");
+  const batchExplorerProbe = runRewardScannerBehaviorProbe("batch-explorer");
+  const batchSuccessNotification = batchExplorerProbe.notifications.find(({ tone }) => tone === "success")?.message ?? "";
+  assert.deepEqual(
+    {
+      sendCount: batchExplorerProbe.sendCount,
+      fetchCalls: batchExplorerProbe.fetchCalls,
+      receiptHashes: batchExplorerProbe.receiptCalls.map(({ hash }) => hash),
+      linksLatestHash: batchSuccessNotification.includes(secondaryHash),
+      linksFirstHash: batchSuccessNotification.includes(primaryHash),
+    },
+    {
+      sendCount: 2,
+      fetchCalls: 0,
+      receiptHashes: [primaryHash, secondaryHash],
+      linksLatestHash: true,
+      linksFirstHash: false,
+    },
+    "batch reward claim notifications must keep the latest tx hash for explorer links",
+  );
   assert.match(
     rewardScannerSource,
     /const claimReward[\s\S]*let submittedHash: `0x\$\{string\}` \| null = null;[\s\S]*const hash = await silentSend\(\{ to: CONTRACT_ADDRESS, data, gas \}\);[\s\S]*submittedHash = hash;[\s\S]*submittedHash && err instanceof ClaimTransactionIntentError[\s\S]*Claim transaction submitted and is still pending\. Rewards will refresh after confirmation\.[\s\S]*submittedHash/,
     "single reward claims must preserve the submitted hash as pending when post-send intent verification cannot be confirmed",
   );
   assertRewardScannerPresentation();
-  assert.match(
-    rewardScannerSource,
-    /const claimInFlightRef = useRef\(false\)[\s\S]*const claimReward[\s\S]*if \(claimInFlightRef\.current\) return;[\s\S]*claimInFlightRef\.current = true;[\s\S]*const claimAll[\s\S]*claimInFlightRef\.current\) return;[\s\S]*claimInFlightRef\.current = true;/,
-    "reward claims must synchronously prevent overlapping single and batch submissions",
+  const singleLockProbe = runRewardScannerBehaviorProbe("single-lock");
+  assert.deepEqual(
+    {
+      sendCount: singleLockProbe.sendCount,
+      receiptCallCount: singleLockProbe.receiptCalls.length,
+      fetchCalls: singleLockProbe.fetchCalls,
+    },
+    { sendCount: 1, receiptCallCount: 1, fetchCalls: 0 },
+    "reward claims must synchronously prevent overlapping submissions",
   );
-  assert.match(rewardScannerSource, /activeClaimAddressRef\.current = address\?\.toLowerCase\(\)[\s\S]*const claimActor = address\.toLowerCase\(\)[\s\S]*activeClaimAddressRef\.current !== claimActor[\s\S]*claimActorChanged/, "reward claims must stop sends and stale state updates when the active wallet changes");
-  assert.match(rewardScannerSource, /function saveInvalidatedRewardScanCache[\s\S]*verifiedAt: number,[\s\S]*verifiedAt,[\s\S]*invalidatedAt: Date\.now\(\)/, "claim invalidation must retain the prior verification timestamp instead of advancing it");
+  const walletChangeProbe = runRewardScannerBehaviorProbe("wallet-change");
+  assert.deepEqual(
+    {
+      sendCount: walletChangeProbe.sendCount,
+      receiptCallCount: walletChangeProbe.receiptCalls.length,
+      fetchCalls: walletChangeProbe.fetchCalls,
+      postSwitchState: walletChangeProbe.postSwitchState,
+    },
+    {
+      sendCount: 0,
+      receiptCallCount: 0,
+      fetchCalls: 0,
+      postSwitchState: {
+        status: "idle",
+        walletAddress: "0x2222222222222222222222222222222222222222",
+        lastVerifiedAt: null,
+        incomplete: false,
+        error: null,
+      },
+    },
+    "reward claims must stop sends and stale state updates when the active wallet changes",
+  );
 
   const rewardClaimSource = rewardScannerSource.slice(rewardScannerSource.indexOf("const claimReward"), rewardScannerSource.indexOf("return useMemo"));
-  assert.match(rewardClaimSource, /submittedHash = hash;[\s\S]*invalidateVerifiedRewardScanCache\(claimActor, unclaimedWinsRef\.current\);[\s\S]*const receiptState = await waitReceipt\(hash/, "single claim submission must invalidate cache before receipt certainty");
+  const cacheBeforeReceiptProbe = runRewardScannerBehaviorProbe("cache-before-receipt");
+  const cacheAtReceipt = JSON.parse(cacheBeforeReceiptProbe.cacheAtReceipt);
+  assert.deepEqual(
+    {
+      sendCount: cacheBeforeReceiptProbe.sendCount,
+      fetchCalls: cacheBeforeReceiptProbe.fetchCalls,
+      receiptCallCount: cacheBeforeReceiptProbe.receiptCalls.length,
+      verifiedAt: cacheAtReceipt.verifiedAt,
+      savedAt: cacheAtReceipt.savedAt,
+      wins: cacheAtReceipt.wins,
+      invalidatedAtIsSafe: Number.isSafeInteger(cacheAtReceipt.invalidatedAt) && cacheAtReceipt.invalidatedAt >= 1_000,
+    },
+    {
+      sendCount: 1,
+      fetchCalls: 0,
+      receiptCallCount: 1,
+      verifiedAt: 1_000,
+      savedAt: 1_000,
+      wins: [{ epoch: "7", amountWei: "11" }, { epoch: "8", amountWei: "12" }],
+      invalidatedAtIsSafe: true,
+    },
+    "single claim submission must invalidate cache before receipt certainty",
+  );
   assert.equal(
     (rewardClaimSource.match(/lastRewardClaimTxHash = hash;[\s\S]*?claimTxCount \+= 1;[\s\S]*?invalidateVerifiedRewardScanCache\(claimActor, unclaimedWinsRef\.current\);[\s\S]*?const receiptState = await waitReceipt\(hash/g) ?? []).length,
     2,
     "single and batch claim-all submissions must both invalidate cache before receipt certainty",
   );
-  assert.match(rewardClaimSource, /invalidateVerifiedRewardScanCache\(claimActor, nextWins\)/, "confirmed claims must persist an invalidated stale cache for reload");
+  const cacheAfterConfirmationProbe = runRewardScannerBehaviorProbe("cache-after-confirmation");
+  assert.deepEqual(
+    {
+      sendCount: cacheAfterConfirmationProbe.sendCount,
+      fetchCalls: cacheAfterConfirmationProbe.fetchCalls,
+      verifiedAt: cacheAfterConfirmationProbe.cache.verifiedAt,
+      savedAt: cacheAfterConfirmationProbe.cache.savedAt,
+      wins: cacheAfterConfirmationProbe.cache.wins,
+      invalidatedAtIsSafe: Number.isSafeInteger(cacheAfterConfirmationProbe.cache.invalidatedAt)
+        && cacheAfterConfirmationProbe.cache.invalidatedAt >= 1_000,
+    },
+    {
+      sendCount: 1,
+      fetchCalls: 0,
+      verifiedAt: 1_000,
+      savedAt: 1_000,
+      wins: [{ epoch: "8", amountWei: "12" }],
+      invalidatedAtIsSafe: true,
+    },
+    "confirmed claims must persist an invalidated stale cache for reload",
+  );
   assert.doesNotMatch(rewardClaimSource, /saveCachedRewardScan\(/, "claim confirmation must not advance or persist the full reward-scan verification watermark");
 
   const deepRewardScanSource = readFileSync("app/hooks/useDeepRewardScan.ts", "utf8");

@@ -229,6 +229,34 @@ function isBigInt(value: unknown): value is bigint {
   return typeof value === "bigint";
 }
 
+export function collectCompleteOpenRewardScanWins({
+  potentialWins,
+  betResults,
+  tilePoolResults,
+  resolvedAtResults,
+  chainTimestamp,
+}: {
+  potentialWins: readonly { id: bigint; rewardPool: bigint }[];
+  betResults: unknown;
+  tilePoolResults: unknown;
+  resolvedAtResults: unknown;
+  chainTimestamp: bigint;
+}): UnclaimedWin[] {
+  const completeBetResults = requireCompleteRewardScanMulticallResults(betResults, potentialWins.length, "userBets");
+  const completeTilePoolResults = requireCompleteRewardScanMulticallResults(tilePoolResults, potentialWins.length, "tilePools");
+  const completeResolvedAtResults = requireCompleteRewardScanMulticallResults(resolvedAtResults, potentialWins.length, "epochResolvedAt");
+  completeBetResults.forEach((item, index) => requireRewardScanValue(item.result, isBigInt, `userBets[${index}]`));
+  completeTilePoolResults.forEach((item, index) => requireRewardScanValue(item.result, isBigInt, `tilePools[${index}]`));
+  completeResolvedAtResults.forEach((item, index) => requireRewardScanValue(item.result, isBigInt, `epochResolvedAt[${index}]`));
+  return collectOpenRewardScanWins({
+    potentialWins,
+    betResults: completeBetResults,
+    tilePoolResults: completeTilePoolResults,
+    resolvedAtResults: completeResolvedAtResults,
+    chainTimestamp,
+  });
+}
+
 export function normalizeRewardScanEpochString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -293,6 +321,31 @@ function loadCachedRewardScan(address: string): CachedRewardScan {
   );
 }
 
+export function createInvalidatedRewardScanCacheEnvelope(
+  {
+    wins,
+    lastScannedEpoch,
+    deepestScannedEpoch,
+    verifiedAt,
+  }: {
+    wins: UnclaimedWin[];
+    lastScannedEpoch: string;
+    deepestScannedEpoch: string;
+    verifiedAt: number;
+  },
+  invalidatedAt = Date.now(),
+): RewardScanCacheEnvelope {
+  return {
+    cacheVersion: 3,
+    verifiedAt,
+    savedAt: verifiedAt,
+    invalidatedAt,
+    lastScannedEpoch,
+    deepestScannedEpoch,
+    wins,
+  };
+}
+
 function saveInvalidatedRewardScanCache(
   address: string,
   wins: UnclaimedWin[],
@@ -304,15 +357,12 @@ function saveInvalidatedRewardScanCache(
   try {
     localStorage.setItem(
       getRewardScanCacheKey(address, 3),
-      JSON.stringify({
-        cacheVersion: 3,
-        verifiedAt,
-        savedAt: verifiedAt,
-        invalidatedAt: Date.now(),
+      JSON.stringify(createInvalidatedRewardScanCacheEnvelope({
+        wins,
         lastScannedEpoch,
         deepestScannedEpoch,
-        wins,
-      } satisfies RewardScanCacheEnvelope),
+        verifiedAt,
+      })),
     );
   } catch {
     // Leave the in-memory state stale when cache storage is unavailable.
@@ -407,21 +457,29 @@ function chunkEpochIds(epochIds: string[], size: number) {
   return chunks;
 }
 
+export function resolveRewardScannerAddress(
+  preferredAddress: UseRewardScannerOptions["preferredAddress"],
+  connectedAddress: string | undefined,
+) {
+  const candidate = preferredAddress ?? connectedAddress;
+  if (!candidate) return undefined;
+  try {
+    return getAddress(candidate);
+  } catch {
+    return undefined;
+  }
+}
+
 export function useRewardScanner(
   actualCurrentEpoch: bigint | undefined,
   options?: UseRewardScannerOptions,
 ) {
   const { address: connectedAddress } = useAccount();
   const publicClient = usePublicClient({ chainId: APP_CHAIN_ID });
-  const address = useMemo(() => {
-    const candidate = options?.preferredAddress ?? connectedAddress;
-    if (!candidate) return undefined;
-    try {
-      return getAddress(candidate);
-    } catch {
-      return undefined;
-    }
-  }, [connectedAddress, options?.preferredAddress]);
+  const address = useMemo(
+    () => resolveRewardScannerAddress(options?.preferredAddress, connectedAddress),
+    [connectedAddress, options?.preferredAddress],
+  );
   const enabled = options?.enabled ?? true;
   const isPageVisible = options?.isPageVisible ?? true;
   const notify = options?.onNotify;
@@ -712,17 +770,11 @@ export function useRewardScanner(
             ]);
             if (requestId !== requestIdRef.current) return;
 
-            const completeBetResults = requireCompleteRewardScanMulticallResults(betResults, potentialWins.length, "userBets");
-            const completeTilePoolResults = requireCompleteRewardScanMulticallResults(tilePoolResults, potentialWins.length, "tilePools");
-            const completeResolvedAtResults = requireCompleteRewardScanMulticallResults(resolvedAtResults, potentialWins.length, "epochResolvedAt");
-            completeBetResults.forEach((item, index) => requireRewardScanValue(item.result, isBigInt, `userBets[${index}]`));
-            completeTilePoolResults.forEach((item, index) => requireRewardScanValue(item.result, isBigInt, `tilePools[${index}]`));
-            completeResolvedAtResults.forEach((item, index) => requireRewardScanValue(item.result, isBigInt, `epochResolvedAt[${index}]`));
-            wins.push(...collectOpenRewardScanWins({
+            wins.push(...collectCompleteOpenRewardScanWins({
               potentialWins,
-              betResults: completeBetResults,
-              tilePoolResults: completeTilePoolResults,
-              resolvedAtResults: completeResolvedAtResults,
+              betResults,
+              tilePoolResults,
+              resolvedAtResults,
               chainTimestamp,
             }));
           }

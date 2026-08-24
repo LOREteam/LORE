@@ -112,6 +112,32 @@ export function formatJackpotDisplayAmount(text: string | null): string | null {
   return trimmedFractional ? `${groupedWhole}.${trimmedFractional}` : groupedWhole;
 }
 
+export function buildJackpotShareIntentUrl({
+  jackpotLabel,
+  amountText,
+  epoch,
+  tileId,
+}: {
+  jackpotLabel: string;
+  amountText: string;
+  epoch: string | null;
+  tileId: number | null;
+}): string {
+  const contextLine = [
+    epoch ? `Epoch #${epoch}` : null,
+    tileId !== null ? `Tile #${tileId}` : null,
+  ].filter((line): line is string => line !== null).join(" - ");
+  const lines = [
+    `I just mined the ${jackpotLabel} in LORE.`,
+    `Won: ${amountText} LINEA`,
+    contextLine || null,
+    "playlore.xyz",
+    "#LORE #Linea",
+  ].filter((line): line is string => line !== null);
+  const tweetParams = new URLSearchParams({ text: lines.join("\n") });
+  return `https://x.com/intent/tweet?${tweetParams.toString()}`;
+}
+
 function getPreviousEpoch(epoch: string | null) {
   if (!epoch) return null;
   const epochNumber = Number(epoch);
@@ -435,7 +461,6 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   const activeEpoch = activeWin?.epoch ?? null;
   const activeTileId = activeWin?.tileId ?? null;
   const amountText = formatJackpotDisplayAmount(activeAmountText);
-  const amountShareText = amountText ? `${amountText} LINEA` : "";
   const isModalOpen = showBanner && !isDismissed && Boolean(activeWin) && Boolean(amountText);
   const jackpotDescription = [
     amountText ? `Won ${amountText} LINEA.` : null,
@@ -446,20 +471,14 @@ export const JackpotBanner = React.memo(function JackpotBanner({
   const share = useCallback(() => {
     if (typeof window === "undefined") return;
     if (!amountText) return;
-    const lines = [
-      `I just mined the ${jackpotLabel} in LORE.`,
-      `Won: ${amountShareText}`,
-      [activeEpoch ? `Epoch #${activeEpoch}` : null, activeTileId !== null ? `Tile #${activeTileId}` : null].filter(Boolean).join(" - ") || null,
-      "playlore.xyz",
-      "#LORE #Linea",
-    ].filter((l) => l !== null);
-
-    const tweetParams = new URLSearchParams({
-      text: lines.join("\n"),
+    const tweetUrl = buildJackpotShareIntentUrl({
+      jackpotLabel,
+      amountText,
+      epoch: activeEpoch,
+      tileId: activeTileId,
     });
-    const tweetUrl = `https://x.com/intent/tweet?${tweetParams.toString()}`;
     window.open(tweetUrl, "_blank", "noopener,noreferrer");
-  }, [activeEpoch, activeTileId, amountShareText, amountText, jackpotLabel]);
+  }, [activeEpoch, activeTileId, amountText, jackpotLabel]);
 
   useEffect(() => {
     if (!isModalOpen) return;

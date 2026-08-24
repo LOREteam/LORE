@@ -360,11 +360,11 @@ function createClaimConfirmationPendingError(message: string) {
   return error;
 }
 
-function getRebateCacheKey(address: string) {
+export function getRebateCacheKey(address: string) {
   return `lore:rebate:v1:${getAddress(address).toLowerCase()}`;
 }
 
-function getClaimPlanCacheKey(address: string, epochs: number[]) {
+export function getClaimPlanCacheKey(address: string, epochs: number[]) {
   return `lore:rebate-claim-plan:v1:${getAddress(address).toLowerCase()}:${epochs.join(",")}`;
 }
 
@@ -468,7 +468,7 @@ export function mergeRebateEpochDetails(base: RebateEpochInfo[], older: RebateEp
   return [...byEpoch.values()].sort((a, b) => b.epoch - a.epoch);
 }
 
-function loadCachedRebatePayload(address: string): CachedRebateInfo | null {
+export function loadCachedRebatePayload(address: string): CachedRebateInfo | null {
   if (typeof localStorage === "undefined") return null;
   const cacheKey = getRebateCacheKey(address);
   try {
@@ -509,7 +509,7 @@ function saveCachedRebatePayload(address: string, payload: ApiRebatePayload) {
   }
 }
 
-function loadCachedClaimPlan(address: string, epochs: number[]): { kind: ClaimPlanKind; savedAt: number } | null {
+export function loadCachedClaimPlan(address: string, epochs: number[]): { kind: ClaimPlanKind; savedAt: number } | null {
   if (typeof localStorage === "undefined" || epochs.length === 0) return null;
   const cacheKey = getClaimPlanCacheKey(address, epochs);
   try {
@@ -691,6 +691,14 @@ function getRebateDataFreshness(cacheStatus: string | null): RebateDataFreshness
   if (cacheStatus === "stale") return "stale-cache";
   if (cacheStatus === "inflight") return "background-refresh";
   return "fresh";
+}
+
+export function getRebateClientCacheRefreshDelay(savedAt: unknown, now = Date.now()): number {
+  return getFreshCacheDelayMs(savedAt, REBATE_CLIENT_CACHE_TTL_MS, now) ?? 0;
+}
+
+export function isRebateClaimPlanCacheFresh(savedAt: unknown, now = Date.now()): boolean {
+  return getFreshCacheDelayMs(savedAt, CLAIM_PLAN_CACHE_TTL_MS, now) !== null;
 }
 
 export function useRebate(options?: UseRebateOptions) {
@@ -1095,7 +1103,7 @@ export function useRebate(options?: UseRebateOptions) {
       ? (isPageVisible ? REBATE_REFRESH_MS : REBATE_HIDDEN_REFRESH_MS)
       : REBATE_WARM_REFRESH_MS;
     const savedAt = cacheSavedAtRef.current;
-    const cachedDelay = getFreshCacheDelayMs(savedAt, REBATE_CLIENT_CACHE_TTL_MS) ?? 0;
+    const cachedDelay = getRebateClientCacheRefreshDelay(savedAt);
     const initialDelay = active ? cachedDelay : Math.max(cachedDelay, REBATE_WARM_REFRESH_MS);
     let cancelled = false;
 
@@ -1213,7 +1221,7 @@ export function useRebate(options?: UseRebateOptions) {
     let cancelled = false;
     const epochArgs = allClaimableEpochs.map((epoch) => BigInt(epoch));
     const cachedPlan = readClaimPlanCache(rebateAddress, allClaimableEpochs);
-    if (cachedPlan && getFreshCacheDelayMs(cachedPlan.savedAt, CLAIM_PLAN_CACHE_TTL_MS) !== null) {
+    if (cachedPlan && isRebateClaimPlanCacheFresh(cachedPlan.savedAt)) {
       if (mountedRef.current) {
         setClaimPlanKind(cachedPlan.kind);
         setIsEstimatingClaimPlan(false);

@@ -1,13 +1,13 @@
 import { closeSync, mkdirSync, openSync, readSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { resolveCanaryProofProfile } from "./canary-proof-profile.mjs";
+import { requireV10RedactedRpcLabel } from "./v10-preview-consent-envelope.mjs";
 
 const JSONL_READ_CHUNK_BYTES = 64 * 1024;
 const MAX_CANARY_DRAFT_SIDE_ARTIFACT_BYTES = 512 * 1024;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const CANONICAL_POSITIVE_INTEGER_RE = /^[1-9]\d{0,15}$/;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
-const GENERIC_RPC_LABEL_RE = /^(?:configured|default|fallback|mainnet|rpc|redacted|target|unlabeled)(?:[-_ ]?rpc(?:[-_ ]?label)?(?:[-_ ]?required)?)?$/i;
 
 function refuseFinalProofOutput(outPath, profile) {
   const normalized = path.relative(process.cwd(), outPath).replace(/\\/g, "/");
@@ -49,13 +49,13 @@ function normalizeAddress(value) {
   return String(value ?? "").trim().toLowerCase();
 }
 
-function looksLikeUrl(value) {
-  return /^https?:\/\//i.test(String(value ?? "").trim());
-}
-
 function hasConcreteRpcLabel(value) {
-  const text = String(value ?? "").trim();
-  return hasRealText(text) && !looksLikeUrl(text) && !GENERIC_RPC_LABEL_RE.test(text);
+  try {
+    requireV10RedactedRpcLabel(value, "canary RPC label");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function normalizeNetwork(value) {
@@ -210,7 +210,7 @@ function findTargetMismatches(events, expectedNetwork, expectedChainId, expected
       if (expectedNetworkName && normalizeNetwork(event.network) !== expectedNetworkName) mismatches.push(`${label} network=${event.network ?? "missing"}`);
       if (expectedChain && positiveIntegerString(event.chainId) !== expectedChain) mismatches.push(`${label} chainId=${event.chainId ?? "missing"}`);
       if (normalizeAddress(event.contractAddress) !== expectedContract) mismatches.push(`${label} contractAddress=${event.contractAddress ?? "missing"}`);
-      if (String(event.rpcLabel ?? "").trim().toLowerCase() !== expectedRpc) mismatches.push(`${label} rpcLabel=${event.rpcLabel ?? "missing"}`);
+      if (String(event.rpcLabel ?? "").trim().toLowerCase() !== expectedRpc) mismatches.push(`${label} rpcLabel=mismatch`);
       return mismatches;
     });
 }

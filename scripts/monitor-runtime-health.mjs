@@ -1,4 +1,3 @@
-import "dotenv/config";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -19,6 +18,9 @@ import {
 } from "./runtime-monitor-lib.mjs";
 import { assertTrustedHealthCredentialOrigin } from "./health-credential-origin.mjs";
 import { redactProofText } from "./redact-proof-output.mjs";
+
+const directExecution = Boolean(process.argv[1]) && pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
+if (directExecution) await import("dotenv/config");
 
 const MAX_RUNTIME_MONITOR_RESPONSE_BYTES = 256 * 1024;
 const MAX_RUNTIME_MONITOR_ERROR_CHARS = 500;
@@ -523,7 +525,6 @@ async function main() {
   });
 }
 
-const directExecution = Boolean(process.argv[1]) && pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
 if (directExecution) {
   process.once("SIGINT", () => { stopping = true; });
   process.once("SIGTERM", () => { stopping = true; });

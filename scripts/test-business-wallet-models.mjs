@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import * as miningSharedModule from "../app/hooks/useMining.shared.ts";
+import * as miningBetExecutionModule from "../app/hooks/useMiningBetExecution.ts";
 import * as tokenAmountMathModule from "../app/lib/tokenAmountMath.ts";
 import * as balanceFormattingModule from "../app/lib/balanceFormatting.ts";
 import * as miningTxPathModule from "../app/lib/miningTxPath.ts";
@@ -11,8 +18,527 @@ import * as analyticsAchievementsModule from "../app/hooks/useAnalyticsAchieveme
 import * as autoResolveStorageModule from "../app/hooks/autoResolveStorage.ts";
 import * as appConstantsModule from "../app/lib/constants.ts";
 
+function runWalletTransferExecutableProbe() {
+  const probeSource = String.raw`
+import { mock } from "node:test";
+
+const root = new URL("./", import.meta.url);
+const unwrap = (namespace) => namespace.default ?? namespace;
+const ReactModule = await import("react");
+const React = ReactModule.default ?? ReactModule;
+const { renderToStaticMarkup } = await import("react-dom/server");
+const viem = await import("viem");
+const constants = unwrap(await import(new URL("./app/lib/constants.ts", root)));
+const embedded = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+const normalizedEmbedded = embedded.toLowerCase();
+const paddedEmbedded = viem.pad(normalizedEmbedded, { size: 32 }).toLowerCase();
+const rawValue = 9_007_199_254_740_993_555_000_000_000_000_000n;
+const mixedHash = "0x" + "Ab".repeat(32);
+const topics = viem.encodeEventTopics({
+  abi: constants.TOKEN_ABI,
+  eventName: "Transfer",
+  args: { from: embedded, to: embedded },
+});
+const logs = [rawValue, 1n].map((value, logIndex) => ({
+  address: constants.LINEA_TOKEN_ADDRESS,
+  blockHash: "0x" + "1".repeat(64),
+  blockNumber: constants.CONTRACT_DEPLOY_BLOCK,
+  data: viem.encodeAbiParameters([{ type: "uint256" }], [value]),
+  logIndex,
+  removed: false,
+  topics,
+  transactionHash: mixedHash,
+  transactionIndex: 0,
+}));
+const malformedLog = { ...logs[0], data: "0x" };
+let blockNumberCalls = 0;
+const getLogsRequests = [];
+const getLogsResultCounts = [];
+let logScenario = "dedupe";
+const publicClient = {
+  async getBlockNumber() {
+    blockNumberCalls += 1;
+    return constants.CONTRACT_DEPLOY_BLOCK;
+  },
+  async getLogs(request) {
+    getLogsRequests.push(request);
+    let result;
+    if (logScenario === "dedupe") {
+      result = request.topics.length === 2 ? [logs[0]] : logs;
+    } else if (logScenario === "malformed-outgoing") {
+      result = request.topics.length === 2 ? [malformedLog] : [];
+    } else if (logScenario === "malformed-incoming") {
+      result = request.topics.length === 2 ? [] : [malformedLog];
+    } else {
+      throw new Error("unexpected wallet-transfer log scenario");
+    }
+    getLogsResultCounts.push(result.length);
+    return result;
+  },
+};
+
+mock.module("wagmi", {
+  namedExports: { usePublicClient: () => publicClient },
+});
+const walletTransfers = unwrap(await import(
+  new URL("./app/hooks/useWalletTransfers.ts?wallet-model-executable-probe", root)
+));
+const stored = new Map();
+let storageWriteCalls = 0;
+let fetchCalls = 0;
+const priorWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+const priorFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+let probeResult;
+
+Object.defineProperty(globalThis, "fetch", {
+  configurable: true,
+  writable: true,
+  value: async () => {
+    fetchCalls += 1;
+    throw new Error("unexpected wallet-transfer executable-probe fetch");
+  },
+});
+Object.defineProperty(globalThis, "window", {
+  configurable: true,
+  writable: true,
+  value: {
+    localStorage: {
+      getItem: (key) => stored.get(key) ?? null,
+      setItem: (key, value) => {
+        storageWriteCalls += 1;
+        stored.set(key, String(value));
+      },
+      removeItem: (key) => stored.delete(key),
+    },
+  },
+});
+
+try {
+  const captureModel = (address, externalAddress) => {
+    let model;
+    function Probe() {
+      model = walletTransfers.useWalletTransfers(address, externalAddress);
+      return null;
+    }
+    renderToStaticMarkup(React.createElement(Probe));
+    return model;
+  };
+
+  const validModel = captureModel(embedded, null);
+  await validModel.fetch();
+  const persisted = JSON.parse([...stored.values()][0]);
+  const dedupeRequests = getLogsRequests.slice();
+  const callsAfterValid = {
+    blockNumber: blockNumberCalls,
+    logs: getLogsRequests.length,
+    writes: storageWriteCalls,
+  };
+  await captureModel("0xabc", null).fetch();
+  await captureModel(embedded, "0xabc").fetch();
+  const invalidRpcCalls =
+    (blockNumberCalls - callsAfterValid.blockNumber)
+    + (getLogsRequests.length - callsAfterValid.logs);
+  const invalidStorageWrites = storageWriteCalls - callsAfterValid.writes;
+
+  const runDecodeCoverageScenario = async (scenario, address) => {
+    logScenario = scenario;
+    stored.clear();
+    const resultCountOffset = getLogsResultCounts.length;
+    const writesBefore = storageWriteCalls;
+    const model = captureModel(address, null);
+    await model.fetch();
+    const scenarioPersisted = JSON.parse([...stored.values()][0]);
+    return {
+      returnedLogCounts: getLogsResultCounts.slice(resultCountOffset),
+      scanCoverage: scenarioPersisted.scanCoverage,
+      transferCount: scenarioPersisted.transfers.length,
+      historyRowsTruncated: scenarioPersisted.historyRowsTruncated,
+      storageWrites: storageWriteCalls - writesBefore,
+    };
+  };
+  const decodeSkipCoverageResults = [
+    await runDecodeCoverageScenario(
+      "malformed-outgoing",
+      "0x1111111111111111111111111111111111111111",
+    ),
+    await runDecodeCoverageScenario(
+      "malformed-incoming",
+      "0x2222222222222222222222222222222222222222",
+    ),
+  ];
+
+  probeResult = {
+    transfers: persisted.transfers,
+    totalIn: persisted.totalIn,
+    totalOut: persisted.totalOut,
+    totalInDisplay: persisted.totalInDisplay,
+    totalOutDisplay: persisted.totalOutDisplay,
+    scanCoverage: persisted.scanCoverage,
+    historyRowsTruncated: persisted.historyRowsTruncated,
+    getLogsTopicLengths: dedupeRequests.map((request) => request.topics.length),
+    addressTopics: [
+      dedupeRequests[0]?.topics[1] ?? null,
+      dedupeRequests[1]?.topics[2] ?? null,
+    ],
+    expectedPaddedAddress: paddedEmbedded,
+    invalidRpcCalls,
+    invalidStorageWrites,
+    decodeSkipCoverageResults,
+    fetchCalls,
+  };
+} finally {
+  if (priorWindowDescriptor === undefined) delete globalThis.window;
+  else Object.defineProperty(globalThis, "window", priorWindowDescriptor);
+  if (priorFetchDescriptor === undefined) delete globalThis.fetch;
+  else Object.defineProperty(globalThis, "fetch", priorFetchDescriptor);
+  mock.restoreAll();
+}
+
+console.log(JSON.stringify(probeResult));
+`;
+  const poisonRoot = join(tmpdir(), `lore-wallet-models-${randomUUID()}`);
+  const poisonDbPath = join(poisonRoot, "lore.sqlite");
+  if (existsSync(poisonRoot) || existsSync(poisonDbPath)) {
+    throw new Error("wallet-transfer executable-probe DB poison path must start absent");
+  }
+  const probe = spawnSync(
+    process.execPath,
+    [
+      "--no-warnings",
+      "--experimental-test-module-mocks",
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      probeSource,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        LORE_DB_PATH: poisonDbPath,
+        TSX_DISABLE_CACHE: "1",
+      },
+      maxBuffer: 1_000_000,
+      timeout: 30_000,
+      windowsHide: true,
+    },
+  );
+  if (existsSync(poisonRoot) || existsSync(poisonDbPath)) {
+    throw new Error("wallet-transfer executable probe unexpectedly created its DB poison path");
+  }
+  if (probe.error) {
+    throw new Error("wallet-transfer executable probe failed to start", { cause: probe.error });
+  }
+  if (probe.status !== 0) {
+    const detail = `${probe.stderr || ""}\n${probe.stdout || ""}`.trim().slice(-4_000);
+    throw new Error(`wallet-transfer executable probe exited ${probe.status}: ${detail}`);
+  }
+  try {
+    return JSON.parse(probe.stdout.trim());
+  } catch (error) {
+    throw new Error("wallet-transfer executable probe returned invalid JSON", { cause: error });
+  }
+}
+
+function runWalletHookRuntimeExecutableProbe() {
+  const probeSource = String.raw`
+import { mock } from "node:test";
+
+const root = new URL("./", import.meta.url);
+const unwrap = (namespace) => namespace.default ?? namespace;
+let activeCapture = null;
+
+function useState(initial) {
+  const capture = activeCapture;
+  if (!capture) throw new Error("hook called outside capture");
+  const index = capture.stateIndex++;
+  capture.states[index] = initial;
+  capture.setCalls[index] = [];
+  return [initial, (next) => {
+    const value = typeof next === "function" ? next(capture.states[index]) : next;
+    capture.states[index] = value;
+    capture.setCalls[index].push(value);
+  }];
+}
+
+function useRef(initial) {
+  return { current: initial };
+}
+
+function useEffect(effect) {
+  effect();
+}
+
+function useCallback(callback) {
+  return callback;
+}
+
+function useMemo(factory) {
+  return factory();
+}
+
+mock.module("react", {
+  namedExports: { useCallback, useEffect, useMemo, useRef, useState },
+});
+
+let scenario = "full";
+const requests = [];
+let blockNumberCalls = 0;
+let loggerWarnings = 0;
+mock.module(new URL("./app/lib/logger.ts", root).href, {
+  namedExports: {
+    log: {
+      debug() {},
+      error() {},
+      info() {},
+      warn() { loggerWarnings += 1; },
+    },
+  },
+});
+
+const constants = unwrap(await import(new URL("./app/lib/constants.ts", root)));
+const publicClient = {
+  async getBlockNumber() {
+    blockNumberCalls += 1;
+    return scenario === "fallback-window"
+      ? constants.CONTRACT_DEPLOY_BLOCK + 250_000n
+      : constants.CONTRACT_DEPLOY_BLOCK;
+  },
+  async getLogs(request) {
+    requests.push({
+      scenario,
+      topicLength: request.topics.length,
+      fromBlock: request.fromBlock.toString(),
+    });
+    const topicLength = request.topics.length;
+    if (scenario === "outgoing-failure" && topicLength === 2) {
+      throw new Error("intentional outgoing failure");
+    }
+    if (scenario === "fallback-window" && topicLength === 3) {
+      throw new Error("intentional incoming failure");
+    }
+    if (scenario === "fallback-chunk-failure" && (topicLength === 3 || topicLength === 1)) {
+      throw new Error("intentional fallback failure");
+    }
+    return [];
+  },
+};
+const rawBalance = { value: 9_007_199_254_740_993_555n, decimals: 3 };
+
+mock.module("wagmi", {
+  namedExports: {
+    useBalance: () => ({
+      data: rawBalance,
+      dataUpdatedAt: 1_700_000_000_001,
+      isError: false,
+      isFetching: false,
+      isPending: false,
+      isStale: false,
+      refetch: async () => {},
+    }),
+    usePublicClient: () => publicClient,
+    useReadContract: () => ({ data: 0n }),
+  },
+});
+
+const walletTransfers = unwrap(await import(
+  new URL("./app/hooks/useWalletTransfers.ts?wallet-model-runtime-probe", root)
+));
+const pageWalletOverview = unwrap(await import(
+  new URL("./app/hooks/usePageWalletOverview.ts?wallet-model-runtime-probe", root)
+));
+const gameDerivedState = unwrap(await import(
+  new URL("./app/hooks/useGameDerivedState.ts?wallet-model-runtime-probe", root)
+));
+const storage = new Map();
+let fetchCalls = 0;
+const priorWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+const priorFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+let probeResult;
+
+Object.defineProperty(globalThis, "window", {
+  configurable: true,
+  writable: true,
+  value: {
+    localStorage: {
+      getItem: (key) => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, String(value)),
+      removeItem: (key) => storage.delete(key),
+    },
+  },
+});
+Object.defineProperty(globalThis, "fetch", {
+  configurable: true,
+  writable: true,
+  value: async () => {
+    fetchCalls += 1;
+    throw new Error("unexpected wallet-model runtime-probe fetch");
+  },
+});
+
+try {
+  const address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+  const captureWalletTransferScenario = async (nextScenario) => {
+    scenario = nextScenario;
+    storage.clear();
+    const requestOffset = requests.length;
+    const capture = { stateIndex: 0, states: [], setCalls: [] };
+    activeCapture = capture;
+    const model = walletTransfers.useWalletTransfers(address, null);
+    activeCapture = null;
+    await model.fetch();
+    const liveSummary = capture.setCalls[1].at(-1);
+    if (!liveSummary) throw new Error("wallet transfer scenario did not publish a live summary");
+    return {
+      dataStatus: liveSummary.dataStatus,
+      scanCoverage: liveSummary.scanCoverage,
+      requestRows: requests.slice(requestOffset),
+    };
+  };
+
+  const full = await captureWalletTransferScenario("full");
+  const outgoingFailure = await captureWalletTransferScenario("outgoing-failure");
+  const fallbackWindow = await captureWalletTransferScenario("fallback-window");
+  const fallbackChunkFailure = await captureWalletTransferScenario("fallback-chunk-failure");
+
+  activeCapture = { stateIndex: 0, states: [], setCalls: [] };
+  const overview = pageWalletOverview.usePageWalletOverview({
+    address: address.toLowerCase(),
+    normalizedEmbeddedAddress: address.toLowerCase(),
+    formattedLineaBalance: null,
+    embeddedTokenBalance: rawBalance,
+    embeddedTokenPending: false,
+    embeddedTokenStatus: {
+      error: false,
+      fetching: false,
+      stale: false,
+      updatedAt: 1_700_000_000_000,
+    },
+    refetchEmbeddedTokenBalance: async () => {},
+    isPageVisible: false,
+  });
+
+  const balanceText = "9007199254740993.555";
+  activeCapture = { stateIndex: 0, states: [], setCalls: [] };
+  const derived = gameDerivedState.useGameDerivedState({
+    chainId: constants.APP_CHAIN_ID,
+    effectiveJackpotInfoRaw: null,
+    effectiveRolloverPoolRaw: 0n,
+    effectiveTileData: null,
+    tokenBalanceFormatted: balanceText,
+    isRevealing: false,
+    effectiveGridEpochData: null,
+    gridDisplayEpochBigInt: null,
+    walletAddress: undefined,
+    isPageVisible: false,
+    tileUserCounts: [],
+    userBetsAll: undefined,
+    effectiveEpochDurationSec: null,
+    effectivePendingEpochDuration: null,
+    effectivePendingEpochDurationEta: null,
+    effectivePendingEpochDurationEffectiveFromEpoch: null,
+  });
+  activeCapture = null;
+
+  const fallbackFromBlock = fallbackWindow.requestRows.find((row) => row.topicLength === 1)?.fromBlock ?? null;
+  probeResult = {
+    full: {
+      dataStatus: full.dataStatus,
+      scanCoverage: full.scanCoverage,
+    },
+    outgoingFailure: {
+      dataStatus: outgoingFailure.dataStatus,
+      scanCoverage: outgoingFailure.scanCoverage,
+      outgoingFailures: outgoingFailure.requestRows.filter((row) => row.topicLength === 2).length,
+    },
+    fallbackWindow: {
+      dataStatus: fallbackWindow.dataStatus,
+      scanCoverage: fallbackWindow.scanCoverage,
+      startedAfterFullRange: fallbackFromBlock !== null
+        && BigInt(fallbackFromBlock) > constants.CONTRACT_DEPLOY_BLOCK,
+    },
+    fallbackChunkFailure: {
+      dataStatus: fallbackChunkFailure.dataStatus,
+      scanCoverage: fallbackChunkFailure.scanCoverage,
+      fallbackCalls: fallbackChunkFailure.requestRows.filter((row) => row.topicLength === 1).length,
+    },
+    pageWalletBalances: {
+      token: overview.formattedPrivyBalance,
+      eth: overview.formattedPrivyEthBalance,
+      headerLinea: overview.headerLineaBalance,
+    },
+    numericCoercionPageBalances: {
+      token: Number(balanceText).toFixed(2),
+      eth: Number(balanceText).toFixed(4),
+    },
+    gameLineaBalance: derived.formattedLineaBalance,
+    numericCoercionGameLineaBalance: Number(balanceText).toFixed(2),
+    fetchCalls,
+    blockNumberCalls,
+    loggerWarnings,
+  };
+} finally {
+  activeCapture = null;
+  if (priorWindowDescriptor === undefined) delete globalThis.window;
+  else Object.defineProperty(globalThis, "window", priorWindowDescriptor);
+  if (priorFetchDescriptor === undefined) delete globalThis.fetch;
+  else Object.defineProperty(globalThis, "fetch", priorFetchDescriptor);
+  mock.restoreAll();
+}
+
+console.log(JSON.stringify(probeResult));
+`;
+  const poisonRoot = join(tmpdir(), `lore-wallet-model-runtime-${randomUUID()}`);
+  const poisonDbPath = join(poisonRoot, "lore.sqlite");
+  if (existsSync(poisonRoot) || existsSync(poisonDbPath)) {
+    throw new Error("wallet-model runtime-probe DB poison path must start absent");
+  }
+  const probe = spawnSync(
+    process.execPath,
+    [
+      "--no-warnings",
+      "--experimental-test-module-mocks",
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      probeSource,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        LORE_DB_PATH: poisonDbPath,
+        TSX_DISABLE_CACHE: "1",
+      },
+      maxBuffer: 1_000_000,
+      timeout: 30_000,
+      windowsHide: true,
+    },
+  );
+  if (existsSync(poisonRoot) || existsSync(poisonDbPath)) {
+    throw new Error("wallet-model runtime probe unexpectedly created its DB poison path");
+  }
+  if (probe.error) {
+    throw new Error("wallet-model runtime probe failed to start", { cause: probe.error });
+  }
+  if (probe.status !== 0) {
+    const detail = `${probe.stderr || ""}\n${probe.stdout || ""}`.trim().slice(-4_000);
+    throw new Error(`wallet-model runtime probe exited ${probe.status}: ${detail}`);
+  }
+  try {
+    return JSON.parse(probe.stdout.trim());
+  } catch (error) {
+    throw new Error("wallet-model runtime probe returned invalid JSON", { cause: error });
+  }
+}
+
 export async function runWalletModelTests() {
   const miningShared = miningSharedModule.default ?? miningSharedModule;
+  const miningBetExecution = miningBetExecutionModule.default ?? miningBetExecutionModule;
   const tokenAmountMath = tokenAmountMathModule.default ?? tokenAmountMathModule;
   const balanceFormatting = balanceFormattingModule.default ?? balanceFormattingModule;
   const miningTxPath = miningTxPathModule.default ?? miningTxPathModule;
@@ -83,6 +609,14 @@ export async function runWalletModelTests() {
   );
   assert.equal(miningTxPath.sanitizeMiningTxPathState({ mode: "standard-silent", ts: 1_000 }, 1_000.5), null);
   assert.equal(miningTxPath.sanitizeMiningTxPathState({ mode: "standard-silent", ts: 7_001 }, 1_000), null);
+  assert.deepEqual(
+    [
+      miningTxPath.sanitizeMiningTxPathState({ mode: "wallet-write", ts: 6_000 }, 1_000),
+      miningTxPath.sanitizeMiningTxPathState({ mode: "wallet-write", ts: 6_001 }, 1_000),
+    ],
+    [{ mode: "wallet-write", ts: 6_000 }, null],
+    "mining tx path timestamps must accept only the bounded safe-integer future skew",
+  );
   const pendingMiningState = miningTxPath.sanitizePendingMiningTxState({
     chainId: 59141,
     contract: "0x1111111111111111111111111111111111111111",
@@ -131,10 +665,46 @@ export async function runWalletModelTests() {
     miningShared.isAmbiguousPendingTxError(new Error("RPC read timed out after 45000ms")),
     false,
   );
-  const miningBetExecutionSource = readFileSync("app/hooks/useMiningBetExecution.ts", "utf8");
-  assert.match(
-    miningBetExecutionSource,
-    /catch \(error\) \{\s*if \(isAmbiguousPendingTxError\(error\)\) \{\s*throw error;/,
+  let miningBetExecutionProbe = null;
+  let ensurePreferredWalletCalls = 0;
+  const ambiguousSilentSendError = new Error("Privy sendTransaction timed out after 45000ms");
+  ambiguousSilentSendError.name = "WalletSendTimeoutError";
+  const unexpectedMiningBetCall = async () => {
+    throw new Error("ambiguous silent-send probe reached an unexpected downstream call");
+  };
+  function MiningBetExecutionProbe() {
+    miningBetExecutionProbe = miningBetExecution.useMiningBetExecution({
+      assertNativeGasBalance: unexpectedMiningBetCall,
+      assertSufficientAllowance: unexpectedMiningBetCall,
+      ensureAllowance: unexpectedMiningBetCall,
+      ensureContractPreflight: unexpectedMiningBetCall,
+      estimateGas: unexpectedMiningBetCall,
+      getBumpedFees: unexpectedMiningBetCall,
+      getActorAddress: () => null,
+      waitReceipt: unexpectedMiningBetCall,
+      readPublicClient: () => undefined,
+      readSilentSend: () => async () => `0x${"a".repeat(64)}`,
+      readWriteContractAsync: () => unexpectedMiningBetCall,
+      ensurePreferredWallet: async () => {
+        ensurePreferredWalletCalls += 1;
+        throw ambiguousSilentSendError;
+      },
+    });
+    return null;
+  }
+  renderToStaticMarkup(React.createElement(MiningBetExecutionProbe));
+  let caughtSilentSendError = null;
+  try {
+    await miningBetExecutionProbe.placeBetsPreferSilent([1], 1n);
+  } catch (error) {
+    caughtSilentSendError = error;
+  }
+  assert.deepEqual(
+    {
+      rethrewOriginalError: caughtSilentSendError === ambiguousSilentSendError,
+      ensurePreferredWalletCalls,
+    },
+    { rethrewOriginalError: true, ensurePreferredWalletCalls: 1 },
     "manual silent receipt timeouts must not fall back to a duplicate wallet send",
   );
   const hashlessRecoveryClients = (client) => [client, client];
@@ -168,6 +738,15 @@ export async function runWalletModelTests() {
       getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
       getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
       getTransactionCount: async () => 7,
+    }), ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000 - 1),
+    "pending",
+    "hashless pending recovery must remain locked until the exact not-found grace boundary",
+  );
+  assert.equal(
+    await miningTxPath.recoverPendingMiningTx(hashlessRecoveryClients({
+      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
+      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
+      getTransactionCount: async () => 7,
     }), ambiguousPendingMiningState, ambiguousPendingMiningState.ts - 1),
     "pending",
     "future-dated hashless pending tx state must not clear before caller time catches up",
@@ -190,6 +769,42 @@ export async function runWalletModelTests() {
     "pending",
     "hashless nonce recovery must fail closed when pending nonce evidence is behind latest",
   );
+  const disagreeingNonceRecovery = await miningTxPath.recoverPendingMiningTx([
+    {
+      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
+      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
+      getTransactionCount: async () => 7,
+    },
+    {
+      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
+      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
+      getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 7 : 8,
+    },
+  ], ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 1);
+  const bigintNonceApprovalState = {
+    chainId: 59141,
+    token: "0x1111111111111111111111111111111111111111",
+    spender: "0x2222222222222222222222222222222222222222",
+    actor: "0x3333333333333333333333333333333333333333",
+    nonce: BigInt(Number.MAX_SAFE_INTEGER),
+    ts: 1_000,
+  };
+  assert.deepEqual(
+    {
+      maxSafeBigintNonce: miningTxPath.sanitizePendingMiningApprovalState(bigintNonceApprovalState, 2_000)?.nonce,
+      oversizedBigintNonce: miningTxPath.sanitizePendingMiningApprovalState({
+        ...bigintNonceApprovalState,
+        nonce: BigInt(Number.MAX_SAFE_INTEGER) + 1n,
+      }, 2_000),
+      disagreeingNonceRecovery,
+    },
+    {
+      maxSafeBigintNonce: Number.MAX_SAFE_INTEGER,
+      oversizedBigintNonce: null,
+      disagreeingNonceRecovery: "manual-reconciliation-required",
+    },
+    "hashless pending recovery must normalize bounded nonces and require two-RPC agreement",
+  );
   assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, chainId: 0 }), null);
   assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, actor: "0x1234" }), null);
   assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, hash: "0x1234" }), null);
@@ -210,7 +825,6 @@ export async function runWalletModelTests() {
   );
   assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, ts: 1_000 }, 2_000.5), null);
   assert.equal(miningTxPath.sanitizePendingMiningTxState({ ...pendingMiningState, ts: 8_001 }, 2_000), null);
-  const miningTxPathSource = readFileSync("app/lib/miningTxPath.ts", "utf8");
   const completePendingMiningState = miningTxPath.sanitizePendingMiningTxState({
     chainId: 59141,
     contract: "0x1111111111111111111111111111111111111111",
@@ -280,46 +894,29 @@ export async function runWalletModelTests() {
     "clear",
     "a matching finalized reverted receipt clears the pending mining intent",
   );
-  assert.match(
-    miningTxPathSource,
-    /function normalizeMiningTimestamp[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*isSafeCurrentTime\(now\)[\s\S]*value - now > MINING_TX_PATH_MAX_FUTURE_SKEW_MS/,
-    "mining tx path timestamps must use a shared safe-integer non-future normalizer",
-  );
-  assert.match(
-    miningTxPathSource,
-    /function hasPendingTxNotFoundGraceElapsed[\s\S]*Number\.isSafeInteger\(ts\)[\s\S]*ts > now[\s\S]*now - ts >= PENDING_TX_NOT_FOUND_GRACE_MS/,
-    "pending tx not-found recovery must fail closed on malformed or future timestamps",
-  );
-  assert.match(
-    miningTxPathSource,
-    /function normalizePendingTxNonce[\s\S]*typeof value === "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*readNonceObservation[\s\S]*normalizedPending < normalizedLatest[\s\S]*observationsAgree\(nonceObservations\[0\], nonceObservations\[1\]\)[\s\S]*normalizedLatestNonce > state\.nonce[\s\S]*return "manual-reconciliation-required"/,
-    "hashless pending recovery must normalize two-RPC nonce evidence and never clear a consumed unknown nonce",
-  );
-  assert.doesNotMatch(
-    miningTxPathSource,
-    /typeof (?:raw\.)?ts !== "number" \|\| !Number\.isFinite\((?:raw\.)?ts\) \|\| (?:raw\.)?ts <= 0|now - state\.ts >= PENDING_TX_NOT_FOUND_GRACE_MS|latestNonce > state\.nonce|pendingNonce > state\.nonce/,
-    "mining tx recovery must not return to broad finite timestamp checks, direct age arithmetic, or raw nonce comparisons",
-  );
-  assert.match(
-    miningTxPathSource,
-    /pendingTxStorageKey[\s\S]*getAddress\(contract\)[\s\S]*getAddress\(actor\)/,
-    "pending mining tx storage keys must normalize contract and actor addresses with the EVM address parser",
-  );
-  assert.match(
-    miningTxPathSource,
-    /function tryPendingTxStorageKey\(chainId: number, contract: string, actor: string\)[\s\S]*return pendingTxStorageKey\(chainId, contract, actor\);[\s\S]*catch \{[\s\S]*return null;[\s\S]*export function clearPendingMiningTxState[\s\S]*const key = tryPendingTxStorageKey\(chainId, contract, actor\);[\s\S]*if \(!key\) return false;/,
-    "pending mining tx scoped storage cleanup must fail closed when contract or actor scope is malformed",
+  const unsafeHashlessRecoveryResults = await Promise.all([
+    miningTxPath.recoverPendingMiningTx(hashlessRecoveryClients({
+      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
+      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
+      getTransactionCount: async () => Number.MAX_SAFE_INTEGER + 1,
+    }), ambiguousPendingMiningState, ambiguousPendingMiningState.ts + 15 * 60_000),
+    miningTxPath.recoverPendingMiningTx(hashlessRecoveryClients({
+      getTransactionReceipt: async () => { throw new Error("hashless state must not request a receipt"); },
+      getTransaction: async () => { throw new Error("hashless state must not request a transaction"); },
+      getTransactionCount: async () => 7,
+    }), ambiguousPendingMiningState, Number.MAX_SAFE_INTEGER + 1),
+  ]);
+  assert.deepEqual(
+    unsafeHashlessRecoveryResults,
+    ["pending", "pending"],
+    "hashless pending recovery must fail closed on unsafe nonce or caller-time evidence",
   );
   assert.match(
     readFileSync("app/hooks/usePrivyWallet.ts", "utf8"),
     /function normalizeWalletAddress[\s\S]*getAddress\(value\)[\s\S]*normalizeWalletAddress\(embeddedWallet\.address\)/,
     "Privy wallet selection must normalize embedded and external wallet addresses before comparison",
   );
-  assert.match(
-    readFileSync("app/components/wallet/WalletSettingsOverviewPanel.tsx", "utf8"),
-    /getAddress\(address\)\.toLowerCase\(\)/,
-    "wallet settings resolver rows must normalize connected and embedded wallet addresses before comparison",
-  );
+  const secondaryActor = "0x3333333333333333333333333333333333333333";
   const priorWindow = globalThis.window;
   const pendingStorage = new Map();
   try {
@@ -346,9 +943,106 @@ export async function runWalletModelTests() {
       null,
       "pending tx recovery reads with malformed contracts must fail closed without throwing",
     );
-    assert.doesNotThrow(
-      () => miningTxPath.clearPendingMiningTxState(pendingMiningState.chainId, pendingMiningState.contract, "0x1234"),
-      "pending tx recovery cleanup with a malformed actor must not throw",
+    const sentinelPendingWrite = miningTxPath.writePendingMiningTxState({
+      chainId: pendingMiningState.chainId,
+      contract: pendingMiningState.contract,
+      actor: pendingMiningState.actor,
+      hash: pendingMiningState.hash,
+    });
+    const sentinelPendingKey = [...pendingStorage.keys()].find((key) => key.startsWith("lineaore:pending-mining-tx:v2:"));
+    const sentinelStorageSize = pendingStorage.size;
+    const sentinelRawValue = sentinelPendingKey ? pendingStorage.get(sentinelPendingKey) : undefined;
+    const malformedActorClear = miningTxPath.clearPendingMiningTxState(
+      pendingMiningState.chainId,
+      pendingMiningState.contract,
+      "0x1234",
+    );
+    const malformedContractClear = miningTxPath.clearPendingMiningTxState(
+      pendingMiningState.chainId,
+      "0x1234",
+      pendingMiningState.actor,
+    );
+    const competingScopeWrite = miningTxPath.writePendingMiningTxState({
+      chainId: pendingMiningState.chainId,
+      contract: "0x4444444444444444444444444444444444444444",
+      actor: pendingMiningState.actor,
+      hash: pendingMiningState.hash,
+    });
+    const sentinelReadAfterMalformedClear = miningTxPath.readPendingMiningTxState(
+      pendingMiningState.chainId,
+      pendingMiningState.contract,
+      pendingMiningState.actor,
+    );
+    const sentinelStorageUntouched = Boolean(
+      sentinelPendingKey
+      && pendingStorage.size === sentinelStorageSize
+      && pendingStorage.get(sentinelPendingKey) === sentinelRawValue,
+    );
+    const sentinelPendingClear = miningTxPath.clearPendingMiningTxState(
+      pendingMiningState.chainId,
+      pendingMiningState.contract,
+      pendingMiningState.actor,
+    );
+    assert.deepEqual(
+      {
+        written: sentinelPendingWrite,
+        malformedActorClear,
+        malformedContractClear,
+        competingScopeWrite,
+        storageUntouched: sentinelStorageUntouched,
+        readHash: sentinelReadAfterMalformedClear?.hash,
+        cleared: sentinelPendingClear,
+        clearedRead: miningTxPath.readPendingMiningTxState(
+          pendingMiningState.chainId,
+          pendingMiningState.contract,
+          pendingMiningState.actor,
+        ),
+      },
+      {
+        written: true,
+        malformedActorClear: false,
+        malformedContractClear: false,
+        competingScopeWrite: false,
+        storageUntouched: true,
+        readHash: pendingMiningState.hash,
+        cleared: true,
+        clearedRead: null,
+      },
+      "malformed pending tx cleanup must fail closed without mutating another scoped latch",
+    );
+    const normalizedPendingContract = "0x52908400098527886E0F7030069857D2E4169EE7";
+    const normalizedPendingActor = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+    const normalizedPendingHash = `0x${"c".repeat(64)}`;
+    const normalizedPendingWrite = miningTxPath.writePendingMiningTxState({
+      chainId: 59143,
+      contract: normalizedPendingContract,
+      actor: normalizedPendingActor,
+      hash: normalizedPendingHash,
+    });
+    const normalizedPendingRead = miningTxPath.readPendingMiningTxState(
+      59143,
+      normalizedPendingContract.toLowerCase(),
+      normalizedPendingActor.toLowerCase(),
+    );
+    const normalizedPendingClear = miningTxPath.clearPendingMiningTxState(
+      59143,
+      normalizedPendingContract.toLowerCase(),
+      normalizedPendingActor.toLowerCase(),
+    );
+    assert.deepEqual(
+      {
+        written: normalizedPendingWrite,
+        readHash: normalizedPendingRead?.hash,
+        cleared: normalizedPendingClear,
+        clearedRead: miningTxPath.readPendingMiningTxState(59143, normalizedPendingContract, normalizedPendingActor),
+      },
+      {
+        written: true,
+        readHash: normalizedPendingHash,
+        cleared: true,
+        clearedRead: null,
+      },
+      "pending mining tx storage must normalize contract and actor addresses across write, read, and clear",
     );
     miningTxPath.writePendingMiningTxState({
       chainId: pendingMiningState.chainId,
@@ -384,14 +1078,14 @@ export async function runWalletModelTests() {
       miningTxPath.readPendingMiningTxState(
         pendingMiningState.chainId,
         pendingMiningState.contract,
-        "0x3333333333333333333333333333333333333333",
+        secondaryActor,
       ),
       null,
     );
     miningTxPath.writePendingMiningTxState({
       chainId: pendingMiningState.chainId,
       contract: pendingMiningState.contract,
-      actor: "0x3333333333333333333333333333333333333333",
+      actor: secondaryActor,
       hash: `0x${"b".repeat(64)}`,
     });
     assert.equal(pendingStorage.size, 2, "different actors must keep independent pending recovery records");
@@ -408,11 +1102,21 @@ export async function runWalletModelTests() {
       miningTxPath.readPendingMiningTxState(
         pendingMiningState.chainId,
         pendingMiningState.contract,
-        "0x3333333333333333333333333333333333333333",
+        secondaryActor,
       ),
       "clearing one actor must preserve another actor's pending record",
     );
   } finally {
+    miningTxPath.clearPendingMiningTxState(
+      pendingMiningState.chainId,
+      pendingMiningState.contract,
+      pendingMiningState.actor,
+    );
+    miningTxPath.clearPendingMiningTxState(
+      pendingMiningState.chainId,
+      pendingMiningState.contract,
+      secondaryActor,
+    );
     if (priorWindow === undefined) delete globalThis.window;
     else globalThis.window = priorWindow;
   }
@@ -584,45 +1288,109 @@ export async function runWalletModelTests() {
     "wallet transfer cache keys must not reuse a history scanned from a different deploy block",
   );
   const walletTransfersSource = readFileSync("app/hooks/useWalletTransfers.ts", "utf8");
-  assert.match(
-    walletTransfersSource,
-    /wallet-transfer-history:v3[\s\S]*version: 3[\s\S]*scanCoverage: WalletTransferScanCoverage[\s\S]*historyRowsTruncated: boolean[\s\S]*candidate\.version !== 3[\s\S]*candidate\.scanCoverage !== "full"[\s\S]*candidate\.historyRowsTruncated !== "boolean"/,
-    "transfer cache v3 must require explicit coverage and row-truncation provenance",
+  const walletHookRuntimeProbe = runWalletHookRuntimeExecutableProbe();
+  const missingTransferProvenanceResults = ["version", "scanCoverage", "historyRowsTruncated"].map((field) => {
+    const candidate = { ...persistedTransferCache };
+    delete candidate[field];
+    return walletTransfers.parsePersistedWalletTransfersSummary(candidate);
+  });
+  assert.deepEqual(
+    missingTransferProvenanceResults,
+    [null, null, null],
+    "transfer cache v3 must require explicit version, coverage, and row-truncation provenance",
   );
   assert.match(
     walletTransfersSource,
     /export function getWalletTransferPersistedCacheKey\([\s\S]*normalizeWalletTransferAddress\(tokenAddress\)[\s\S]*deployBlock\.toString\(\)[\s\S]*readPersistedWalletTransfers[\s\S]*getWalletTransferPersistedCacheKey\(cacheKey\)[\s\S]*persistWalletTransfers[\s\S]*getWalletTransferPersistedCacheKey\(cacheKey\)/,
     "persisted transfer cache reads and writes must use a token- and deploy-block-scoped key",
   );
-  assert.match(
-    walletTransfersSource,
-    /if \(outResult\.status === "fulfilled"\) \{[\s\S]*?\} else \{\s*hasPartialCoverage = true;/,
+  assert.deepEqual(
+    walletHookRuntimeProbe.outgoingFailure,
+    { dataStatus: "partial", scanCoverage: "partial", outgoingFailures: 1 },
     "a failed outgoing query must make the transfer history partial",
   );
-  assert.match(
-    walletTransfersSource,
-    /const fallbackFromBlock = getWalletTransferFallbackFromBlock\(fromBlock, toBlock\);[\s\S]*if \(fallbackFromBlock > fromBlock\) \{\s*hasPartialCoverage = true;/,
+  assert.deepEqual(
+    walletHookRuntimeProbe.fallbackWindow,
+    { dataStatus: "partial", scanCoverage: "partial", startedAfterFullRange: true },
     "a fallback window that starts after the full range must make the transfer history partial",
   );
-  assert.match(
-    walletTransfersSource,
-    /allLogs\.push\(\.\.\.chunk\);\s*\} catch \{\s*hasPartialCoverage = true;/,
+  assert.deepEqual(
+    walletHookRuntimeProbe.fallbackChunkFailure,
+    { dataStatus: "partial", scanCoverage: "partial", fallbackCalls: 1 },
     "a failed fallback log chunk must make the transfer history partial",
   );
-  const decodeSkipCoverageMatches = walletTransfersSource.match(/const decoded = decodeEventLog\([\s\S]*?\} catch \{\s*hasPartialCoverage = true;\s*\}/g) ?? [];
-  assert.equal(
-    decodeSkipCoverageMatches.length,
-    2,
-    "both inbound and outbound decode skips must make the transfer history partial",
-  );
-  assert.match(
-    walletTransfersSource,
-    /dataStatus: hasPartialCoverage \? "partial" : "live"[\s\S]*scanCoverage: hasPartialCoverage \? "partial" : "full"/,
+  assert.deepEqual(
+    {
+      statusMatrix: [
+        walletHookRuntimeProbe.full,
+        {
+          dataStatus: walletHookRuntimeProbe.outgoingFailure.dataStatus,
+          scanCoverage: walletHookRuntimeProbe.outgoingFailure.scanCoverage,
+        },
+        {
+          dataStatus: walletHookRuntimeProbe.fallbackWindow.dataStatus,
+          scanCoverage: walletHookRuntimeProbe.fallbackWindow.scanCoverage,
+        },
+        {
+          dataStatus: walletHookRuntimeProbe.fallbackChunkFailure.dataStatus,
+          scanCoverage: walletHookRuntimeProbe.fallbackChunkFailure.scanCoverage,
+        },
+      ],
+      fetchCalls: walletHookRuntimeProbe.fetchCalls,
+      blockNumberCalls: walletHookRuntimeProbe.blockNumberCalls,
+      loggerWarnings: walletHookRuntimeProbe.loggerWarnings,
+    },
+    {
+      statusMatrix: [
+        { dataStatus: "live", scanCoverage: "full" },
+        { dataStatus: "partial", scanCoverage: "partial" },
+        { dataStatus: "partial", scanCoverage: "partial" },
+        { dataStatus: "partial", scanCoverage: "partial" },
+      ],
+      fetchCalls: 0,
+      blockNumberCalls: 4,
+      loggerWarnings: 1,
+    },
     "every recorded partial condition must reach both summary status and explicit coverage",
   );
-  assert.match(
-    walletTransfersSource,
-    /const seenLogs = new Set<string>\(\)[\s\S]*seenLogs\.add\(getWalletTransferLogKey\(log\)\)[\s\S]*seenLogs\.has\(getWalletTransferLogKey\(log\)\)/,
+  const walletTransferExecutableProbe = runWalletTransferExecutableProbe();
+  assert.deepEqual(
+    walletTransferExecutableProbe.decodeSkipCoverageResults,
+    [
+      {
+        returnedLogCounts: [1, 0],
+        scanCoverage: "partial",
+        transferCount: 0,
+        historyRowsTruncated: false,
+        storageWrites: 1,
+      },
+      {
+        returnedLogCounts: [0, 1],
+        scanCoverage: "partial",
+        transferCount: 0,
+        historyRowsTruncated: false,
+        storageWrites: 1,
+      },
+    ],
+    "both inbound and outbound decode skips must make the persisted transfer history partial",
+  );
+  assert.deepEqual(
+    {
+      transferCount: walletTransferExecutableProbe.transfers.length,
+      directions: walletTransferExecutableProbe.transfers.map(({ direction }) => direction).sort(),
+      logIndexes: walletTransferExecutableProbe.transfers
+        .map(({ logIndex }) => logIndex)
+        .sort((left, right) => left - right),
+      scanCoverage: walletTransferExecutableProbe.scanCoverage,
+      historyRowsTruncated: walletTransferExecutableProbe.historyRowsTruncated,
+    },
+    {
+      transferCount: 2,
+      directions: ["in", "out"],
+      logIndexes: [0, 1],
+      scanCoverage: "full",
+      historyRowsTruncated: false,
+    },
     "wallet transfer fallback dedupe must compare event logs, not whole transactions",
   );
   assert.match(
@@ -630,15 +1398,30 @@ export async function runWalletModelTests() {
     /readPersistedWalletTransfers[\s\S]*dataStatus: unavailableSummary\.dataStatus === "stale"[\s\S]*Transfer history is temporarily unavailable[\s\S]*persistWalletTransfers\(cacheKey, summary\)/,
     "transfer history must preserve a verified cached result and report RPC failures instead of replacing it with an empty summary",
   );
-  assert.match(
-    walletTransfersSource,
-    /export function normalizeWalletTransferTxHash\(value: unknown\)[\s\S]*\/\^0x\[0-9a-f\]\{64\}\$\/\.test\(normalized\)[\s\S]*const txHash = normalizeWalletTransferTxHash\(log\.transactionHash\)/,
-    "wallet transfer history rows must only publish full transaction hashes",
+  assert.equal(
+    walletTransferExecutableProbe.transfers[0]?.txHash,
+    `0x${"ab".repeat(32)}`,
+    "wallet transfer history rows must only publish normalized full transaction hashes",
   );
-  assert.match(
-    walletTransfersSource,
-    /export function normalizeWalletTransferAddress\(value: string \| null \| undefined\)[\s\S]*getAddress\(value\)\.toLowerCase\(\)[\s\S]*const addr = normalizeWalletTransferAddress\(embeddedAddress\)[\s\S]*externalWalletAddress && !externalAddr[\s\S]*pad\(addr as Hex/,
-    "wallet transfer history must validate scan and filter addresses before log queries",
+  assert.deepEqual(
+    {
+      topicLengths: walletTransferExecutableProbe.getLogsTopicLengths,
+      addressTopics: walletTransferExecutableProbe.addressTopics,
+      invalidRpcCalls: walletTransferExecutableProbe.invalidRpcCalls,
+      invalidStorageWrites: walletTransferExecutableProbe.invalidStorageWrites,
+      fetchCalls: walletTransferExecutableProbe.fetchCalls,
+    },
+    {
+      topicLengths: [2, 3],
+      addressTopics: [
+        "0x000000000000000000000000d8da6bf26964af9d7eed9e03e53415d37aa96045",
+        "0x000000000000000000000000d8da6bf26964af9d7eed9e03e53415d37aa96045",
+      ],
+      invalidRpcCalls: 0,
+      invalidStorageWrites: 0,
+      fetchCalls: 0,
+    },
+    "wallet transfer history must validate and pad addresses before mocked log queries",
   );
   assert.doesNotMatch(
     walletTransfersSource,
@@ -650,20 +1433,24 @@ export async function runWalletModelTests() {
     /const addr = embeddedAddress\.toLowerCase\(\)|externalWalletAddress\?\.toLowerCase\(\)|pad\(embeddedAddress as Hex/,
     "wallet transfer history must not lower-case or pad raw wallet addresses",
   );
-  assert.match(
-    walletTransfersSource,
-    /totalInDisplay: toDisplayAmountWei\(totalInWei\)[\s\S]*totalOutDisplay: toDisplayAmountWei\(totalOutWei\)/,
+  assert.deepEqual(
+    [walletTransferExecutableProbe.totalInDisplay, walletTransferExecutableProbe.totalOutDisplay],
+    ["0.00", "9007199254740993.56"],
     "wallet transfer summary must keep bigint-safe total display strings",
   );
-  assert.match(
-    walletTransfersSource,
-    /formatLineaWeiDisplayNumber[\s\S]*function toDisplayNumberWei\(value: bigint\)[\s\S]*return formatLineaWeiDisplayNumber\(value\)/,
+  assert.deepEqual(
+    [
+      walletTransferExecutableProbe.totalIn,
+      walletTransferExecutableProbe.totalOut,
+      Math.max(...walletTransferExecutableProbe.transfers.map(({ amountNum }) => amountNum)),
+    ],
+    [0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER],
     "wallet transfer numeric compatibility totals must derive from bounded raw-wei formatting",
   );
-  assert.doesNotMatch(
-    walletTransfersSource,
-    /Number\(formatUnits\(value, 18\)\)|Number\(formatLineaAmountFixed\(value, 6\)\)/,
-    "wallet transfer summary must not coerce formatted wei values through Number(formatUnits()) or formatted decimal strings",
+  assert.notEqual(
+    walletTransferExecutableProbe.totalOut,
+    Number(walletTransferExecutableProbe.totalOutDisplay),
+    "wallet transfer summary must not derive numeric compatibility totals from formatted decimal strings",
   );
   assert.deepEqual(
     pageWalletOverview.normalizeCachedPrivyBalances({ token: "12.3", eth: "0.0925" }),
@@ -703,6 +1490,35 @@ export async function runWalletModelTests() {
     `lore:privy-balances:v1:59141:0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a:0xd8da6bf26964af9d7eed9e03e53415d37aa96045`,
   );
   assert.equal(pageWalletOverview.getPrivyBalanceCacheKey("0xabc"), null);
+  {
+    const cacheKey = "wallet-overview:test";
+    const storage = new Map([[cacheKey, "{bad json"]]);
+    assert.deepEqual(
+      pageWalletOverview.readCachedPrivyBalanceEntry({
+        getItem: (key) => storage.get(key) ?? null,
+        removeItem: (key) => storage.delete(key),
+      }, cacheKey),
+      {
+        cacheKey,
+        balances: { token: null, tokenUpdatedAt: null, eth: null, ethUpdatedAt: null },
+      },
+      "wallet overview must fail closed and clear corrupt cached balances",
+    );
+    assert.equal(storage.has(cacheKey), false, "corrupt wallet overview cache entries must be removed");
+  }
+  assert.equal(
+    pageWalletOverview.isEmbeddedWalletActive(
+      "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+      "0xd8da6bf26964af9d7eed9e03e53415d37aa96045",
+    ),
+    true,
+    "wallet overview must compare normalized EVM addresses",
+  );
+  assert.equal(
+    pageWalletOverview.isEmbeddedWalletActive("0xabc", "0xabc"),
+    false,
+    "matching malformed wallet strings must never identify the embedded wallet",
+  );
   assert.equal(
     balanceFormatting.formatDecimalTextFixed("9007199254740993.555", 2),
     "9007199254740993.56",
@@ -725,41 +1541,33 @@ export async function runWalletModelTests() {
   assert.equal(balanceFormatting.formatBalanceFixed({ value: 5n, decimals: 6 }, 4), "0.0000");
   assert.equal(balanceFormatting.formatBalanceFixed({ value: -1n, decimals: 18 }, 2), null);
   assert.equal(balanceFormatting.formatBalanceFixed({ value: 1n, decimals: 256 }, 2), null);
-  const pageWalletOverviewSource = readFileSync("app/hooks/usePageWalletOverview.ts", "utf8");
-  assert.match(
-    pageWalletOverviewSource,
-    /const raw = window\.localStorage\.getItem\(balanceCacheKey\)[\s\S]*window\.localStorage\.removeItem\(balanceCacheKey\)/,
-    "wallet overview balance cache reads must clear corrupt or invalid localStorage entries",
-  );
-  assert.match(
-    pageWalletOverviewSource,
-    /formatBalanceFixed\(embeddedTokenBalance, 2\)[\s\S]*formatBalanceFixed\(embeddedEthBalance, 4\)/,
+  assert.deepEqual(
+    walletHookRuntimeProbe.pageWalletBalances,
+    {
+      token: "9007199254740993.56",
+      eth: "9007199254740993.5550",
+      headerLinea: "9007199254740993.56",
+    },
     "wallet overview live balances must use shared raw bigint balance formatting",
   );
-  assert.match(
-    pageWalletOverviewSource,
-    /export function normalizePageWalletAddress\(value: string \| null \| undefined\)[\s\S]*getAddress\(value\)\.toLowerCase\(\)[\s\S]*function getPrivyBalanceCacheKey[\s\S]*normalizePageWalletAddress\(address\)[\s\S]*const normalizedActiveAddress = normalizePageWalletAddress\(address\)[\s\S]*normalizedActiveAddress === normalizedEmbeddedWalletAddress/,
-    "wallet overview must validate cache and active-wallet addresses before comparing or keying balances",
-  );
-  assert.doesNotMatch(
-    pageWalletOverviewSource,
-    /Number\(getFormattedBalance\(embedded(?:Token|Eth)Balance\)\)/,
+  assert.deepEqual(
+    {
+      tokenAvoidsNumericCoercion:
+        walletHookRuntimeProbe.pageWalletBalances.token !== walletHookRuntimeProbe.numericCoercionPageBalances.token,
+      ethAvoidsNumericCoercion:
+        walletHookRuntimeProbe.pageWalletBalances.eth !== walletHookRuntimeProbe.numericCoercionPageBalances.eth,
+    },
+    { tokenAvoidsNumericCoercion: true, ethAvoidsNumericCoercion: true },
     "wallet overview live balances must not coerce formatted balances through Number()",
   );
-  assert.doesNotMatch(
-    pageWalletOverviewSource,
-    /address\.toLowerCase\(\)|normalizedEmbeddedAddress\.toLowerCase\(\)/,
-    "wallet overview must not compare or cache raw wallet address strings",
-  );
-  const gameDerivedStateSource = readFileSync("app/hooks/useGameDerivedState.ts", "utf8");
-  assert.match(
-    gameDerivedStateSource,
-    /formatDecimalTextFixed\(tokenBalanceFormatted, 2\)/,
+  assert.equal(
+    walletHookRuntimeProbe.gameLineaBalance,
+    "9007199254740993.56",
     "active wallet LINEA display must use shared decimal text formatting",
   );
-  assert.doesNotMatch(
-    gameDerivedStateSource,
-    /Number\(tokenBalanceFormatted\)\.toFixed\(2\)/,
+  assert.notEqual(
+    walletHookRuntimeProbe.gameLineaBalance,
+    walletHookRuntimeProbe.numericCoercionGameLineaBalance,
     "active wallet LINEA display must not coerce formatted balance text through Number()",
   );
   assert.deepEqual(
@@ -836,10 +1644,54 @@ export async function runWalletModelTests() {
     ) > 0,
     "first-bet ordering must use the safe epoch order before its tx-hash tie-breaker",
   );
-  const analyticsAchievementsSource = readFileSync("app/hooks/useAnalyticsAchievements.ts", "utf8");
-  assert.match(
-    analyticsAchievementsSource,
-    /const parsed = JSON\.parse\(raw\) as PersistedAchievements[\s\S]*localStorage\.removeItem\(storageKey\)[\s\S]*catch \{[\s\S]*const storageKey = getAchievementStorageKey\(walletAddress\)[\s\S]*localStorage\.removeItem\(storageKey\)/,
+  const achievementsWalletAddress = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+  const achievementsStorageKey = `lore:achievements:v3:${appConstants.APP_CHAIN_ID}:${appConstants.CONTRACT_ADDRESS.toLowerCase()}:${achievementsWalletAddress.toLowerCase()}`;
+  const achievementCleanupOutcomes = [];
+  const priorLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  function AchievementCleanupProbe() {
+    analyticsAchievements.useAnalyticsAchievements({
+      walletAddress: achievementsWalletAddress,
+      deposits: [],
+      totalDeposited: 0,
+      definitions: [],
+      rarityById: {},
+      defaultRarity: "common",
+    });
+    return null;
+  }
+  try {
+    for (const invalidPayload of ["{", JSON.stringify({ unlockedAt: null })]) {
+      const storage = new Map([[achievementsStorageKey, invalidPayload]]);
+      const removedKeys = [];
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: {
+          getItem: (key) => storage.get(key) ?? null,
+          removeItem: (key) => {
+            removedKeys.push(key);
+            storage.delete(key);
+          },
+        },
+      });
+      renderToStaticMarkup(React.createElement(AchievementCleanupProbe));
+      achievementCleanupOutcomes.push({
+        removedKeys,
+        remaining: storage.has(achievementsStorageKey),
+      });
+    }
+  } finally {
+    if (priorLocalStorageDescriptor) {
+      Object.defineProperty(globalThis, "localStorage", priorLocalStorageDescriptor);
+    } else {
+      delete globalThis.localStorage;
+    }
+  }
+  assert.deepEqual(
+    achievementCleanupOutcomes,
+    [
+      { removedKeys: [achievementsStorageKey], remaining: false },
+      { removedKeys: [achievementsStorageKey], remaining: false },
+    ],
     "analytics achievements must clear corrupt or invalid localStorage entries",
   );
   assert.deepEqual(

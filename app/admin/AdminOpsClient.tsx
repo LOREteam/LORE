@@ -270,6 +270,16 @@ function fmtMode(value?: string | null) {
   return value.replace(/_/g, " ");
 }
 
+function formatReadOnlyBettingMode(value: boolean | null | undefined): "on" | "off" | "unknown" {
+  if (value === true) return "on";
+  if (value === false) return "off";
+  return "unknown";
+}
+
+export function ReadOnlyBettingMode({ value }: { value: boolean | null | undefined }) {
+  return <b className="text-slate-200">{formatReadOnlyBettingMode(value)}</b>;
+}
+
 function statusToneClass(status?: string | null) {
   if (status === "healthy" || status === "ok") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
   if (status === "degraded") return "border-amber-500/30 bg-amber-500/10 text-amber-200";
@@ -1130,7 +1140,7 @@ export default function AdminOpsClient() {
               Visibility: <b className="text-slate-200">{runtimeHealth?.visibility ?? "..."}</b>
             </div>
             <div className="text-sm text-gray-400">
-              Read-only betting: <b className="text-slate-200">{runtimeHealth?.publicConfig?.readOnlyMode ? "on" : "off"}</b>
+              Read-only betting: <ReadOnlyBettingMode value={runtimeHealth?.publicConfig?.readOnlyMode} />
             </div>
           </div>
           <div className="space-y-2 rounded border border-white/10 bg-white/2 p-4">

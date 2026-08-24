@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  copyFileSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -17,14 +18,23 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import nodeTest from "node:test";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { privateKeyToAccount } from "viem/accounts";
+import { resolveTrustedGitExecutable } from "./build-provenance.mjs";
 import { loadLiveTestPublicWalletConfig } from "./live-test-wallet-config.mjs";
 import {
   resolveTrustedNpmCli,
   trustedNpmCommand,
   trustedNpmEnvironment,
 } from "./trusted-npm-cli.mjs";
+import { verifyV10SepoliaDeploymentManifest } from "./verify-v10-sepolia-deployment-manifest.mjs";
+import {
+  canonicalJsonSha256,
+  consentEnvelopeSha256,
+  createV10PreviewConsentEnvelope,
+  parseV10DryRunLogEvidence,
+} from "./v10-preview-consent-envelope.mjs";
+import { captureV10PreviewRepositoryState } from "./v10-preview-repository-state.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -52,12 +62,22 @@ const UNTRUSTED_NPM_NETWORK_ENV_KEYS = [
   "ssl_cert_dir",
   "ssl_cert_file",
 ];
-const DRY_RUN_LOG_TEXT = "{}\n";
 const DRY_RUN_LOG_NAME = "live-canary-20260813T000000Z.jsonl";
 const DRY_RUN_LOG_RELATIVE_PATH = path.join("data", "live-test-runs", DRY_RUN_LOG_NAME);
 const LIVE_WALLET_ROLES = ["MANUAL", "AUTOMINER_A", "AUTOMINER_B", "AUTOMINER_C", "RESOLVER"];
 const WALLET_SET_SHA256 = "a".repeat(64);
 const CANARY_PLAN_SHA256 = "b".repeat(64);
+const AUTHORIZATION_RUN_ID = "123e4567-e89b-42d3-a456-426614174000";
+const DRY_RUN_ADMISSION_RUN_ID = "123e4567-e89b-42d3-a456-426614174001";
+const FIXTURE_APPLICATION_GIT_SHA = "c".repeat(40);
+const FIXTURE_SOURCE_STATE_SHA256 = "d".repeat(64);
+const GIT_EXECUTABLE = resolveTrustedGitExecutable();
+const DEPLOYMENT_MANIFEST = verifyV10SepoliaDeploymentManifest({
+  projectRoot: REPO_ROOT,
+  verifyGitArtifact: false,
+});
+const CANONICAL_CONSENT_PLAN = createConsentPlanFixture();
+const DRY_RUN_LOG_TEXT = createDryRunLogText(CANONICAL_CONSENT_PLAN);
 const previewEnvBoundaryCases = [];
 
 function test(name, fn) {
@@ -68,12 +88,390 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function inspectChildEnv(extraEnv) {
+function createConsentPlanFixture() {
+  return {
+    schema: 1,
+    tranche: "v10-matrix",
+    profile: "v10-matrix",
+    target: {
+      network: "sepolia",
+      chainId: 59141,
+      contractAddress: DEPLOYMENT_MANIFEST.contractAddress,
+      contractDeployBlock: DEPLOYMENT_MANIFEST.deployBlock,
+      epochBoundBetsRequired: true,
+    },
+    provenance: {
+      deploymentTransactionHash: DEPLOYMENT_MANIFEST.deploymentTransactionHash,
+      deploymentManifestSha256: DEPLOYMENT_MANIFEST.deploymentManifestSha256,
+      compilationManifestSha256: DEPLOYMENT_MANIFEST.compilationManifestSha256,
+      normalizedExecutableRuntimeSha256: DEPLOYMENT_MANIFEST.normalizedExecutableRuntimeSha256,
+      sourceArtifactGitSha: DEPLOYMENT_MANIFEST.sourceArtifactGitSha,
+      canonicalDeploymentManifestVerified: true,
+    },
+    walletSetSha256: WALLET_SET_SHA256,
+    canaryPlanSha256: CANARY_PLAN_SHA256,
+    roles: {
+      selectedRoles: ["AUTOMINER_A", "AUTOMINER_B", "MANUAL"],
+      resolverCandidateRoles: ["RESOLVER", "AUTOMINER_A", "AUTOMINER_B", "MANUAL"],
+      roleCaps: [
+        { role: "AUTOMINER_A", spendCapWei: "160000000000000000", allowanceCapWei: "160000000000000000" },
+        { role: "AUTOMINER_B", spendCapWei: "560000000000000000", allowanceCapWei: "560000000000000000" },
+        { role: "MANUAL", spendCapWei: "120000000000000000", allowanceCapWei: "120000000000000000" },
+      ],
+    },
+    txCaps: { approval: 3, bet: 12, resolve: 5, pendingReplacement: 0, total: 20 },
+    valueCaps: {
+      totalSpendWei: "840000000000000000",
+      maxApprovalCostPerTxWei: "200000000000000",
+      maxKeeperCostPerTxWei: "2000000000000000",
+      maxNativeGasWei: "34600000000000000",
+    },
+    maxEpochs: 11,
+    stopPolicy: {
+      maxFailures: 1,
+      maxResolveTransactions: 5,
+      safeWindowTimeoutMs: 180000,
+      transactionReceiptTimeoutMs: 120000,
+      liveLogMaxBytes: 48 * 1024 * 1024,
+      stopOnBindingFailure: true,
+      stopOnPreflightFailure: true,
+      stopOnPendingNonce: true,
+      stopOnBetFailure: true,
+      stopOnRepeatFailure: true,
+      stopOnResolveFailure: true,
+      stopOnSafeWindowTimeout: true,
+    },
+    liveExecutionRequiresFreshAuthorization: true,
+  };
+}
+
+function canonicalAdmissionPayload(admission) {
+  return JSON.stringify({
+    schema: admission.schema,
+    runId: admission.runId,
+    execution: admission.execution,
+    profile: admission.profile,
+    network: admission.network,
+    chainId: admission.chainId,
+    contractAddress: admission.contractAddress.toLowerCase(),
+    contractDeployBlock: admission.contractDeployBlock,
+    runtimeSha256: admission.runtimeSha256,
+    manifestSha256: admission.manifestSha256,
+    deploymentManifestSha256: admission.deploymentManifestSha256,
+    sourceArtifactGitSha: admission.sourceArtifactGitSha,
+    canonicalProvenanceVerified: admission.canonicalProvenanceVerified,
+    previewSha256: admission.previewSha256,
+    walletSetSha256: admission.walletSetSha256,
+    canaryPlanSha256: admission.canaryPlanSha256,
+    selectedRoles: [...admission.selectedRoles].sort(),
+    roleCaps: [...admission.roleCaps]
+      .map((cap) => ({ ...cap }))
+      .sort((left, right) => left.role.localeCompare(right.role)),
+  });
+}
+
+function canonicalTokenAmountFromWei(value) {
+  const amount = BigInt(value);
+  const scale = 1_000_000_000_000_000_000n;
+  const whole = amount / scale;
+  const fraction = amount % scale;
+  if (fraction === 0n) return whole.toString();
+  return `${whole}.${fraction.toString().padStart(18, "0").replace(/0+$/, "")}`;
+}
+
+function createDryRunEvents(
+  consentPlan,
+  timestamp = new Date().toISOString(),
+  admissionRunId = AUTHORIZATION_RUN_ID,
+) {
+  const admission = {
+    schema: 2,
+    runId: admissionRunId,
+    execution: "dry-run",
+    profile: "v10-matrix",
+    network: consentPlan.target.network,
+    chainId: consentPlan.target.chainId,
+    contractAddress: consentPlan.target.contractAddress,
+    contractDeployBlock: consentPlan.target.contractDeployBlock,
+    runtimeSha256: consentPlan.provenance.normalizedExecutableRuntimeSha256,
+    manifestSha256: consentPlan.provenance.compilationManifestSha256,
+    deploymentManifestSha256: consentPlan.provenance.deploymentManifestSha256,
+    sourceArtifactGitSha: consentPlan.provenance.sourceArtifactGitSha,
+    canonicalProvenanceVerified: true,
+    previewSha256: null,
+    walletSetSha256: consentPlan.walletSetSha256,
+    canaryPlanSha256: consentPlan.canaryPlanSha256,
+    selectedRoles: [...consentPlan.roles.selectedRoles],
+    roleCaps: consentPlan.roles.roleCaps.map((cap) => ({ ...cap })),
+  };
+  const admissionSha256 = sha256(canonicalAdmissionPayload(admission));
+  const common = {
+    network: consentPlan.target.network,
+    chainId: consentPlan.target.chainId,
+    contractAddress: consentPlan.target.contractAddress,
+    rpcLabel: "fixture-public-sepolia",
+    rpcFailoverInjected: false,
+  };
+  const binding = {
+    admissionSha256,
+    runId: admission.runId,
+    walletSetSha256: consentPlan.walletSetSha256,
+  };
+  const observedBlock = (BigInt(consentPlan.target.contractDeployBlock) + 1n).toString();
+  return [
+    {
+      ...common,
+      admission,
+      admissionSha256,
+      amount: "0",
+      mode: "admission",
+      ok: true,
+      role: "SYSTEM",
+      round: -1,
+      signatureRequested: false,
+      signingMaterialLoaded: false,
+      timestamp,
+      transactionSent: false,
+      walletClientCreated: false,
+    },
+    {
+      ...common,
+      ...binding,
+      amount: "0",
+      mode: "preflight",
+      ok: true,
+      role: "SYSTEM",
+      round: -1,
+      runtimeIdentity: {
+        canonicalProvenanceVerified: true,
+        chainId: consentPlan.target.chainId,
+        contractAddress: consentPlan.target.contractAddress,
+        deployBlock: consentPlan.target.contractDeployBlock,
+        executableBytes: 1024,
+        executableRuntimeBytes: 1024,
+        immutableReferences: 2,
+        manifestDigest: consentPlan.provenance.compilationManifestSha256,
+        manifestMatched: true,
+        normalizedRuntimeSha256: consentPlan.provenance.normalizedExecutableRuntimeSha256,
+        observedBlock,
+        observedBlockHash: `0x${"7".repeat(64)}`,
+      },
+      deploymentManifestSha256: consentPlan.provenance.deploymentManifestSha256,
+      sourceArtifactGitSha: consentPlan.provenance.sourceArtifactGitSha,
+      timestamp,
+    },
+    ...consentPlan.roles.roleCaps.map((cap, index) => ({
+      ...common,
+      ...binding,
+      amount: "0",
+      allowance: "0",
+      allowanceCapWei: cap.allowanceCapWei,
+      allowanceWei: "0",
+      allowanceWithinRunCap: true,
+      approvalRequired: true,
+      approvalTarget: canonicalTokenAmountFromWei(cap.allowanceCapWei),
+      enoughEth: true,
+      enoughToken: true,
+      mode: "preflight",
+      nonceLatest: index + 8,
+      noncePending: index + 8,
+      ok: true,
+      participant: true,
+      role: cap.role,
+      round: -1,
+      timestamp,
+      totalAmount: canonicalTokenAmountFromWei(cap.spendCapWei),
+      totalAmountWei: cap.spendCapWei,
+    })),
+  ];
+}
+
+function createDryRunLogText(
+  consentPlan,
+  timestamp = new Date().toISOString(),
+  admissionRunId = AUTHORIZATION_RUN_ID,
+) {
+  return `${createDryRunEvents(consentPlan, timestamp, admissionRunId).map((event) => JSON.stringify(event)).join("\n")}\n`;
+}
+
+function createAnalyzerSummary(logPath, logText, walletPreflights) {
+  return {
+    status: "pass",
+    mode: "preview-dry-run",
+    previewDryRunVerdict: "passed",
+    liveLaunchGates: ["G10", "G11"],
+    logName: path.basename(logPath),
+    logSha256: sha256(logText),
+    logBytes: Buffer.byteLength(logText, "utf8"),
+    actionEvents: 0,
+    successfulActionTx: 0,
+    transactionEvidenceEvents: 0,
+    runtimeIdentityPreflights: 1,
+    walletPreflights,
+    issues: [],
+  };
+}
+
+function fixtureGitEnvironment() {
+  const env = {
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_PAGER: "cat",
+    GIT_AUTHOR_NAME: "Preview Fixture",
+    GIT_AUTHOR_EMAIL: "preview-fixture@example.invalid",
+    GIT_COMMITTER_NAME: "Preview Fixture",
+    GIT_COMMITTER_EMAIL: "preview-fixture@example.invalid",
+  };
+  for (const key of ["SystemRoot", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR"]) {
+    if (typeof process.env[key] === "string") env[key] = process.env[key];
+  }
+  return env;
+}
+
+function runFixtureGit(root, args) {
+  const result = spawnSync(GIT_EXECUTABLE, [
+    "--no-pager",
+    "-c", `safe.directory=${root.replaceAll("\\", "/")}`,
+    "-c", "core.hooksPath=",
+    "-c", "commit.gpgsign=false",
+    ...args,
+  ], {
+    cwd: root,
+    encoding: "utf8",
+    env: fixtureGitEnvironment(),
+    timeout: 10_000,
+    windowsHide: true,
+  });
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.signal, null, result.stderr || result.stdout);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return String(result.stdout ?? "").trim();
+}
+
+function initializeFixtureProjectClone(root, {
+  includeGenerator = false,
+  linkDependencies = false,
+  includeLiveCanary = linkDependencies,
+} = {}) {
+  const clone = spawnSync(GIT_EXECUTABLE, [
+    "-c", `safe.directory=${REPO_ROOT.replaceAll("\\", "/")}`,
+    "-c", `safe.directory=${path.join(REPO_ROOT, ".git").replaceAll("\\", "/")}`,
+    "clone", "--quiet", "--shared", "--no-checkout", REPO_ROOT, root,
+  ], {
+    cwd: path.dirname(root),
+    encoding: "utf8",
+    env: fixtureGitEnvironment(),
+    timeout: 30_000,
+    windowsHide: true,
+  });
+  assert.equal(clone.error, undefined, clone.error?.message);
+  assert.equal(clone.signal, null, clone.stderr || clone.stdout);
+  assert.equal(clone.status, 0, clone.stderr || clone.stdout);
+  const fixtureEntryFiles = [
+    "scripts/analyze-live-canary-proof.mjs",
+    "scripts/check-v10-dry-run-preview.mjs",
+    ".gitignore",
+    ".npmrc",
+    "package.json",
+    "tsconfig.json",
+    "config/lineaV10SepoliaDeploymentManifest.json",
+    "config/publicConfig.ts",
+    "config/generated/lineaOreV10Abi.ts",
+    "contracts/LineaOreV10.sol",
+    "contracts/LineaOreV10.compilation.json",
+    "contracts/LineaOreV10.compiler-config.json",
+  ];
+  if (includeGenerator) fixtureEntryFiles.push("scripts/create-v10-canary-dry-run-preview.mjs");
+  if (includeLiveCanary) fixtureEntryFiles.push("scripts/live-round-canary.ts");
+  copyFixtureProjectGraph(root, fixtureEntryFiles);
+  mkdirSync(path.join(root, "docs"), { recursive: true });
+  writeFileSync(path.join(root, "docs", "v10-canary-dry-run-preview.md"), "# Preview fixture\n", "utf8");
+  runFixtureGit(root, ["config", "core.autocrlf", "false"]);
+  runFixtureGit(root, ["add", "-A"]);
+  runFixtureGit(root, ["commit", "--quiet", "--no-gpg-sign", "-m", "current Preview contracts"]);
+  mkdirSync(path.join(root, "artifacts"), { recursive: true });
+  mkdirSync(path.join(root, "data", "live-test-runs"), { recursive: true });
+  if (linkDependencies) {
+    symlinkSync(
+      path.join(REPO_ROOT, "node_modules"),
+      path.join(root, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+  }
+  return captureV10PreviewRepositoryState({ root });
+}
+
+function copyFixtureProjectGraph(root, entryFiles) {
+  const queue = [...entryFiles];
+  const copied = new Set();
+  const importPattern = /(?:\bfrom\s*|\bimport\s*)["'](\.\.?\/[^"']+)["']/g;
+  while (queue.length > 0) {
+    const relativePath = queue.shift().replaceAll("\\", "/");
+    if (copied.has(relativePath)) continue;
+    const sourcePath = path.join(REPO_ROOT, relativePath);
+    assert.equal(lstatSync(sourcePath).isFile(), true, `fixture source must be a file: ${relativePath}`);
+    const targetPath = path.join(root, relativePath);
+    mkdirSync(path.dirname(targetPath), { recursive: true });
+    copyFileSync(sourcePath, targetPath);
+    copied.add(relativePath);
+    if (!/\.(?:[cm]?[jt]sx?)$/.test(relativePath)) continue;
+    const fixtureModuleText = readFileSync(sourcePath, "utf8");
+    for (const match of fixtureModuleText.matchAll(importPattern)) {
+      const basePath = path.resolve(path.dirname(sourcePath), match[1]);
+      const candidates = [basePath, ...[".ts", ".tsx", ".js", ".mjs", ".json"].map((suffix) => `${basePath}${suffix}`)];
+      const importedPath = candidates.find((candidate) => existsSync(candidate) && lstatSync(candidate).isFile());
+      if (!importedPath) continue;
+      const importedRelativePath = path.relative(REPO_ROOT, importedPath).replaceAll("\\", "/");
+      assert.equal(importedRelativePath.startsWith("../"), false, "fixture import escaped the project root");
+      queue.push(importedRelativePath);
+    }
+  }
+}
+
+function defaultRepositoryState() {
+  return {
+    applicationGitSha: FIXTURE_APPLICATION_GIT_SHA,
+    sourceTreeClean: true,
+    sourceStateSha256: FIXTURE_SOURCE_STATE_SHA256,
+  };
+}
+
+function createConsentEnvelopeFixture({
+  consentPlan = CANONICAL_CONSENT_PLAN,
+  logText = createDryRunLogText(consentPlan),
+  repositoryState = defaultRepositoryState(),
+  authorizationRunId = AUTHORIZATION_RUN_ID,
+} = {}) {
+  const runtimeEvidence = parseV10DryRunLogEvidence(
+    logText,
+    consentPlan,
+    { expectedAdmissionRunId: authorizationRunId },
+  );
+  return createV10PreviewConsentEnvelope({
+    authorizationRunId,
+    repositoryState,
+    consentPlan,
+    consentPlanSha256: canonicalJsonSha256(consentPlan),
+    runtimeEvidence,
+    operationalBoundary: {
+      execution: "dry-run",
+      transactionSent: false,
+      signingMaterialLoaded: false,
+      walletClientCreated: false,
+      contractWriteSubmitted: false,
+    },
+  });
+}
+
+function inspectChildEnv(extraEnv, { allowFailure = false } = {}) {
   const result = spawnSync(process.execPath, [PREVIEW_SCRIPT, "--inspect-read-only-child-env"], {
     cwd: REPO_ROOT,
     encoding: "utf8",
     env: { ...process.env, ...extraEnv },
   });
+  if (allowFailure) return result;
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean);
   return JSON.parse(lines.at(-1));
@@ -85,6 +483,9 @@ function previewStepOutputs({
   matrix = {},
   logPath = DRY_RUN_LOG_RELATIVE_PATH,
   logText = DRY_RUN_LOG_TEXT,
+  consentPlan = CANONICAL_CONSENT_PLAN,
+  consentPlanSha256 = canonicalJsonSha256(consentPlan),
+  consentPlanLines,
   analyzer = {},
 } = {}) {
   const plannerSummary = {
@@ -115,10 +516,10 @@ function previewStepOutputs({
     network: "sepolia",
     chainId: "59141",
     execution: "dry-run",
-    rounds: "2",
-    plannedBetTx: "4",
-    plannedStake: "0",
-    ready: "4/4",
+    rounds: String(consentPlan.txCaps.bet / 2),
+    plannedBetTx: String(consentPlan.txCaps.bet),
+    plannedStake: "0.84",
+    ready: `${consentPlan.roles.selectedRoles.length}/${consentPlan.roles.selectedRoles.length}`,
     transactionSent: "false",
     signingMaterialLoaded: "false",
     walletClientCreated: "false",
@@ -130,26 +531,26 @@ function previewStepOutputs({
   const matrixLine = Object.entries(matrixSummary)
     .map(([name, value]) => `${name}=${value}`)
     .join(" ");
+  const effectiveConsentPlanLines = consentPlanLines ?? [
+    `[live-canary] consentPlan=${JSON.stringify(consentPlan)} consentPlanSha256=${consentPlanSha256}`,
+  ];
+  const analyzerSummary = createAnalyzerSummary(
+    logPath,
+    logText,
+    consentPlan.roles.selectedRoles.length,
+  );
   return [
     { status: 0, stdout: `${JSON.stringify(plannerSummary)}\n`, stderr: "" },
     { status: 0, stdout: `${JSON.stringify(pendingSummary)}\n`, stderr: "" },
     {
       status: 0,
-      stdout: `[live-canary] ${matrixLine}\n[live-canary] log=${logPath}\n`,
+      stdout: `${effectiveConsentPlanLines.join("\n")}\n[live-canary] ${matrixLine}\n[live-canary] log=${logPath}\n`,
       stderr: "",
     },
     {
-      status: 1,
+      status: 0,
       signal: null,
-      stdout: [
-        `Log: ${path.basename(logPath)}`,
-        `Log SHA-256: ${sha256(logText)}`,
-        `Log bytes: ${Buffer.byteLength(logText, "utf8")}`,
-        "blocked gates: G10, G11",
-        "successful bet tx: 0",
-        "unique bet epochs: 0",
-        "missing V10 gas cases: all",
-      ].join("\n"),
+      stdout: `${JSON.stringify(analyzerSummary)}\n`,
       stderr: "",
       ...analyzer,
     },
@@ -162,44 +563,91 @@ function runMockedPreview(
     matrixLogPath,
     absoluteMatrixLog = false,
     analyzer,
-    logText = DRY_RUN_LOG_TEXT,
+    logText,
     extraEnv = {},
     captureChildCalls = false,
+    mutateLogOnPreviewRename = false,
   } = {},
 ) {
   const cwd = mkdtempSync(path.join(tmpdir(), "lore-preview-boundary-"));
-  mkdirSync(path.join(cwd, "docs"));
+  initializeFixtureProjectClone(cwd, { includeGenerator: true });
+  unlinkSync(path.join(cwd, "docs", "v10-canary-dry-run-preview.md"));
   const logDir = path.join(cwd, "data", "live-test-runs");
-  mkdirSync(logDir, { recursive: true });
-  writeFileSync(path.join(logDir, DRY_RUN_LOG_NAME), logText, "utf8");
-  const childCallsPath = path.join(cwd, "mock-preview-child-calls.jsonl");
+  const consentPlan = overrides.consentPlan ?? CANONICAL_CONSENT_PLAN;
+  const effectiveLogText = logText ?? createDryRunLogText(consentPlan);
+  writeFileSync(path.join(logDir, DRY_RUN_LOG_NAME), effectiveLogText, "utf8");
+  const childCallsPath = path.join(cwd, "artifacts", "mock-preview-child-calls.jsonl");
   const outputLogPath = matrixLogPath ?? (absoluteMatrixLog
     ? path.join(logDir, DRY_RUN_LOG_NAME)
     : DRY_RUN_LOG_RELATIVE_PATH);
   const outputs = previewStepOutputs({
     ...overrides,
     logPath: outputLogPath,
-    logText,
+    logText: effectiveLogText,
+    consentPlan,
     analyzer,
   });
   const preloadSource = `
     import childProcess from "node:child_process";
-    import { appendFileSync } from "node:fs";
+    import crypto from "node:crypto";
+    import fs, { appendFileSync } from "node:fs";
     import { syncBuiltinESMExports } from "node:module";
     const outputs = ${JSON.stringify(outputs)};
     const capturePath = ${captureChildCalls ? JSON.stringify(childCallsPath) : "null"};
+    const mutateLogOnPreviewRename = ${JSON.stringify(mutateLogOnPreviewRename)};
+    const fixtureLogPath = ${JSON.stringify(path.join(logDir, DRY_RUN_LOG_NAME))};
+    crypto.randomUUID = () => ${JSON.stringify(AUTHORIZATION_RUN_ID)};
+    const originalRenameSync = fs.renameSync.bind(fs);
+    let previewRenameMutated = false;
+    fs.renameSync = (oldPath, newPath, ...args) => {
+      const result = originalRenameSync(oldPath, newPath, ...args);
+      const normalizedTarget = String(newPath).replaceAll("\\\\", "/");
+      if (
+        mutateLogOnPreviewRename &&
+        !previewRenameMutated &&
+        normalizedTarget.endsWith("/docs/v10-canary-dry-run-preview.md")
+      ) {
+        appendFileSync(fixtureLogPath, "\\n");
+        previewRenameMutated = true;
+      }
+      return result;
+    };
+    const originalSpawnSync = childProcess.spawnSync.bind(childProcess);
+    const mockedChildren = new Set([
+      "plan:canary:v10:postdeploy:summary",
+      "soak:testnet:clear-pending:summary",
+      "live:canary:v10:matrix",
+      "scripts/analyze-live-canary-proof.mjs",
+    ]);
     let callIndex = 0;
     childProcess.spawnSync = (command, args, options) => {
+      const normalizedArgs = Array.isArray(args) ? args.map((value) => String(value).replaceAll("\\\\", "/")) : [];
+      if (!normalizedArgs.some((value) => mockedChildren.has(value))) {
+        return originalSpawnSync(command, args, options);
+      }
       if (capturePath) {
         appendFileSync(capturePath, JSON.stringify({
           command: String(command),
-          args: Array.isArray(args) ? args.map((value) => String(value)) : [],
+          args: normalizedArgs,
+          cwd: String(options?.cwd ?? ""),
+          npmBoundary: {
+            path: options?.env?.PATH ?? null,
+            scriptShell: options?.env?.npm_config_script_shell ?? null,
+            userConfig: options?.env?.npm_config_userconfig ?? null,
+            registry: options?.env?.npm_config_registry ?? null,
+            global: options?.env?.npm_config_global ?? null,
+            offline: options?.env?.npm_config_offline ?? null,
+            ignoreScripts: options?.env?.npm_config_ignore_scripts ?? null,
+            npmExecpathPresent: Object.keys(options?.env ?? {}).some((key) => key.toLowerCase() === "npm_execpath"),
+            npmNodeExecpathPresent: Object.keys(options?.env ?? {}).some((key) => key.toLowerCase() === "npm_node_execpath"),
+          },
           executionGates: Object.fromEntries([
             "LIVE_TEST_DRY_RUN",
             "LIVE_TEST_EXECUTE",
             "SOAK_EXECUTE_LIVE",
             "TEST_WALLET_EXECUTE",
           ].map((name) => [name, options?.env?.[name] ?? null])),
+          liveTestRunId: options?.env?.LIVE_TEST_RUN_ID ?? null,
           timeout: options?.timeout ?? null,
         }) + "\\n");
       }
@@ -214,7 +662,11 @@ function runMockedPreview(
   `;
   const preloadUrl = `data:text/javascript;base64,${Buffer.from(preloadSource).toString("base64")}`;
   try {
-    const result = spawnSync(process.execPath, ["--import", preloadUrl, PREVIEW_SCRIPT], {
+    const result = spawnSync(process.execPath, [
+      "--import",
+      preloadUrl,
+      path.join(cwd, "scripts", path.basename(PREVIEW_SCRIPT)),
+    ], {
       cwd,
       encoding: "utf8",
       env: { ...process.env, LIVE_CANARY_RPC_LABEL: "test-public-sepolia", ...extraEnv },
@@ -226,7 +678,9 @@ function runMockedPreview(
       : [];
     const loadedPreviewMarkdown = existsSync(previewPath) ? readFileSync(previewPath, "utf8") : null;
     return {
+      fixtureRoot: cwd,
       upstreamMatrixLogPath: outputLogPath,
+      logText: effectiveLogText,
       result,
       summary: lines.length > 0 ? JSON.parse(lines.at(-1)) : null,
       markdown: loadedPreviewMarkdown,
@@ -241,12 +695,28 @@ function checkPreviewMarkdown(markdown, { logText = DRY_RUN_LOG_TEXT, args = [],
   const cwd = mkdtempSync(path.join(tmpdir(), "lore-preview-check-"));
   const docsDir = path.join(cwd, "docs");
   const logDir = path.join(cwd, "data", "live-test-runs");
-  mkdirSync(docsDir);
-  mkdirSync(logDir, { recursive: true });
-  writeFileSync(path.join(docsDir, "v10-canary-dry-run-preview.md"), markdown, "utf8");
+  const requireFreshAuthorization = args.includes("--require-fresh-authorization");
+  const repositoryState = requireFreshAuthorization
+    ? initializeFixtureProjectClone(cwd)
+    : null;
+  if (!requireFreshAuthorization) {
+    mkdirSync(docsDir);
+    mkdirSync(logDir, { recursive: true });
+  }
+  const effectiveMarkdown = repositoryState
+    ? mutateConsentEnvelopeInMarkdown(markdown, (envelope) => {
+        envelope.applicationGitSha = repositoryState.applicationGitSha;
+        envelope.sourceTreeClean = repositoryState.sourceTreeClean;
+        envelope.sourceStateSha256 = repositoryState.sourceStateSha256;
+      })
+    : markdown;
+  writeFileSync(path.join(docsDir, "v10-canary-dry-run-preview.md"), effectiveMarkdown, "utf8");
   writeFileSync(path.join(logDir, "live-canary-20260813T000000Z.jsonl"), logText, "utf8");
   try {
-    const result = spawnSync(process.execPath, [PREVIEW_CHECK_SCRIPT, ...args], {
+    const checkerScript = requireFreshAuthorization
+      ? path.join(cwd, "scripts", path.basename(PREVIEW_CHECK_SCRIPT))
+      : PREVIEW_CHECK_SCRIPT;
+    const result = spawnSync(process.execPath, [checkerScript, ...args], {
       cwd,
       encoding: "utf8",
       env: { ...process.env, ...extraEnv },
@@ -267,15 +737,46 @@ function bindMarkdownLog(markdown, logText) {
   return replaceSectionBullet(result, "Dry-Run Proof Analysis", "logBytes", bytes);
 }
 
+function rebindDryRunAdmission(logText, admissionRunId, { recomputeDigest = true } = {}) {
+  const events = String(logText).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+  events[0].admission.runId = admissionRunId;
+  if (recomputeDigest) {
+    const admissionSha256 = sha256(canonicalAdmissionPayload(events[0].admission));
+    events[0].admissionSha256 = admissionSha256;
+    for (const event of events.slice(1)) {
+      event.runId = admissionRunId;
+      event.admissionSha256 = admissionSha256;
+    }
+  }
+  return `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
+}
+
 function makeBoundPreviewMarkdown(
   logText,
-  { walletSetSha256 = WALLET_SET_SHA256, canaryPlanSha256 = CANARY_PLAN_SHA256 } = {},
+  {
+    consentPlan = CANONICAL_CONSENT_PLAN,
+    walletSetSha256,
+    canaryPlanSha256,
+    repositoryState = defaultRepositoryState(),
+    authorizationRunId = AUTHORIZATION_RUN_ID,
+    updatedAt = new Date().toISOString(),
+  } = {},
 ) {
+  const effectiveConsentPlan = JSON.parse(JSON.stringify(consentPlan));
+  if (walletSetSha256 !== undefined) effectiveConsentPlan.walletSetSha256 = walletSetSha256;
+  if (canaryPlanSha256 !== undefined) effectiveConsentPlan.canaryPlanSha256 = canaryPlanSha256;
+  const envelope = createConsentEnvelopeFixture({
+    consentPlan: effectiveConsentPlan,
+    logText,
+    repositoryState,
+    authorizationRunId,
+  });
+  const envelopeDigest = consentEnvelopeSha256(envelope);
   const digest = sha256(logText);
   const bytes = Buffer.byteLength(logText, "utf8");
   return `# V10 Canary Dry-Run Preview
 
-Last updated: ${new Date().toISOString()}.
+Last updated: ${updatedAt}.
 
 Scope: Linea Sepolia V10 read-only and dry-run readiness only. This document is
 not an authorization to send transactions, start a soak, deploy, or change
@@ -289,9 +790,19 @@ contract behavior.
 - operationalBoundaryVerified: true
 - walletClientCreated: false
 - contractWriteSubmitted: false
-- dryRunProofBlocksG10G11: true
-- walletSetSha256: ${walletSetSha256}
-- canaryPlanSha256: ${canaryPlanSha256}
+- dryRunPreviewVerdictPassed: true
+- liveLaunchGatesBlocked: G10,G11
+- consentPlanBound: true
+- canaryLogBound: true
+- applicationGitSha: ${envelope.applicationGitSha}
+- sourceTreeClean: ${envelope.sourceTreeClean}
+- authorizationReady: ${envelope.sourceTreeClean}
+- authorizationRunId: ${envelope.authorizationRunId}
+- sourceStateSha256: ${envelope.sourceStateSha256}
+- walletSetSha256: ${effectiveConsentPlan.walletSetSha256}
+- canaryPlanSha256: ${effectiveConsentPlan.canaryPlanSha256}
+- consentPlanSha256: ${envelope.consentPlanSha256}
+- consentEnvelopeSha256: ${envelopeDigest}
 
 ## Read-Only Planner
 
@@ -322,9 +833,10 @@ contract behavior.
 - network: sepolia
 - chainId: 59141
 - execution: dry-run
-- plannedBetTx: 4
-- walletSetSha256: ${walletSetSha256}
-- canaryPlanSha256: ${canaryPlanSha256}
+- rounds: ${effectiveConsentPlan.txCaps.bet / 2}
+- plannedBetTx: ${effectiveConsentPlan.txCaps.bet}
+- walletSetSha256: ${effectiveConsentPlan.walletSetSha256}
+- canaryPlanSha256: ${effectiveConsentPlan.canaryPlanSha256}
 - transactionSent: false
 - signingMaterialLoaded: false
 - walletClientCreated: false
@@ -335,17 +847,39 @@ contract behavior.
 
 ## Dry-Run Proof Analysis
 
-- exit: 1
-- dryRunProofBlocksG10G11: true
-- successfulBetTx: 0
-- uniqueBetEpochs: 0
+- exit: 0
+- previewDryRunVerdict: passed
+- liveLaunchGates: G10,G11
+- actionEvents: 0
+- successfulActionTx: 0
+- transactionEvidenceEvents: 0
+- runtimeIdentityPreflights: 1
+- walletPreflights: ${effectiveConsentPlan.roles.selectedRoles.length}
 - logSha256: ${digest}
 - logBytes: ${bytes}
+
+## Machine-Readable Consent Envelope
+
+- authorizationRunId: ${envelope.authorizationRunId}
+- applicationGitSha: ${envelope.applicationGitSha}
+- sourceTreeClean: ${envelope.sourceTreeClean}
+- sourceStateSha256: ${envelope.sourceStateSha256}
+- walletSetSha256: ${effectiveConsentPlan.walletSetSha256}
+- canaryPlanSha256: ${effectiveConsentPlan.canaryPlanSha256}
+- consentPlanSha256: ${envelope.consentPlanSha256}
+- consentEnvelopeSha256: ${envelopeDigest}
+
+\`\`\`json
+${JSON.stringify(envelope)}
+\`\`\`
 
 ## Fresh Consent Boundary
 
 Do not execute any of the following without a fresh exact authorization after a
 fresh Preview rerun:
+
+- confirmation that this authorizationRunId is unconsumed in the protected ledger of this canonical
+  repository; repository-local consumption is not a global one-shot guarantee
 `;
 }
 
@@ -360,6 +894,32 @@ function replaceSectionBullet(markdown, title, label, value) {
   assert.match(section, pattern, `missing ${label} bullet in ${title}`);
   const replacement = value === null ? "" : `- ${label}: ${value}\n`;
   return `${markdown.slice(0, start)}${section.replace(pattern, replacement)}${markdown.slice(end)}`;
+}
+
+function mutateConsentEnvelopeInMarkdown(markdown, mutate) {
+  const matches = [...markdown.matchAll(/^```json\r?\n([^\r\n]+)\r?\n```\s*$/gm)];
+  assert.equal(matches.length, 1, "expected exactly one canonical consent envelope JSON block");
+  const [match] = matches;
+  const envelope = JSON.parse(match[1]);
+  mutate(envelope);
+  envelope.consentPlanSha256 = canonicalJsonSha256(envelope.consentPlan);
+  const envelopeDigest = consentEnvelopeSha256(envelope);
+  let result = `${markdown.slice(0, match.index)}${match[0].replace(match[1], JSON.stringify(envelope))}${markdown.slice(match.index + match[0].length)}`;
+  for (const title of ["Overall Status", "Machine-Readable Consent Envelope"]) {
+    result = replaceSectionBullet(result, title, "authorizationRunId", envelope.authorizationRunId);
+    result = replaceSectionBullet(result, title, "applicationGitSha", envelope.applicationGitSha);
+    result = replaceSectionBullet(result, title, "sourceTreeClean", String(envelope.sourceTreeClean));
+    result = replaceSectionBullet(result, title, "sourceStateSha256", envelope.sourceStateSha256);
+    result = replaceSectionBullet(result, title, "walletSetSha256", envelope.consentPlan.walletSetSha256);
+    result = replaceSectionBullet(result, title, "canaryPlanSha256", envelope.consentPlan.canaryPlanSha256);
+    result = replaceSectionBullet(result, title, "consentPlanSha256", envelope.consentPlanSha256);
+    result = replaceSectionBullet(result, title, "consentEnvelopeSha256", envelopeDigest);
+  }
+  result = replaceSectionBullet(result, "Overall Status", "authorizationReady", String(envelope.sourceTreeClean));
+  result = replaceSectionBullet(result, "V10 Matrix Dry-Run", "walletSetSha256", envelope.consentPlan.walletSetSha256);
+  result = replaceSectionBullet(result, "V10 Matrix Dry-Run", "canaryPlanSha256", envelope.consentPlan.canaryPlanSha256);
+  result = replaceSectionBullet(result, "V10 Matrix Dry-Run", "rounds", String(envelope.consentPlan.txCaps.bet / 2));
+  return replaceSectionBullet(result, "V10 Matrix Dry-Run", "plannedBetTx", String(envelope.consentPlan.txCaps.bet));
 }
 
 function clearPendingEnv(extraEnv = {}) {
@@ -427,7 +987,12 @@ function runLiveCanaryInspection(cwd, args, extraEnv = {}) {
   const fetchGuard = `data:text/javascript,${encodeURIComponent(
     'globalThis.fetch=async()=>{throw new Error("NETWORK_CALL_FORBIDDEN")}',
   )}`;
-  return spawnSync(process.execPath, [`--import=${fetchGuard}`, TSX_CLI, LIVE_CANARY_SCRIPT, ...args], {
+  return spawnSync(process.execPath, [
+    `--import=${fetchGuard}`,
+    TSX_CLI,
+    path.join(cwd, "scripts", path.basename(LIVE_CANARY_SCRIPT)),
+    ...args,
+  ], {
     cwd,
     encoding: "utf8",
     env: clearPendingEnv({
@@ -442,13 +1007,16 @@ function runLiveCanaryInspection(cwd, args, extraEnv = {}) {
   });
 }
 
-function inspectFreshPreviewBinding({ executionExtraEnv = {}, mutateAfterBinding } = {}) {
+function inspectFreshPreviewBinding({
+  executionExtraEnv = {},
+  mutateAfterBinding,
+  rebindPreviewShaAfterMutation = false,
+} = {}) {
   const cwd = mkdtempSync(path.join(tmpdir(), "lore-fresh-preview-binding-"));
   try {
     const docsDir = path.join(cwd, "docs");
     const logDir = path.join(cwd, "data", "live-test-runs");
-    mkdirSync(docsDir);
-    mkdirSync(logDir, { recursive: true });
+    initializeFixtureProjectClone(cwd, { linkDependencies: true });
 
     const signerKeys = LIVE_WALLET_ROLES.map((_, index) => `0x${String(index + 1).padStart(64, "0")}`);
     const signerAddresses = signerKeys.map((key) => privateKeyToAccount(key).address);
@@ -457,6 +1025,8 @@ function inspectFreshPreviewBinding({ executionExtraEnv = {}, mutateAfterBinding
       (role, index) => `LORE_LIVE_TEST_${role}_ADDRESS=${signerAddresses[index]}`,
     ).join("\n")}\n`;
     writeFileSync(publicFilePath, publicFileText, "utf8");
+    runFixtureGit(cwd, ["add", "-f", "--", ".env.live-test-addresses"]);
+    runFixtureGit(cwd, ["commit", "--quiet", "--no-gpg-sign", "-m", "public wallet fixture"]);
 
     const publicConfig = loadLiveTestPublicWalletConfig({
       cwd,
@@ -465,17 +1035,29 @@ function inspectFreshPreviewBinding({ executionExtraEnv = {}, mutateAfterBinding
     const planResult = runLiveCanaryInspection(cwd, ["--v10-matrix-only", "--inspect-canary-plan"]);
     assert.equal(planResult.status, 0, planResult.stderr || planResult.stdout);
     const planSummary = JSON.parse(planResult.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1));
+    const consentPlan = planSummary.consentPlan;
+    const logText = createDryRunLogText(consentPlan);
+    const repositoryState = captureV10PreviewRepositoryState({ root: cwd });
 
-    writeFileSync(path.join(logDir, DRY_RUN_LOG_NAME), DRY_RUN_LOG_TEXT, "utf8");
+    writeFileSync(path.join(logDir, DRY_RUN_LOG_NAME), logText, "utf8");
     const previewPath = path.join(docsDir, "v10-canary-dry-run-preview.md");
-    const markdown = makeBoundPreviewMarkdown(DRY_RUN_LOG_TEXT, {
-      walletSetSha256: publicConfig.walletSetSha256,
-      canaryPlanSha256: planSummary.canaryPlanSha256,
+    const markdown = makeBoundPreviewMarkdown(logText, {
+      consentPlan,
+      repositoryState,
     });
     writeFileSync(previewPath, markdown, "utf8");
-    const previewSha256 = sha256(markdown);
+    let previewSha256 = sha256(markdown);
 
-    mutateAfterBinding?.({ cwd, previewPath, publicFilePath, publicFileText, signerAddresses });
+    mutateAfterBinding?.({
+      cwd,
+      previewPath,
+      publicFilePath,
+      publicFileText,
+      signerAddresses,
+      consentPlan,
+      logText,
+    });
+    if (rebindPreviewShaAfterMutation) previewSha256 = sha256(readFileSync(previewPath, "utf8"));
     const result = runLiveCanaryInspection(
       cwd,
       ["--v10-matrix-only", "--execute", "--execute-live", "--inspect-fresh-preview-binding"],
@@ -485,10 +1067,32 @@ function inspectFreshPreviewBinding({ executionExtraEnv = {}, mutateAfterBinding
         ...executionExtraEnv,
       },
     );
-    return { result, previewSha256, walletSetSha256: publicConfig.walletSetSha256, canaryPlanSha256: planSummary.canaryPlanSha256 };
+    return {
+      result,
+      previewSha256,
+      walletSetSha256: publicConfig.walletSetSha256,
+      canaryPlanSha256: planSummary.canaryPlanSha256,
+      consentPlanSha256: planSummary.consentPlanSha256,
+    };
   } finally {
     rmSync(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
+}
+
+function appendPreviewArtifactNewline({ previewPath }) {
+  const previewArtifactText = readFileSync(previewPath, "utf8");
+  writeFileSync(previewPath, `${previewArtifactText}\n`, "utf8");
+}
+
+function incrementPreviewSafeWindowTimeout({ previewPath }) {
+  const previewConsentArtifactText = readFileSync(previewPath, "utf8");
+  const mutatedPreviewArtifact = mutateConsentEnvelopeInMarkdown(
+    previewConsentArtifactText,
+    (envelope) => {
+      envelope.consentPlan.stopPolicy.safeWindowTimeoutMs += 1_000;
+    },
+  );
+  writeFileSync(previewPath, mutatedPreviewArtifact, "utf8");
 }
 
 function inspectClearPendingAddressFile(contents, extraEnv = {}) {
@@ -588,12 +1192,16 @@ function runMockedDependencyAudit(report, {
   }
 }
 
-test("Preview child env preserves public planning config and excludes malicious credentials", () => {
+test("Preview child env preserves public planning config and refuses malicious credentials", () => {
   const publicConfig = {
     LINEA_NETWORK: "sepolia",
+    NEXT_PUBLIC_LINEA_NETWORK: "sepolia",
     NEXT_PUBLIC_CONTRACT_ADDRESS: "0x1111111111111111111111111111111111111111",
     NEXT_PUBLIC_LINEA_TOKEN_ADDRESS: "0x2222222222222222222222222222222222222222",
     NEXT_PUBLIC_CONTRACT_HAS_TOKEN_GETTER: "1",
+    NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS: "1",
+    NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK: "31678224",
+    INDEXER_START_BLOCK: "31678224",
     V10_POSTDEPLOY_SCAN_EPOCHS: "17",
     V10_EXPECTED_CURRENT_OWNER: "0x3333333333333333333333333333333333333333",
     LIVE_CANARY_RPC_LABEL: "public-sepolia-fallback",
@@ -610,7 +1218,6 @@ test("Preview child env preserves public planning config and excludes malicious 
   };
   const inspection = inspectChildEnv({
     ...publicConfig,
-    ...forbidden,
     LIVE_TEST_EXECUTE: "1",
     SOAK_EXECUTE_LIVE: "1",
     TEST_WALLET_EXECUTE: "1",
@@ -619,13 +1226,57 @@ test("Preview child env preserves public planning config and excludes malicious 
   assert.equal(inspection.signingMaterialLoaded, false);
   assert.equal(inspection.sensitiveCredentialKeysPresent, false);
   assert.deepEqual(inspection.publicConfig, publicConfig);
+  const conflictingInspection = inspectChildEnv({
+    ...publicConfig,
+    LINEA_NETWORK: "mainnet",
+    NEXT_PUBLIC_LINEA_NETWORK: "sepolia",
+    NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK: "31678224",
+    INDEXER_START_BLOCK: "31678225",
+  });
+  assert.deepEqual(
+    {
+      LINEA_NETWORK: conflictingInspection.publicConfig.LINEA_NETWORK,
+      NEXT_PUBLIC_LINEA_NETWORK: conflictingInspection.publicConfig.NEXT_PUBLIC_LINEA_NETWORK,
+      NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK: conflictingInspection.publicConfig.NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK,
+      INDEXER_START_BLOCK: conflictingInspection.publicConfig.INDEXER_START_BLOCK,
+    },
+    {
+      LINEA_NETWORK: "mainnet",
+      NEXT_PUBLIC_LINEA_NETWORK: "sepolia",
+      NEXT_PUBLIC_CONTRACT_DEPLOY_BLOCK: "31678224",
+      INDEXER_START_BLOCK: "31678225",
+    },
+    "inspection must expose both sides of conflicting public network and block bindings",
+  );
   assert.deepEqual(inspection.executionGates, {
     LIVE_TEST_EXECUTE: "0",
     SOAK_EXECUTE_LIVE: "0",
     TEST_WALLET_EXECUTE: "0",
   });
-  for (const name of Object.keys(forbidden)) {
-    assert.equal(inspection.childEnvKeys.includes(name), false, `${name} escaped the child env allowlist`);
+  const nonSigningCredentials = {
+    HEALTH_DIAGNOSTICS_SECRET: "malicious-health-secret-only",
+    ADMIN_AUTH_TOKEN: "malicious-auth-token-only",
+    SENTRY_DSN: "https://credential@example.invalid/non-signing",
+    ALERT_WEBHOOK_URL: "https://credential@example.invalid/non-signing-hook",
+    LIVE_TEST_RPC_URL: "https://credential@example.invalid/non-signing-rpc",
+    NEXT_PUBLIC_LINEA_RPCS: "https://credential@example.invalid/non-signing-public-rpc",
+  };
+  const filteredInspection = inspectChildEnv({ ...publicConfig, ...nonSigningCredentials });
+  assert.equal(filteredInspection.sensitiveCredentialKeysPresent, false);
+  assert.deepEqual(
+    filteredInspection.childEnvKeys.filter((key) => Object.hasOwn(nonSigningCredentials, key)),
+    [],
+    "non-signing credentials and RPC endpoints must stay outside the read-only child allowlist",
+  );
+  const filteredInspectionText = JSON.stringify(filteredInspection);
+  for (const secret of Object.values(nonSigningCredentials)) {
+    assert.equal(filteredInspectionText.includes(secret), false, "inspection must not echo filtered credential values");
+  }
+  const refused = inspectChildEnv({ ...publicConfig, ...forbidden }, { allowFailure: true });
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /Preview generator refuses inherited signing material/);
+  for (const secret of Object.values(forbidden)) {
+    assert.equal(`${refused.stdout}\n${refused.stderr}`.includes(secret), false, "refusal must not echo credentials");
   }
 });
 
@@ -767,12 +1418,56 @@ test("Preview and proof commands ignore poisoned package-manager, PATH, and shel
     );
   }
 
-  const previewSource = readFileSync(PREVIEW_SCRIPT, "utf8");
-  assert.match(previewSource, /resolveTrustedNpmCli/);
-  assert.match(previewSource, /trustedNpmCommand/);
-  assert.match(previewSource, /trustedNpmEnvironment/);
-  assert.doesNotMatch(previewSource, /process\.env\.npm_execpath|process\.env\.ComSpec|command:\s*["']npm(?:\.cmd)?["']/);
-  assert.match(previewSource, /cwd: TRUSTED_NPM_LAUNCHER\.repoRoot/);
+  const generated = runMockedPreview({}, {
+    captureChildCalls: true,
+    extraEnv: {
+      npm_execpath: poison,
+      npm_node_execpath: poison,
+      PATH: poison,
+      Path: poison,
+      PATHEXT: ".POISON",
+      ComSpec: poison,
+      COMSPEC: poison,
+      npm_config_script_shell: poison,
+      NPM_CONFIG_USERCONFIG: poison,
+      NPM_CONFIG_NODE_OPTIONS: `--require=${poison}`,
+      npm_config_global: "true",
+      NPM_CONFIG_REGISTRY: "https://malicious-registry.example.invalid/",
+      npm_config_offline: "true",
+      npm_package_json: poison,
+      NPM_PACKAGE_SCRIPTS_BUILD: poison,
+      npm_lifecycle_event: "postinstall",
+      NPM_LIFECYCLE_SCRIPT: poison,
+      npm_command: "exec",
+      INIT_CWD: poison,
+      ...networkPoison,
+    },
+  });
+  assert.equal(generated.result.status, 0, generated.result.stderr || generated.result.stdout);
+  const npmCalls = generated.childCalls.slice(0, 3);
+  assert.equal(npmCalls.length, 3);
+  assert.deepEqual(
+    npmCalls.map((call) => ({ command: call.command, npmCli: call.args[0], cwd: call.cwd })),
+    Array.from({ length: 3 }, () => ({
+      command: launcher.command,
+      npmCli: launcher.cliPath.replaceAll("\\", "/"),
+      cwd: generated.fixtureRoot,
+    })),
+  );
+  assert.deepEqual(
+    npmCalls.map((call) => call.npmBoundary),
+    Array.from({ length: 3 }, () => ({
+      path: [path.dirname(launcher.command), path.join(generated.fixtureRoot, "node_modules", ".bin")].join(path.delimiter),
+      scriptShell: env.npm_config_script_shell,
+      userConfig: path.join(generated.fixtureRoot, ".npmrc"),
+      registry: "https://registry.npmjs.org/",
+      global: "false",
+      offline: "false",
+      ignoreScripts: "true",
+      npmExecpathPresent: false,
+      npmNodeExecpathPresent: false,
+    })),
+  );
 });
 
 test("V10 post-deploy summary remains executable inside the sanitized preview PATH", () => {
@@ -888,15 +1583,126 @@ test("dependency audit rejects error, versionless, incomplete, and non-object re
 });
 
 test("read-only planner, matrix, and playtest paths do not preload combined dotenv", () => {
-  const previewSource = readFileSync(PREVIEW_SCRIPT, "utf8");
-  const plannerSource = readFileSync(path.join(SCRIPT_DIR, "plan-v10-postdeploy-canary.ts"), "utf8");
+  const dotenvSentinel = "dotenv-preload-signing-sentinel";
+  const previewInspection = inspectChildEnv({
+    UNRELATED_PREVIEW_ENV_SENTINEL: dotenvSentinel,
+  });
+  assert.equal(previewInspection.childEnvKeys.includes("UNRELATED_PREVIEW_ENV_SENTINEL"), false);
+  assert.equal(JSON.stringify(previewInspection).includes(dotenvSentinel), false);
+
+  const probeRoot = mkdtempSync(path.join(tmpdir(), "lore-preview-dotenv-boundary-"));
+  const fetchGuard = `data:text/javascript,${encodeURIComponent(
+    'globalThis.fetch=async()=>{throw new Error("NETWORK_CALL_FORBIDDEN")}',
+  )}`;
+  const runProbe = (scriptPath, args, extraEnv = {}) => spawnSync(
+    process.execPath,
+    [`--import=${fetchGuard}`, TSX_CLI, scriptPath, ...args],
+    {
+      cwd: probeRoot,
+      encoding: "utf8",
+      env: clearPendingEnv(extraEnv),
+      timeout: 30_000,
+    },
+  );
+  try {
+    writeFileSync(
+      path.join(probeRoot, ".env"),
+      "V10_POSTDEPLOY_SCAN_EPOCHS=dotenv-preload-invalid-integer\n",
+      "utf8",
+    );
+    const planner = runProbe(
+      path.join(SCRIPT_DIR, "plan-v10-postdeploy-canary.ts"),
+      ["--summary-only"],
+      { NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS: "0" },
+    );
+    const plannerOutput = `${planner.stdout ?? ""}\n${planner.stderr ?? ""}`;
+    assert.notEqual(planner.status, 0);
+    assert.match(plannerOutput, /V10 post-deploy planning requires epoch-bound runtime mode/);
+    assert.doesNotMatch(plannerOutput, /V10_POSTDEPLOY_SCAN_EPOCHS/);
+
+    writeFileSync(
+      path.join(probeRoot, ".env"),
+      `LORE_LIVE_TEST_MANUAL_PRIVATE_KEY=${dotenvSentinel}\n`,
+      "utf8",
+    );
+    const live = runProbe(
+      LIVE_CANARY_SCRIPT,
+      ["--v10-matrix-only", "--inspect-runtime-enforcement"],
+      {
+        NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS: "1",
+        LIVE_CANARY_RPC_LABEL: "fixture-public-sepolia",
+        LIVE_TEST_ROLES: "MANUAL",
+      },
+    );
+    assert.equal(live.status, 0, live.stderr || live.stdout);
+    const liveSummary = JSON.parse(live.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1));
+    assert.equal(liveSummary.status, "pass");
+    assert.deepEqual(liveSummary.operationalBoundary, {
+      signingMaterialLoaded: false,
+      signatureRequested: false,
+      walletClientCreated: false,
+      networkRequests: 0,
+      contractWrites: 0,
+      transactionSent: false,
+    });
+
+    writeFileSync(
+      path.join(probeRoot, ".env"),
+      `KEEPER_PRIVATE_KEY=${dotenvSentinel}\nTEST_WALLET_PRIVATE_KEY=${dotenvSentinel}\n`,
+      "utf8",
+    );
+    const importOnlyUrls = [
+      "monitor-runtime-health.mjs",
+      "smoke-browser.mjs",
+      "check-sqlite-startup.mjs",
+    ].map((name) => pathToFileURL(path.join(SCRIPT_DIR, name)).href);
+    const importOnlyProbe = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        [
+          `const signingNameRe = ${SIGNING_ENV_NAME_RE};`,
+          `for (const moduleUrl of ${JSON.stringify(importOnlyUrls)}) await import(moduleUrl);`,
+          "const signingKeyNames = Object.keys(process.env).filter((name) => signingNameRe.test(name) && String(process.env[name] ?? '').trim()).sort();",
+          "console.log(JSON.stringify({ signingKeyNames }));",
+        ].join("\n"),
+      ],
+      {
+        cwd: probeRoot,
+        encoding: "utf8",
+        env: clearPendingEnv({ DOTENV_CONFIG_PATH: path.join(probeRoot, ".env") }),
+        timeout: 30_000,
+      },
+    );
+    assert.equal(importOnlyProbe.status, 0, importOnlyProbe.stderr || importOnlyProbe.stdout);
+    const importOnlySummary = JSON.parse(importOnlyProbe.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1));
+    assert.deepEqual(importOnlySummary.signingKeyNames, []);
+    assert.doesNotMatch(`${importOnlyProbe.stdout}\n${importOnlyProbe.stderr}`, new RegExp(dotenvSentinel));
+
+    const playtest = runProbe(
+      path.join(SCRIPT_DIR, "playtest-wallet.ts"),
+      [],
+      {
+        NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS: "1",
+        TEST_WALLET_ADDRESS: "not-an-address",
+        TEST_WALLET_EXECUTE: "0",
+      },
+    );
+    const playtestOutput = `${playtest.stdout ?? ""}\n${playtest.stderr ?? ""}`;
+    assert.notEqual(playtest.status, 0);
+    assert.match(playtestOutput, /Address "not-an-address" is invalid/i);
+    assert.doesNotMatch(playtestOutput, /Dry-run wallet playtest refuses inherited signing material/);
+    assert.doesNotMatch(playtestOutput, new RegExp(dotenvSentinel));
+  } finally {
+    rmSync(probeRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+
   const liveSource = readFileSync(path.join(SCRIPT_DIR, "live-round-canary.ts"), "utf8");
   const playtestSource = readFileSync(path.join(SCRIPT_DIR, "playtest-wallet.ts"), "utf8");
 
-  assert.doesNotMatch(previewSource, /\.\.\.process\.env/);
-  assert.doesNotMatch(plannerSource, /dotenv\/config/);
-  assert.doesNotMatch(liveSource, /dotenv\/config/);
-  assert.doesNotMatch(playtestSource, /dotenv\/config/);
+  // These sequencing constraints are intentionally structural: a final summary cannot prove
+  // that signing admission preceded dotenv loading and every wallet/network side effect.
   assert.match(
     liveSource,
     /operationalBoundary signingMaterialLoaded=\$\{signingMaterialLoaded\}[\s\S]*transactionSent=false walletClientCreated=false contractWriteSubmitted=false/,
@@ -968,9 +1774,11 @@ test("live V10 matrix execution requires the exact fresh Preview, wallet set, an
   assert.deepEqual(summary, {
     status: "pass",
     mode: "fresh-preview-binding-inspection",
+    authorizationRunId: AUTHORIZATION_RUN_ID,
     previewSha256: control.previewSha256,
     walletSetSha256: control.walletSetSha256,
     canaryPlanSha256: control.canaryPlanSha256,
+    consentPlanSha256: control.consentPlanSha256,
     signingMaterialLoaded: false,
     signatureRequested: false,
     walletClientCreated: false,
@@ -985,10 +1793,7 @@ test("live V10 matrix execution requires the exact fresh Preview, wallet set, an
   assert.match(changedPlan.result.stderr, /does not match this execution wallet set and canary plan/);
 
   const changedPreview = inspectFreshPreviewBinding({
-    mutateAfterBinding: ({ previewPath }) => {
-      const markdown = readFileSync(previewPath, "utf8");
-      writeFileSync(previewPath, `${markdown}\n`, "utf8");
-    },
+    mutateAfterBinding: appendPreviewArtifactNewline,
   });
   assert.notEqual(changedPreview.result.status, 0, "a changed Preview artifact must invalidate its expected SHA");
   assert.match(changedPreview.result.stderr, /does not match this execution wallet set and canary plan/);
@@ -1004,9 +1809,20 @@ test("live V10 matrix execution requires the exact fresh Preview, wallet set, an
     },
   });
   assert.notEqual(changedWalletSet.result.status, 0, "a changed public wallet set must invalidate the Preview");
-  assert.match(changedWalletSet.result.stderr, /does not match this execution wallet set and canary plan/);
+  assert.match(changedWalletSet.result.stderr, /(?:validation failed before live execution|does not match this execution wallet set and canary plan)/);
 
-  for (const candidate of [changedPlan, changedPreview, changedWalletSet]) {
+  const semanticallyReboundPlan = inspectFreshPreviewBinding({
+    mutateAfterBinding: incrementPreviewSafeWindowTimeout,
+    rebindPreviewShaAfterMutation: true,
+  });
+  assert.notEqual(
+    semanticallyReboundPlan.result.status,
+    0,
+    "a canonical but semantically changed consent plan must not authorize the local canary plan",
+  );
+  assert.match(semanticallyReboundPlan.result.stderr, /does not match this execution wallet set and canary plan/);
+
+  for (const candidate of [changedPlan, changedPreview, changedWalletSet, semanticallyReboundPlan]) {
     assert.doesNotMatch(`${candidate.result.stdout}\n${candidate.result.stderr}`, /NETWORK_CALL_FORBIDDEN|0x[0-9a-fA-F]{40}|0x[0-9a-fA-F]{64}/);
   }
 });
@@ -1021,8 +1837,23 @@ test("Preview generator behavior fails closed on contradictory or unreported chi
   assert.equal(control.summary.contractWriteSubmitted, false);
   assert.equal(control.summary.walletSetSha256, WALLET_SET_SHA256);
   assert.equal(control.summary.canaryPlanSha256, CANARY_PLAN_SHA256);
+  assert.equal(control.summary.consentPlanSha256, canonicalJsonSha256(CANONICAL_CONSENT_PLAN));
+  assert.match(control.summary.consentEnvelopeSha256, /^[a-f0-9]{64}$/);
+  assert.equal(control.summary.authorizationRunId, AUTHORIZATION_RUN_ID);
+  assert.match(control.summary.applicationGitSha, /^[a-f0-9]{40}$/);
+  assert.equal(control.summary.sourceTreeClean, true);
+  assert.equal(control.summary.authorizationReady, true);
+  assert.equal(control.summary.finalLogBoundaryVerified, true);
   assert.match(control.summary.previewSha256, /^[a-f0-9]{64}$/);
   assert.match(control.markdown, /^- operationalBoundaryVerified: true$/m);
+  assert.match(control.markdown, /^## Machine-Readable Consent Envelope$/m);
+  const envelopeJson = control.markdown.match(/^```json\r?\n([^\r\n]+)\r?\n```\s*$/m)?.[1];
+  assert.ok(envelopeJson, "generated Preview must contain its canonical envelope JSON");
+  const envelope = JSON.parse(envelopeJson);
+  const admission = JSON.parse(control.logText.split(/\r?\n/).filter(Boolean)[0]).admission;
+  assert.equal(envelope.authorizationRunId, AUTHORIZATION_RUN_ID);
+  assert.equal(envelope.runtimeEvidence.admissionRunId, AUTHORIZATION_RUN_ID);
+  assert.equal(admission.runId, AUTHORIZATION_RUN_ID);
 
   const missingWalletBinding = runMockedPreview({ matrix: { walletSetSha256: null } });
   assert.notEqual(missingWalletBinding.result.status, 0);
@@ -1035,6 +1866,17 @@ test("Preview generator behavior fails closed on contradictory or unreported chi
   assert.equal(missingPlanBinding.summary.status, "fail");
   assert.equal(missingPlanBinding.summary.operationalBoundaryVerified, true);
   assert.equal(missingPlanBinding.summary.canaryPlanSha256, null);
+
+  const canonicalConsentLine = `[live-canary] consentPlan=${JSON.stringify(CANONICAL_CONSENT_PLAN)} consentPlanSha256=${canonicalJsonSha256(CANONICAL_CONSENT_PLAN)}`;
+  for (const [label, consentPlanLines] of [
+    ["missing consent plan", []],
+    ["duplicate consent plan", [canonicalConsentLine, canonicalConsentLine]],
+  ]) {
+    const mutation = runMockedPreview({ consentPlanLines });
+    assert.notEqual(mutation.result.status, 0, label);
+    assert.equal(mutation.summary.status, "fail", label);
+    assert.match(mutation.summary.consentPlanIssue ?? "", /exactly one consent plan/, label);
+  }
 
   const mutants = [
     ["planner sent a transaction", { planner: { transactionSent: true } }, "transactionSent", true],
@@ -1059,11 +1901,28 @@ test("Preview generator behavior fails closed on contradictory or unreported chi
   }
 });
 
+test("Preview generator rejects dry-run admission outside its fresh challenge", () => {
+  const mismatchedLog = createDryRunLogText(
+    CANONICAL_CONSENT_PLAN,
+    new Date().toISOString(),
+    DRY_RUN_ADMISSION_RUN_ID,
+  );
+  const generated = runMockedPreview({}, { logText: mismatchedLog });
+  assert.notEqual(generated.result.status, 0);
+  assert.equal(generated.summary.status, "fail");
+  assert.equal(generated.summary.authorizationReady, false);
+  assert.equal(generated.summary.authorizationRunId, null);
+  assert.match(generated.summary.logBindingIssue ?? "", /admission run ID does not match the generator challenge/);
+});
+
 test("Preview generator invokes the ordered sanitized dry-run child contract", () => {
   const timeoutMs = 12_345;
   const generated = runMockedPreview({}, {
     captureChildCalls: true,
-    extraEnv: { V10_CANARY_DRY_RUN_PREVIEW_TIMEOUT_MS: String(timeoutMs) },
+    extraEnv: {
+      LIVE_TEST_RUN_ID: "inherited-run-id-must-not-control-preview",
+      V10_CANARY_DRY_RUN_PREVIEW_TIMEOUT_MS: String(timeoutMs),
+    },
   });
   assert.equal(generated.result.status, 0, generated.result.stderr || generated.result.stdout);
   assert.equal(generated.childCalls.length, 4);
@@ -1088,12 +1947,11 @@ test("Preview generator invokes the ordered sanitized dry-run child contract", (
   );
   assert.deepEqual(generated.childCalls.at(-1).args, [
     "scripts/analyze-live-canary-proof.mjs",
-    DRY_RUN_LOG_RELATIVE_PATH,
+    DRY_RUN_LOG_RELATIVE_PATH.replaceAll("\\", "/"),
     "--profile=v10-matrix",
-    "--strict",
+    "--preview-dry-run",
     "--summary-only",
     "--require-epoch-bound",
-    "--require-v10-gas-matrix",
   ]);
   for (const call of generated.childCalls) {
     assert.deepEqual(call.executionGates, {
@@ -1106,7 +1964,24 @@ test("Preview generator invokes the ordered sanitized dry-run child contract", (
       assert.equal(call.args.includes(forbidden), false, `${forbidden} must not reach a Preview child`);
     }
   }
+  assert.deepEqual(
+    generated.childCalls.map((call) => call.liveTestRunId),
+    [null, null, AUTHORIZATION_RUN_ID, null],
+    "only the matrix child receives the generator challenge, overriding inherited LIVE_TEST_RUN_ID",
+  );
   assert.deepEqual(generated.childCalls.map((call) => call.timeout), [timeoutMs, timeoutMs, timeoutMs, timeoutMs]);
+});
+
+test("Preview generator demotes a final log mutation during atomic publication", () => {
+  const generated = runMockedPreview({}, { mutateLogOnPreviewRename: true });
+  assert.notEqual(generated.result.status, 0);
+  assert.equal(generated.summary.status, "fail");
+  assert.equal(generated.summary.authorizationReady, false);
+  assert.equal(generated.summary.canaryLogBound, false);
+  assert.equal(generated.summary.finalLogBoundaryVerified, false);
+  assert.match(generated.markdown, /^- status: fail$/m);
+  assert.match(generated.markdown, /^- authorizationReady: false$/m);
+  assert.match(generated.markdown, /^- canaryLogBound: false$/m);
 });
 
 test("Preview generator rejects invalid timeout values before invoking a child", () => {
@@ -1146,25 +2021,19 @@ test("Preview generator redacts and bounds compact Markdown fields", () => {
   assert.ok(field.length <= 180, `compact field must be bounded, got ${field.length}`);
 });
 
-test("Preview generator redacts, flattens, and bounds the rpc label", () => {
+test("Preview generator rejects credential-like or multiline rpc labels before child work", () => {
   const secret = "preview-rpc-label-secret-sentinel";
   const generated = runMockedPreview({}, {
     extraEnv: { LIVE_CANARY_RPC_LABEL: `API_KEY=${secret}\n${"x".repeat(240)}` },
   });
-  assert.equal(generated.result.status, 0, generated.result.stderr || generated.result.stdout);
-  assert.doesNotMatch(generated.markdown, new RegExp(secret));
+  assert.notEqual(generated.result.status, 0);
+  assert.equal(generated.summary, null);
+  assert.equal(generated.markdown, null);
+  assert.doesNotMatch(`${generated.result.stdout}\n${generated.result.stderr}`, new RegExp(secret));
   assert.match(
-    generated.markdown,
-    /# LIVE_CANARY_RPC_LABEL is read from the local environment\.\r?\nnpm\.cmd run live:canary:v10:matrix/,
+    `${generated.result.stdout}\n${generated.result.stderr}`,
+    /LIVE_CANARY_RPC_LABEL must be a short redacted identifier/,
   );
-  assert.doesNotMatch(generated.markdown, /\$env:LIVE_CANARY_RPC_LABEL\s*=/);
-  const field = generated.markdown.match(/^- rpcLabel: ([^\r\n]+)$/m)?.[1] ?? "";
-  assert.notEqual(field, "", "rpcLabel must remain a single Preview bullet");
-  assert.doesNotMatch(field, new RegExp(secret));
-  assert.match(field, /API_KEY=<redacted>/);
-  assert.doesNotMatch(field, /\r|\n/);
-  assert.match(field, /\.\.\.<truncated>$/);
-  assert.ok(field.length <= 180, `compact rpcLabel must be bounded, got ${field.length}`);
 });
 
 test("Preview generator normalizes the upstream absolute live-canary log path into its safe binding", () => {
@@ -1190,7 +2059,7 @@ test("Preview generator fails closed for unsafe and oversized canary log binding
     assert.equal(generated.summary.status, "fail", label);
     assert.equal(generated.summary.canaryLog, null, label);
     assert.equal(generated.summary.canaryLogBound, false, label);
-    assert.equal(generated.summary.dryRunProofBlocksG10G11, false, label);
+    assert.equal(generated.summary.dryRunPreviewVerdictPassed, false, label);
     assert.equal(
       generated.childCalls.some((call) => call.args.includes("scripts/analyze-live-canary-proof.mjs")),
       false,
@@ -1210,7 +2079,7 @@ test("Preview generator fails closed for unsafe and oversized canary log binding
   assert.equal(oversized.summary.status, "fail");
   assert.equal(oversized.summary.canaryLog, DRY_RUN_LOG_RELATIVE_PATH);
   assert.equal(oversized.summary.canaryLogBound, false);
-  assert.equal(oversized.summary.dryRunProofBlocksG10G11, false);
+  assert.equal(oversized.summary.dryRunPreviewVerdictPassed, false);
   assert.match(oversized.summary.logBindingIssue ?? "", /too large to bind safely/);
   assert.equal(
     oversized.childCalls.some((call) => call.args.includes("scripts/analyze-live-canary-proof.mjs")),
@@ -1229,8 +2098,8 @@ test("Preview generator rejects timed-out and signalled dry-run analyzers", () =
     const generated = runMockedPreview({}, { analyzer });
     assert.notEqual(generated.result.status, 0, `${label} analyzer must not satisfy dry-run proof evidence`);
     assert.equal(generated.summary.status, "fail", label);
-    assert.equal(generated.summary.dryRunProofBlocksG10G11, false, label);
-    assert.match(generated.markdown, /^- dryRunProofBlocksG10G11: false$/m, label);
+    assert.equal(generated.summary.dryRunPreviewVerdictPassed, false, label);
+    assert.match(generated.markdown, /^- dryRunPreviewVerdictPassed: false$/m, label);
   }
 });
 
@@ -1238,7 +2107,7 @@ test("Preview checker behavior requires the generated operational boundary evide
   const generated = runMockedPreview();
   assert.equal(generated.result.status, 0, generated.result.stderr || generated.result.stdout);
 
-  const control = checkPreviewMarkdown(generated.markdown);
+  const control = checkPreviewMarkdown(generated.markdown, { logText: generated.logText });
   assert.equal(control.result.status, 0, control.result.stderr || control.result.stdout);
   assert.equal(control.summary.status, "pass");
   assert.equal(control.summary.authorizationFreshnessRequired, false);
@@ -1268,28 +2137,80 @@ test("Preview checker behavior requires the generated operational boundary evide
     ),
   ];
   for (const markdown of mutations) {
-    const mutation = checkPreviewMarkdown(markdown);
+    const mutation = checkPreviewMarkdown(markdown, { logText: generated.logText });
     assert.notEqual(mutation.result.status, 0);
     assert.equal(mutation.summary.status, "fail");
   }
 });
 
+test("Preview checker rejects duplicate required headings and unknown flags", () => {
+  const markdown = makeBoundPreviewMarkdown(DRY_RUN_LOG_TEXT);
+  const duplicateHeading = checkPreviewMarkdown(`${markdown}\n## Overall Status\n`);
+  assert.notEqual(duplicateHeading.result.status, 0);
+  assert.equal(duplicateHeading.summary.status, "fail");
+  assert.equal(duplicateHeading.summary.issue, "v10-dry-run-preview-must-contain-only-the-exact-visible-heading-contract");
+
+  const unknownFlag = checkPreviewMarkdown(markdown, { args: ["--unknown-preview-flag"] });
+  assert.notEqual(unknownFlag.result.status, 0);
+  assert.equal(unknownFlag.summary.status, "fail");
+  assert.equal(unknownFlag.summary.issue, "v10-dry-run-preview-checker-received-an-unknown-argument");
+});
+
+test("Preview checker rejects fenced structural substitution and extra visible sections", () => {
+  const markdown = makeBoundPreviewMarkdown(DRY_RUN_LOG_TEXT);
+  const fencedSubstitution = checkPreviewMarkdown([
+    "````markdown",
+    markdown,
+    "````",
+    "",
+    "## Operator Summary",
+    "- status: pass",
+    "",
+  ].join("\n"));
+  assert.notEqual(fencedSubstitution.result.status, 0);
+  assert.equal(fencedSubstitution.summary.status, "fail");
+  assert.match(fencedSubstitution.summary.issue, /exact-visible-heading-contract/);
+
+  const extraVisibleSection = checkPreviewMarkdown(`${markdown}\n## Operator Summary\n- status: pass\n`);
+  assert.notEqual(extraVisibleSection.result.status, 0);
+  assert.equal(extraVisibleSection.summary.status, "fail");
+  assert.match(extraVisibleSection.summary.issue, /exact-visible-heading-contract/);
+
+  const fencedDecoy = checkPreviewMarkdown([
+    "```text",
+    "## Operator Summary",
+    "- status: fail",
+    "```",
+    "",
+    markdown,
+  ].join("\n"));
+  assert.equal(fencedDecoy.result.status, 0, fencedDecoy.result.stderr || fencedDecoy.result.stdout);
+  assert.equal(fencedDecoy.summary.status, "pass");
+
+  const globalOneShotClaim = checkPreviewMarkdown(markdown.replace(
+    "repository-local consumption is not a global one-shot guarantee",
+    "repository-local consumption is a global one-shot guarantee",
+  ));
+  assert.notEqual(globalOneShotClaim.result.status, 0);
+  assert.equal(globalOneShotClaim.summary.status, "fail");
+  assert.match(globalOneShotClaim.summary.issue, /repository-local-consumption-boundary/);
+});
+
 test("authorization-ready Preview checker reports the actual stale age", () => {
   const staleAt = new Date(Date.now() - 60 * 60_000).toISOString();
-  const markdown = makeBoundPreviewMarkdown(DRY_RUN_LOG_TEXT).replace(
-    /^Last updated:\s*.+\.$/m,
-    `Last updated: ${staleAt}.`,
-  );
+  const staleLogText = createDryRunLogText(CANONICAL_CONSENT_PLAN, staleAt);
+  const markdown = makeBoundPreviewMarkdown(staleLogText, { updatedAt: staleAt });
   const freshnessEnv = {
     V10_DRY_RUN_PREVIEW_MAX_AGE_MS: String(24 * 60 * 60_000),
     V10_DRY_RUN_AUTHORIZATION_MAX_AGE_MS: String(15 * 60_000),
   };
-  const regular = checkPreviewMarkdown(markdown, { extraEnv: freshnessEnv });
+  const regular = checkPreviewMarkdown(markdown, { logText: staleLogText, extraEnv: freshnessEnv });
   assert.equal(regular.result.status, 0, regular.result.stderr || regular.result.stdout);
   assert.equal(regular.summary.status, "pass");
   assert.equal(regular.summary.authorizationFreshnessRequired, false);
   const result = checkPreviewMarkdown(markdown, {
     args: ["--require-fresh-authorization"],
+    logText: staleLogText,
     extraEnv: freshnessEnv,
   });
   assert.notEqual(result.result.status, 0);
@@ -1346,6 +2267,37 @@ test("Preview checker binds the current regular log and independently verifies t
     0,
     "matching markdown digest and zero-valued analyzer bullets cannot replace the independent strict analyzer",
   );
+});
+
+test("Preview checker rejects admission and envelope challenge cross-splices", () => {
+  const markdownA = makeBoundPreviewMarkdown(DRY_RUN_LOG_TEXT);
+  const logB = rebindDryRunAdmission(DRY_RUN_LOG_TEXT, DRY_RUN_ADMISSION_RUN_ID);
+  const coherentLogB = checkPreviewMarkdown(bindMarkdownLog(markdownA, logB), { logText: logB });
+  assert.notEqual(coherentLogB.result.status, 0);
+  assert.equal(coherentLogB.summary.status, "fail");
+  assert.match(coherentLogB.summary.issue, /admission-run-id/);
+
+  const envelopeB = mutateConsentEnvelopeInMarkdown(markdownA, (envelope) => {
+    envelope.authorizationRunId = DRY_RUN_ADMISSION_RUN_ID;
+    envelope.runtimeEvidence.admissionRunId = DRY_RUN_ADMISSION_RUN_ID;
+  });
+  const envelopeBWithLogA = checkPreviewMarkdown(envelopeB);
+  assert.notEqual(envelopeBWithLogA.result.status, 0);
+  assert.equal(envelopeBWithLogA.summary.status, "fail");
+  assert.match(envelopeBWithLogA.summary.issue, /admission-run-id/);
+
+  const undigestedLogB = rebindDryRunAdmission(
+    DRY_RUN_LOG_TEXT,
+    DRY_RUN_ADMISSION_RUN_ID,
+    { recomputeDigest: false },
+  );
+  const undigestedMutation = checkPreviewMarkdown(
+    bindMarkdownLog(envelopeB, undigestedLogB),
+    { logText: undigestedLogB },
+  );
+  assert.notEqual(undigestedMutation.result.status, 0);
+  assert.equal(undigestedMutation.summary.status, "fail");
+  assert.match(undigestedMutation.summary.issue, /admission-digest/);
 });
 
 test("Preview checker rejects a leaf symlink or reparse docs parent", () => {

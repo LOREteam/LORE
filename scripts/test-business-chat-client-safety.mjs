@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -11,15 +14,20 @@ import * as chatSessionClientModule from "../app/lib/chatSessionClient.ts";
 import * as chatAuthModule from "../app/lib/chatAuth.ts";
 import * as chatAuthRuntimeModule from "../app/lib/chatAuthRuntime.ts";
 import * as chatSessionModule from "../app/api/_lib/chatSession.ts";
+import * as trustedAuthOriginModule from "../app/api/_lib/trustedAuthOrigin.ts";
 import * as chatSendStateModule from "../app/lib/chatSendState.ts";
 import * as chatRuntimePolicyModule from "../app/lib/chatRuntimePolicy.ts";
 import * as chatProfileRuntimeModule from "../app/lib/chatProfileRuntime.ts";
 import * as chatWalletRuntimeModule from "../app/lib/chatWalletRuntime.ts";
 import * as chatProfileReadPolicyModule from "../app/api/chat/profile/readPolicy.ts";
+import * as rebateModule from "../app/hooks/useRebate.ts";
 import * as chatProfileModalModule from "../app/components/chat/ChatProfileModal.tsx";
 import * as chatWindowModule from "../app/components/chat/ChatWindow.tsx";
 import * as floatingActionsModule from "../app/components/FloatingActions.tsx";
 import * as headerWalletCardModule from "../app/components/header/HeaderWalletCard.tsx";
+import * as walletSettingsOverviewModule from "../app/components/wallet/WalletSettingsOverviewPanel.tsx";
+import * as depositHistoryModule from "../app/hooks/useDepositHistory.ts";
+import * as analyticsAchievementsModule from "../app/hooks/useAnalyticsAchievements.ts";
 
 function listSourceFiles(root, sourceFilePattern = /\.(?:ts|tsx|mjs)$/) {
   const entries = readdirSync(root, { withFileTypes: true });
@@ -36,15 +44,20 @@ const chatSessionClient = chatSessionClientModule.default ?? chatSessionClientMo
 const chatAuth = chatAuthModule.default ?? chatAuthModule;
 const chatAuthRuntime = chatAuthRuntimeModule.default ?? chatAuthRuntimeModule;
 const chatSession = chatSessionModule.default ?? chatSessionModule;
+const trustedAuthOrigin = trustedAuthOriginModule.default ?? trustedAuthOriginModule;
 const chatSendState = chatSendStateModule.default ?? chatSendStateModule;
 const chatRuntimePolicy = chatRuntimePolicyModule.default ?? chatRuntimePolicyModule;
 const chatProfileRuntime = chatProfileRuntimeModule.default ?? chatProfileRuntimeModule;
 const chatWalletRuntime = chatWalletRuntimeModule.default ?? chatWalletRuntimeModule;
 const chatProfileReadPolicy = chatProfileReadPolicyModule.default ?? chatProfileReadPolicyModule;
+const rebate = rebateModule.default ?? rebateModule;
 const chatProfileModal = chatProfileModalModule.default ?? chatProfileModalModule;
 const chatWindow = chatWindowModule.default ?? chatWindowModule;
 const floatingActions = floatingActionsModule.default ?? floatingActionsModule;
 const headerWalletCard = headerWalletCardModule.default ?? headerWalletCardModule;
+const walletSettingsOverview = walletSettingsOverviewModule.default ?? walletSettingsOverviewModule;
+const depositHistory = depositHistoryModule.default ?? depositHistoryModule;
+const analyticsAchievements = analyticsAchievementsModule.default ?? analyticsAchievementsModule;
 
 const CHAT_PROFILE_ADDRESS_A = "0x1111111111111111111111111111111111111111";
 const CHAT_PROFILE_ADDRESS_B = "0x2222222222222222222222222222222222222222";
@@ -52,6 +65,202 @@ const CHAT_PROFILE_ADDRESS_C = "0x3333333333333333333333333333333333333333";
 
 function uppercaseHexAddress(address) {
   return `0x${address.slice(2).toUpperCase()}`;
+}
+
+function runRewardsAddressNormalizationProbe() {
+  const probeSource = String.raw`
+import { mock } from "node:test";
+
+const root = new URL("./", import.meta.url);
+const unwrap = (namespace) => namespace.default ?? namespace;
+const checksumUser = "0x52908400098527886E0F7030069857D2E4169EE7";
+let fetchCalls = 0;
+let storageMockCalls = 0;
+let recoveryMockCalls = 0;
+const multicallRequests = [];
+const originalFetch = globalThis.fetch;
+let probeResult;
+
+globalThis.fetch = async (...args) => {
+  fetchCalls += 1;
+  throw new Error("unexpected fetch: " + String(args[0]));
+};
+
+try {
+  mock.module(new URL("./app/api/_lib/dataBridge.ts", root).href, {
+    namedExports: {
+      CONTRACT_ADDRESS: "0x0000000000000000000000000000000000000001",
+      isSafePositiveInteger: (value) => Number.isSafeInteger(value) && value > 0,
+      publicClient: {
+        multicall: async (request) => {
+          multicallRequests.push(request);
+          return request.contracts[0]?.functionName === "userBets"
+            ? [{ result: 2n }]
+            : [{ result: 4n }];
+        },
+      },
+    },
+  });
+  mock.module(new URL("./server/storage.ts", root).href, {
+    namedExports: {
+      getEpochMapByIds: (epochs) => {
+        storageMockCalls += 1;
+        if (epochs.length !== 1 || epochs[0] !== 7) {
+          throw new Error("unexpected reward-summary epoch lookup");
+        }
+        return {
+          "7": {
+            winningTile: 1,
+            totalPool: "10",
+            rewardPool: "10",
+            isDailyJackpot: false,
+            isWeeklyJackpot: false,
+          },
+        };
+      },
+    },
+  });
+  mock.module(new URL("./app/api/_lib/jackpotsService.ts", root).href, {
+    namedExports: {
+      isRecoveryContextCurrent: () => {
+        recoveryMockCalls += 1;
+        throw new Error("unexpected recovery-context validation");
+      },
+      loadFinalizedRecoveryContext: async () => {
+        recoveryMockCalls += 1;
+        throw new Error("unexpected finalized-recovery lookup");
+      },
+    },
+  });
+
+  const rewardSummary = unwrap(await import(
+    new URL("./app/api/_lib/rewardSummary.ts?chat-client-normalization-probe", root)
+  ));
+  const validSummary = await rewardSummary.loadRewardMapsForUserEpochs(checksumUser, [7]);
+  let invalidSummaryRejected = false;
+  try {
+    await rewardSummary.loadRewardMapsForUserEpochs("0x1234", [8]);
+  } catch {
+    invalidSummaryRejected = true;
+  }
+  const userBetsRequest = multicallRequests.find(
+    (request) => request.contracts[0]?.functionName === "userBets",
+  );
+
+  let routeCalls = 0;
+  const routeArgs = [];
+  mock.module(new URL("./app/api/_lib/rewardSummary.ts", root).href, {
+    namedExports: {
+      loadRewardMapsForUserEpochs: async (user, epochs) => {
+        routeCalls += 1;
+        routeArgs.push({ user, epochs });
+        return { epochs: {}, rewards: {} };
+      },
+    },
+  });
+  mock.module(new URL("./app/api/_lib/sharedRateLimit.ts", root).href, {
+    namedExports: { enforceSharedRateLimit: async () => null },
+  });
+  mock.module(new URL("./app/api/_lib/runtimeMetrics.ts", root).href, {
+    namedExports: {
+      beginRouteMetric: () => ({ startedAt: 0, finalized: false }),
+      failRouteMetric: () => undefined,
+      finishRouteMetric: () => undefined,
+      markRouteCacheHit: () => undefined,
+      markRouteInflightJoin: () => undefined,
+      markRouteStaleServed: () => undefined,
+    },
+  });
+  mock.module(new URL("./app/api/_lib/routeError.ts", root).href, {
+    namedExports: { logRouteError: () => undefined },
+  });
+
+  const rewardsRoute = unwrap(await import(
+    new URL("./app/api/rewards/route.ts?chat-client-normalization-probe", root)
+  ));
+  const validResponse = await rewardsRoute.POST(new Request("https://example.test/api/rewards", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ user: checksumUser, epochs: [7] }),
+  }));
+  const validBody = await validResponse.json();
+  const invalidResponse = await rewardsRoute.POST(new Request("https://example.test/api/rewards", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ user: "0x1234", epochs: [7] }),
+  }));
+  const invalidBody = await invalidResponse.json();
+
+  probeResult = {
+    summary: {
+      normalizedUserArg: userBetsRequest?.contracts[0]?.args[2] ?? null,
+      invalidRejected: invalidSummaryRejected,
+      storageMockCalls,
+      multicallMockCalls: multicallRequests.length,
+      recoveryMockCalls,
+      reward: validSummary.rewards["7"]?.reward ?? null,
+    },
+    route: {
+      validStatus: validResponse.status,
+      validBody,
+      invalidStatus: invalidResponse.status,
+      invalidBody,
+      routeCalls,
+      routeArgs,
+    },
+    fetchCalls,
+  };
+} finally {
+  globalThis.fetch = originalFetch;
+  mock.restoreAll();
+}
+
+console.log(JSON.stringify(probeResult));
+`;
+  const poisonRoot = join(tmpdir(), `lore-rewards-normalization-${randomUUID()}`);
+  const poisonDbPath = join(poisonRoot, "lore.sqlite");
+  if (existsSync(poisonRoot) || existsSync(poisonDbPath)) {
+    throw new Error("rewards address-normalization DB poison path must start absent");
+  }
+  const probe = spawnSync(
+    process.execPath,
+    [
+      "--no-warnings",
+      "--experimental-test-module-mocks",
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      probeSource,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        LORE_DB_PATH: poisonDbPath,
+        TSX_DISABLE_CACHE: "1",
+      },
+      maxBuffer: 1_000_000,
+      timeout: 30_000,
+      windowsHide: true,
+    },
+  );
+  if (existsSync(poisonRoot) || existsSync(poisonDbPath)) {
+    throw new Error("rewards address-normalization probe unexpectedly created its DB poison path");
+  }
+  if (probe.error) {
+    throw new Error("rewards address-normalization probe failed to start", { cause: probe.error });
+  }
+  if (probe.status !== 0) {
+    const detail = `${probe.stderr || ""}\n${probe.stdout || ""}`.trim().slice(-4_000);
+    throw new Error(`rewards address-normalization probe exited ${probe.status}: ${detail}`);
+  }
+  try {
+    return JSON.parse(probe.stdout.trim());
+  } catch (error) {
+    throw new Error("rewards address-normalization probe returned invalid JSON", { cause: error });
+  }
 }
 
 function assertChatProfileReadScopePolicy(candidate) {
@@ -1091,10 +1300,19 @@ export async function runChatAndClientSafetyTests() {
     /getChatAuthProofTtlMs\(fields\.issuedAt\)[\s\S]*ttlMs === null[\s\S]*Expired auth proof[\s\S]*consumeChatProof\(authAddress, fields\.nonce, fields\.uri, authSignature, ttlMs\)/,
     "chat auth route must fail closed before replay-lock consumption when issuedAt TTL is invalid",
   );
-  assert.doesNotMatch(
-    chatAuthRouteSource,
-    /Date\.parse\(fields\.issuedAt\)|CHAT_AUTH_PROOF_TTL_MS - \(Date\.now\(\) - issuedAtMs\)/,
-    "chat auth route must not recalculate replay-lock TTL with broad Date.parse",
+  assert.deepEqual(
+    [
+      chatAuth.getChatAuthProofTtlMs("2026-08-13T12:04:00Z", authNow),
+      chatAuth.getChatAuthProofTtlMs("2026-08-13T12:04:00.000+00:00", authNow),
+      chatAuth.getChatAuthProofTtlMs("2026-08-13 12:04:00.000Z", authNow),
+      chatAuth.getChatAuthProofTtlMs(
+        "2026-02-30T12:04:00.000Z",
+        Date.parse("2026-03-02T12:05:00.000Z"),
+      ),
+      chatAuth.getChatAuthProofTtlMs(authFields.issuedAt, Number.MAX_SAFE_INTEGER + 1),
+    ],
+    [null, null, null, null, null],
+    "chat auth proof TTL must reject non-canonical timestamps and unsafe current time",
   );
   assert.match(
     chatAuthRouteSource,
@@ -1106,10 +1324,20 @@ export async function runChatAndClientSafetyTests() {
     /isTrustedAuthUri\(fields\.uri, trustedOrigin, "\/chat"\)/,
     "chat auth route must bind signed messages to the exact chat URI path",
   );
-  assert.doesNotMatch(
-    chatAuthRouteSource,
-    /new URL\(fields\.uri\)\.origin/,
-    "chat auth route must not accept signed messages by origin-only URI comparison",
+  const exactChatAuthOrigin = "https://lore.example";
+  assert.deepEqual(
+    [
+      trustedAuthOrigin.isTrustedAuthUri(`${exactChatAuthOrigin}/chat`, exactChatAuthOrigin, "/chat"),
+      trustedAuthOrigin.isTrustedAuthUri(`${exactChatAuthOrigin}/admin`, exactChatAuthOrigin, "/chat"),
+      trustedAuthOrigin.isTrustedAuthUri(`${exactChatAuthOrigin}/chat?next=/admin`, exactChatAuthOrigin, "/chat"),
+      trustedAuthOrigin.isTrustedAuthUri(`${exactChatAuthOrigin}/chat#admin`, exactChatAuthOrigin, "/chat"),
+      trustedAuthOrigin.isTrustedAuthUri(`${exactChatAuthOrigin}/chat/`, exactChatAuthOrigin, "/chat"),
+      trustedAuthOrigin.isTrustedAuthUri("https://user@lore.example/chat", exactChatAuthOrigin, "/chat"),
+      trustedAuthOrigin.isTrustedAuthUri("https://attacker.example/chat", exactChatAuthOrigin, "/chat"),
+      trustedAuthOrigin.isTrustedAuthUri("http://lore.example/chat", exactChatAuthOrigin, "/chat"),
+    ],
+    [true, false, false, false, false, false, false, false],
+    "chat auth URI policy must bind the exact origin and /chat path without query, fragment, trailing slash, or userinfo",
   );
   assert.match(
     chatAuthRouteSource,
@@ -1206,40 +1434,199 @@ export async function runChatAndClientSafetyTests() {
     [true, true, true, 2, true],
     "chat widget, rows, and stable wallet hook must use the behavior-tested identity policy",
   );
-  assert.match(
-    readFileSync("app/hooks/useRebate.ts", "utf8"),
-    /getRebateCacheKey[\s\S]*getAddress\(address\)/,
-    "rebate cache keys must normalize wallet addresses with the EVM address parser",
-  );
-  assert.match(
-    readFileSync("app/hooks/useRebate.ts", "utf8"),
-    /const cacheKey = getRebateCacheKey\(address\)[\s\S]*localStorage\.removeItem\(cacheKey\)[\s\S]*const cacheKey = getClaimPlanCacheKey\(address, epochs\)[\s\S]*localStorage\.removeItem\(cacheKey\)/,
-    "rebate and claim-plan caches must clear corrupt or invalid localStorage entries",
-  );
-  assert.match(
-    readFileSync("app/hooks/useDepositHistory.ts", "utf8"),
-    /getDepositCacheKey[\s\S]*getAddress\(userAddress\)/,
-    "deposit cache keys must normalize wallet addresses with the EVM address parser",
+  const previousRebateLocalStorage = globalThis.localStorage;
+  const rebateAddress = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  const rebateCacheKey = "lore:rebate:v1:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const claimPlanCacheKey = "lore:rebate-claim-plan:v1:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:7,9";
+  try {
+    let malformedRebateKeyRejected = false;
+    let malformedClaimPlanKeyRejected = false;
+    try {
+      rebate.getRebateCacheKey("0xabc");
+    } catch {
+      malformedRebateKeyRejected = true;
+    }
+    try {
+      rebate.getClaimPlanCacheKey("0xabc", [7, 9]);
+    } catch {
+      malformedClaimPlanKeyRejected = true;
+    }
+    assert.deepEqual(
+      [rebate.getRebateCacheKey(rebateAddress), malformedRebateKeyRejected],
+      [rebateCacheKey, true],
+      "rebate cache keys must canonicalize valid EVM addresses and reject malformed addresses",
+    );
+    assert.deepEqual(
+      [rebate.getClaimPlanCacheKey(rebateAddress, [7, 9]), malformedClaimPlanKeyRejected],
+      [claimPlanCacheKey, true],
+      "claim-plan cache keys must canonicalize valid EVM addresses and reject malformed addresses",
+    );
+
+    const corruptRebateCache = createMemoryStorage({
+      [rebateCacheKey]: "{corrupt",
+      unrelated: "preserve",
+    });
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: corruptRebateCache,
+    });
+    assert.equal(rebate.loadCachedRebatePayload(rebateAddress), null);
+    assert.deepEqual(corruptRebateCache.removed, [rebateCacheKey]);
+    assert.equal(corruptRebateCache.values.get("unrelated"), "preserve");
+
+    const invalidClaimPlanCache = createMemoryStorage({
+      [claimPlanCacheKey]: JSON.stringify({ kind: "single", savedAt: "not-a-timestamp" }),
+      unrelated: "preserve",
+    });
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: invalidClaimPlanCache,
+    });
+    assert.equal(rebate.loadCachedClaimPlan(rebateAddress, [7, 9]), null);
+    assert.deepEqual(invalidClaimPlanCache.removed, [claimPlanCacheKey]);
+    assert.equal(invalidClaimPlanCache.values.get("unrelated"), "preserve");
+  } finally {
+    if (previousRebateLocalStorage === undefined) {
+      delete globalThis.localStorage;
+    } else {
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: previousRebateLocalStorage,
+      });
+    }
+  }
+  const normalizedCacheAddress = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+  const uppercaseCacheAddress = `0x${normalizedCacheAddress.slice(2).toUpperCase()}`;
+  const depositCacheReadKeys = [];
+  const emptyDepositCache = depositHistory.loadDepositHistoryCache(uppercaseCacheAddress, {
+    getItem(key) {
+      depositCacheReadKeys.push(key);
+      return null;
+    },
+    removeItem() {
+      throw new Error("empty deposit cache must not remove storage");
+    },
+  });
+  let malformedDepositCacheRejected = false;
+  let malformedDepositCacheReads = 0;
+  try {
+    depositHistory.loadDepositHistoryCache("0xabc", {
+      getItem() {
+        malformedDepositCacheReads += 1;
+        return null;
+      },
+      removeItem() {},
+    });
+  } catch {
+    malformedDepositCacheRejected = true;
+  }
+  assert.deepEqual(
+    [
+      emptyDepositCache,
+      depositCacheReadKeys.length,
+      depositCacheReadKeys[0]?.endsWith(`:${normalizedCacheAddress}`),
+      malformedDepositCacheRejected,
+      malformedDepositCacheReads,
+    ],
+    [{ data: null, savedAt: null, provenance: null }, 1, true, true, 0],
+    "deposit cache behavior must canonicalize valid EVM addresses and reject malformed addresses before storage reads",
   );
   assert.match(
     readFileSync("app/hooks/useDepositHistory.ts", "utf8"),
     /function normalizeDepositUserAddress[\s\S]*getAddress\(userAddress\)\.toLowerCase\(\)/,
     "deposit history hook must normalize user addresses before cache and API use",
   );
-  assert.match(
-    readFileSync("app/hooks/useAnalyticsAchievements.ts", "utf8"),
-    /getAchievementStorageKey[\s\S]*getAddress\(walletAddress\)/,
-    "achievement cache keys must normalize wallet addresses with the EVM address parser",
+  const previousAchievementLocalStorage = globalThis.localStorage;
+  const achievementStorageReadKeys = [];
+  try {
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem(key) {
+          achievementStorageReadKeys.push(key);
+          return JSON.stringify({
+            unlockedAt: { "persisted-cache": "2026-08-24T00:00:00.000Z" },
+          });
+        },
+        removeItem() {
+          throw new Error("valid achievement cache must not be removed");
+        },
+      },
+    });
+    function AchievementStorageProbe({ walletAddress }) {
+      const { unlockedCount } = analyticsAchievements.useAnalyticsAchievements({
+        walletAddress,
+        deposits: [],
+        totalDeposited: 0,
+        definitions: [{
+          id: "persisted-cache",
+          title: "Persisted cache",
+          description: "Persisted cache",
+          icon: "",
+          unlocked: () => false,
+          progress: () => "0/1",
+        }],
+        rarityById: { "persisted-cache": "common" },
+        defaultRarity: "common",
+      });
+      return React.createElement("output", { "data-unlocked-count": unlockedCount });
+    }
+    const achievementStorageMarkup = renderToStaticMarkup(React.createElement(
+      AchievementStorageProbe,
+      { walletAddress: uppercaseCacheAddress },
+    ));
+    const malformedAchievementStorageMarkup = renderToStaticMarkup(React.createElement(
+      AchievementStorageProbe,
+      { walletAddress: "0xabc" },
+    ));
+    assert.deepEqual(
+      [
+        achievementStorageReadKeys.length,
+        achievementStorageReadKeys[0]?.endsWith(`:${normalizedCacheAddress}`),
+        /data-unlocked-count="1"/.test(achievementStorageMarkup),
+        /data-unlocked-count="0"/.test(malformedAchievementStorageMarkup),
+      ],
+      [1, true, true, true],
+      "rendered achievements must read only a canonical wallet-scoped cache and reject malformed wallet keys",
+    );
+  } finally {
+    if (previousAchievementLocalStorage === undefined) delete globalThis.localStorage;
+    else Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: previousAchievementLocalStorage,
+    });
+  }
+  const rewardsAddressNormalizationProbe = runRewardsAddressNormalizationProbe();
+  assert.deepEqual(
+    rewardsAddressNormalizationProbe.route,
+    {
+      validStatus: 200,
+      validBody: { rewards: {} },
+      invalidStatus: 400,
+      invalidBody: { error: "Missing or invalid user" },
+      routeCalls: 1,
+      routeArgs: [{
+        user: "0x52908400098527886e0f7030069857d2e4169ee7",
+        epochs: [7],
+      }],
+    },
+    "rewards route must canonicalize EVM user addresses and reject malformed users before reward loading",
   );
-  assert.match(
-    readFileSync("app/api/rewards/route.ts", "utf8"),
-    /getAddress\(typeof body\.user === "string" \? body\.user : ""\)\.toLowerCase\(\)/,
-    "rewards route must normalize user addresses with the EVM address parser",
-  );
-  assert.match(
-    readFileSync("app/api/_lib/rewardSummary.ts", "utf8"),
-    /const normalizedUser = getAddress\(user\)\.toLowerCase\(\)/,
-    "reward summary reads must normalize user addresses before cache and chain reads",
+  assert.deepEqual(
+    {
+      ...rewardsAddressNormalizationProbe.summary,
+      fetchCalls: rewardsAddressNormalizationProbe.fetchCalls,
+    },
+    {
+      normalizedUserArg: "0x52908400098527886e0f7030069857d2e4169ee7",
+      invalidRejected: true,
+      storageMockCalls: 1,
+      multicallMockCalls: 2,
+      recoveryMockCalls: 0,
+      reward: "5",
+      fetchCalls: 0,
+    },
+    "reward summary must canonicalize EVM user addresses before mocked reads and reject malformed users",
   );
   runHeaderWalletCardBehaviorTests();
   const appNewTabIsolationIssues = [];
@@ -1304,21 +1691,62 @@ export async function runChatAndClientSafetyTests() {
     [],
     "active source, operator docs, and package metadata must not reintroduce the removed wallet experiment",
   );
-  const walletSettingsOverviewSource = readFileSync("app/components/wallet/WalletSettingsOverviewPanel.tsx", "utf8");
-  assert.match(
-    walletSettingsOverviewSource,
-    /role="switch"[\s\S]*aria-checked=\{animationEnabled\}[\s\S]*aria-label=\{animationEnabled \? "Disable animation effects" : "Enable animation effects"\}/,
-    "wallet settings animation switch must expose a state-aware accessible name",
+  const walletOverviewBaseProps = {
+    connectedWalletAddress: CHAT_PROFILE_ADDRESS_A,
+    embeddedWalletAddress: CHAT_PROFILE_ADDRESS_B,
+    connectedResolverRewards: "1.00",
+    connectedResolverRewardsWei: 1n,
+    embeddedResolverRewards: "2.00",
+    embeddedResolverRewardsWei: 2n,
+    onClaimConnectedResolverRewards: () => undefined,
+    onClaimEmbeddedResolverRewards: () => undefined,
+    onReducedMotionChange: () => undefined,
+  };
+  const activeAnimationWalletOverview = renderToStaticMarkup(React.createElement(
+    walletSettingsOverview.WalletSettingsOverviewPanel,
+    {
+      ...walletOverviewBaseProps,
+      isClaimingConnectedResolverRewards: true,
+      isClaimingEmbeddedResolverRewards: false,
+      reducedMotion: false,
+    },
+  ));
+  const reducedMotionWalletOverview = renderToStaticMarkup(React.createElement(
+    walletSettingsOverview.WalletSettingsOverviewPanel,
+    {
+      ...walletOverviewBaseProps,
+      isClaimingConnectedResolverRewards: false,
+      isClaimingEmbeddedResolverRewards: true,
+      reducedMotion: true,
+    },
+  ));
+  assert.deepEqual(
+    [
+      /role="switch" aria-checked="true" aria-label="Disable animation effects"/.test(activeAnimationWalletOverview),
+      /role="switch" aria-checked="false" aria-label="Enable animation effects"/.test(reducedMotionWalletOverview),
+    ],
+    [true, true],
+    "rendered wallet settings animation switch must expose its current state and action",
   );
-  assert.match(
-    walletSettingsOverviewSource,
-    /connectedResolverClaimLabel[\s\S]*embeddedResolverClaimLabel[\s\S]*role="status"[\s\S]*aria-live="polite"[\s\S]*aria-label=\{connectedResolverClaimLabel\}[\s\S]*title=\{connectedResolverClaimLabel\}[\s\S]*aria-label=\{embeddedResolverClaimLabel\}[\s\S]*title=\{embeddedResolverClaimLabel\}/,
-    "wallet settings resolver reward claims must expose state-aware labels and announce claim progress",
+  assert.deepEqual(
+    [
+      /role="status" aria-live="polite">Claiming connected wallet resolver rewards/.test(activeAnimationWalletOverview),
+      /aria-label="Claiming connected wallet resolver rewards" title="Claiming connected wallet resolver rewards"/.test(activeAnimationWalletOverview),
+      /aria-label="Claim 2\.00 LINEA resolver rewards from Privy wallet" title="Claim 2\.00 LINEA resolver rewards from Privy wallet"/.test(activeAnimationWalletOverview),
+      /role="status" aria-live="polite">Claiming Privy wallet resolver rewards/.test(reducedMotionWalletOverview),
+      /aria-label="Claiming Privy wallet resolver rewards" title="Claiming Privy wallet resolver rewards"/.test(reducedMotionWalletOverview),
+    ],
+    [true, true, true, true, true],
+    "rendered resolver reward claims must expose state-aware labels and announce each pending wallet scope",
   );
-  assert.match(
-    readFileSync("app/lib/chatSessionClient.ts", "utf8"),
-    /normalizeChatAuthAddress/,
-    "client chat session storage must normalize wallet addresses before keying localStorage",
+  const expectedChatSessionStorageKey = `lore:chat-session:${normalizedCacheAddress}`;
+  assert.deepEqual(
+    [
+      chatSessionClient.getChatAuthStorageKey(normalizedCacheAddress),
+      chatSessionClient.getChatAuthStorageKey(` ${uppercaseCacheAddress} `),
+    ],
+    [expectedChatSessionStorageKey, expectedChatSessionStorageKey],
+    "client chat session behavior must trim and canonicalize wallet addresses before keying localStorage",
   );
   const useChatAuthSource = readFileSync("app/hooks/useChatAuth.ts", "utf8");
   const providerRequests = [];

@@ -1,9 +1,11 @@
-import "dotenv/config";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { formatRuntimeSmokeError } from "./runtime-smoke-error-policy.mjs";
+
+const isMain = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (isMain) await import("dotenv/config");
 
 export function verifySqliteStartup(sourceInput) {
   if (sourceInput === ":memory:") return { status: "pass", state: "memory" };
@@ -43,7 +45,6 @@ export function runSqliteStartupCli({
   }
 }
 
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 if (isMain) {
   process.exitCode = runSqliteStartupCli();
 }

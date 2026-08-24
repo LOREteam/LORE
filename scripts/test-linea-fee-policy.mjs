@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { decodeFunctionData } from "viem";
 import * as lineaFeesModule from "../app/lib/lineaFees.ts";
 import * as miningAllowanceModule from "../app/hooks/useMiningAllowance.ts";
+import * as miningRuntimeHelpersModule from "../app/hooks/useMiningRuntimeHelpers.ts";
 import * as miningSharedModule from "../app/hooks/useMining.shared.ts";
 
 const lineaFees = lineaFeesModule.default ?? lineaFeesModule;
 const miningAllowance = miningAllowanceModule.default ?? miningAllowanceModule;
+const miningRuntimeHelpers = miningRuntimeHelpersModule.default ?? miningRuntimeHelpersModule;
 const miningShared = miningSharedModule.default ?? miningSharedModule;
 
 assert.equal(
@@ -239,19 +243,42 @@ assert.throws(
   /linea_fee_total_cap_exceeded kind=keeper/,
 );
 
-const miningRuntimeHelpersSource = readFileSync("app/hooks/useMiningRuntimeHelpers.ts", "utf8");
-assert.match(
-  miningRuntimeHelpersSource,
-  /getApproveFees[\s\S]*getKeeperFeeOverrides\(fees, APP_CHAIN_ID, maxFeeBump, priorityBump\)[\s\S]*assertKeeperFeeBudget\(feeOverrides, APPROVAL_GAS_LIMIT, APP_CHAIN_ID, "approval"\)[\s\S]*catch \(err\)[\s\S]*if \(isLineaFeePolicyError\(err\)\) throw err/,
-  "browser approval fees must fail closed on policy violations before silent submission",
+let approvalFeeEstimateCalls = 0;
+let approvalFeePolicyHelpers;
+function ApprovalFeePolicyProbe() {
+  approvalFeePolicyHelpers = miningRuntimeHelpers.useMiningRuntimeHelpers({
+    getActorAddress: () => null,
+    publicClientRef: {
+      current: {
+        estimateFeesPerGas: async () => {
+          approvalFeeEstimateCalls += 1;
+          return { gasPrice: 100_000_000_000n };
+        },
+      },
+    },
+    tokenGetterWarningShownRef: { current: false },
+    gasBumpBase: 110n,
+    minGasPlaceBet: 180_000n,
+    minGasPlaceBatch: 260_000n,
+    gasCostBufferBps: 12_000n,
+    bpsDenominator: 10_000n,
+    recordEstimateGasShadow: () => undefined,
+  });
+  return null;
+}
+renderToStaticMarkup(React.createElement(ApprovalFeePolicyProbe));
+await assert.rejects(
+  () => approvalFeePolicyHelpers.getApproveFees(),
+  /linea_fee_field_cap_exceeded field=gasPrice/,
+  "browser approval fees must rethrow fee-policy violations before silent submission",
+);
+assert.equal(
+  approvalFeeEstimateCalls,
+  1,
+  "browser approval fee policy must validate the real resolved estimate",
 );
 
 const miningAllowanceSource = readFileSync("app/hooks/useMiningAllowance.ts", "utf8");
-assert.match(
-  miningAllowanceSource,
-  /buildDirectApprovalWriteRequest[\s\S]*assertKeeperFeeBudget\(approveOverrides, MIN_GAS_APPROVE, APP_CHAIN_ID, "approval"\)[\s\S]*\.\.\.approveOverrides[\s\S]*gas: MIN_GAS_APPROVE/,
-  "the direct approval wallet sink must enforce the bounded gas and fee policy without dropping legacy gasPrice",
-);
   assert.match(
     miningAllowanceSource,
     /\} else \{\s*approveHash = await executeReservedMiningApprovalWalletSink\(\s*reservation,\s*async \(\) => assertBeforeSend\?\.\(\),\s*async \(\) => readWriteContractAsync\(\)\(\s*buildDirectApprovalWriteRequest\(approvalNonce, requiredAmount, approveOverrides\)/,
@@ -345,13 +372,6 @@ assert.equal(
   (standardBetPathSource.match(/\}, calldata, gas\);/g) ?? []).length,
   5,
   "every external-wallet mining selector must pass exact calldata and gas to the guarded signing sink",
-);
-
-const miningSharedSource = readFileSync("app/hooks/useMining.shared.ts", "utf8");
-assert.match(
-  miningSharedSource,
-  /isDeterministicBetExecutionError\(err: unknown\)[\s\S]*isLineaFeePolicyError\(err\)/,
-  "fee-policy errors must be terminal deterministic mining errors",
 );
 
 for (const [label, file] of [
