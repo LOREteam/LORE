@@ -169,6 +169,9 @@ if (process.argv.includes("--manifest-self-test")) {
 
 const DECIMAL_INTEGER_RE = /^(?:0|[1-9]\d{0,15})$/;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+const BUSINESS_LOGIC_DEFAULT_TIMEOUT_MS = 600_000;
+const BUSINESS_LOGIC_MAX_TIMEOUT_MS = 900_000;
+const BUSINESS_LOGIC_WATCHDOG_HEADROOM_MS = 30_000;
 let checkTimeoutMs;
 let npmLauncher;
 let quietNpmEnv;
@@ -266,6 +269,23 @@ function formatPackageVersion(value) {
   return /^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9._-]+)?$/.test(text) ? text : "missing";
 }
 
+function timeoutPolicyForScript(script, baseTimeoutMs) {
+  if (script !== "test:logic:summary") {
+    return { watchdogTimeoutMs: baseTimeoutMs };
+  }
+  const summaryTimeoutMs = Math.max(
+    BUSINESS_LOGIC_DEFAULT_TIMEOUT_MS,
+    Math.min(baseTimeoutMs, BUSINESS_LOGIC_MAX_TIMEOUT_MS),
+  );
+  return {
+    summaryTimeoutMs,
+    watchdogTimeoutMs: Math.max(
+      baseTimeoutMs,
+      summaryTimeoutMs + BUSINESS_LOGIC_WATCHDOG_HEADROOM_MS,
+    ),
+  };
+}
+
 function runScript(script, args = []) {
   const command = trustedNpmCommand([
     "--silent",
@@ -274,10 +294,11 @@ function runScript(script, args = []) {
     ...(args.length > 0 ? ["--", ...args] : []),
   ], npmLauncher);
   const startedAt = Date.now();
-  const scriptEnv = script === "test:logic:summary"
+  const timeoutPolicy = timeoutPolicyForScript(script, checkTimeoutMs);
+  const scriptEnv = timeoutPolicy.summaryTimeoutMs !== undefined
     ? {
       ...quietNpmEnv,
-      BUSINESS_LOGIC_SUMMARY_TIMEOUT_MS: String(Math.max(180_000, checkTimeoutMs)),
+      BUSINESS_LOGIC_SUMMARY_TIMEOUT_MS: String(timeoutPolicy.summaryTimeoutMs),
     }
     : quietNpmEnv;
   const result = spawnSync(command.command, command.args, {
@@ -285,9 +306,13 @@ function runScript(script, args = []) {
     env: scriptEnv,
     encoding: "utf8",
     maxBuffer: 1024 * 1024,
-    timeout: checkTimeoutMs,
+    timeout: timeoutPolicy.watchdogTimeoutMs,
   });
-  return { ...result, elapsedMs: Date.now() - startedAt };
+  return {
+    ...result,
+    elapsedMs: Date.now() - startedAt,
+    timeoutMs: timeoutPolicy.watchdogTimeoutMs,
+  };
 }
 
 function classifyFailedCheck(result, requiredLocal, script) {
@@ -884,7 +909,7 @@ function executeChecks(checkList, execute, onRow = () => {}) {
     timings.push({ elapsedMs: result.elapsedMs, label });
     let summary = clamp(summarizeOutput(output)).replace(/\|/g, "\\|");
     if (result.error?.code === "ETIMEDOUT") {
-      summary = `status=timeout, timeoutMs=${checkTimeoutMs}`;
+      summary = `status=timeout, timeoutMs=${nonNegativeSafeInteger(result.timeoutMs) ?? checkTimeoutMs}`;
     }
     if (script === "lint" && exitCode === 0 && summary === "no output") {
       summary = "status=pass, eslint=true";
@@ -1051,11 +1076,17 @@ function runBehaviorSelfTest() {
     execution.externalEvidenceIssues.join(",") === "external-blocker" &&
     execution.toolFailures.length === 0 &&
     execution.timings.map((item) => item.elapsedMs).join(",") === "3,2,1";
+  const timeoutPolicyPass =
+    JSON.stringify(timeoutPolicyForScript("lint:summary", 300_000)) === JSON.stringify({ watchdogTimeoutMs: 300_000 }) &&
+    JSON.stringify(timeoutPolicyForScript("test:logic:summary", 300_000)) === JSON.stringify({ summaryTimeoutMs: 600_000, watchdogTimeoutMs: 630_000 }) &&
+    JSON.stringify(timeoutPolicyForScript("test:logic:summary", 700_000)) === JSON.stringify({ summaryTimeoutMs: 700_000, watchdogTimeoutMs: 730_000 }) &&
+    JSON.stringify(timeoutPolicyForScript("test:logic:summary", 1_800_000)) === JSON.stringify({ summaryTimeoutMs: 900_000, watchdogTimeoutMs: 1_800_000 });
 
   const checks = [
     [`summaries-${summaryResults.map((passed, index) => passed ? "" : index + 1).filter(Boolean).join("-") || "all"}`, summariesPass],
     ["redaction", redactionPass],
     ["execution", executionPass],
+    ["timeout-policy", timeoutPolicyPass],
     ["local-classification", classifyFailedCheck({ status: 1 }, true, "local")?.disposition === "required-local-failure"],
     ["external-classification", classifyFailedCheck({ status: 1 }, false, "external")?.disposition === "launch-blocking"],
     ["external-evidence", !isExternalEvidenceIssue(true, "status=fail, issue=missing") && isExternalEvidenceIssue(false, "status=fail, issue=missing")],

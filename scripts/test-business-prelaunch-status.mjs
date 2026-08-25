@@ -27,7 +27,7 @@ export function runPrelaunchStatusBehaviorTests() {
     status: "pass",
     summaryVectors: 25,
     streamedRows: 3,
-    faultMutantsRejected: 6,
+    faultMutantsRejected: 7,
     networkRequests: 0,
     childProcesses: 0,
   });

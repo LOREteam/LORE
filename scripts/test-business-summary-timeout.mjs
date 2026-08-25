@@ -216,6 +216,19 @@ export function runSummaryTimeoutTests() {
   const businessSpawn = () => assert.fail("injected isolated runner must own child execution");
   const businessLines = [];
   const businessTimes = [1_000, 1_321];
+  let defaultBusinessTimeout = null;
+  withTemporaryBusinessTimeout(undefined, () => {
+    runBusinessLogicSummary({
+      cwd: "C:\\isolated-business-summary",
+      exists: () => true,
+      runIsolatedChild: (options) => {
+        defaultBusinessTimeout = options.timeout;
+        return { status: 0, stdout: validBusinessOutput, stderr: "" };
+      },
+      writeLine: () => {},
+    });
+  });
+  assert.equal(defaultBusinessTimeout, 600_000);
   withTemporaryBusinessTimeout("240000", () => {
     const outcome = runBusinessLogicSummary({
       cwd: "C:\\isolated-business-summary",
@@ -976,7 +989,8 @@ function withTemporaryContractTimeout(value, callback) {
 function withTemporaryBusinessTimeout(value, callback) {
   const name = "BUSINESS_LOGIC_SUMMARY_TIMEOUT_MS";
   const previous = process.env[name];
-  process.env[name] = value;
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
   try {
     return callback();
   } finally {
