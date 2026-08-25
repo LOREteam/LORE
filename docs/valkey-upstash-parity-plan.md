@@ -5,10 +5,12 @@ hermetic HTTPS/REST check covers the real rate-limit, keeper daily-budget, and
 admin-session rotation application paths from two Node processes at exact local
 SHA `9ce4e5ca9809cda7b856603e2f51e1200b0f7735`. A separate clean-HEAD direct
 engine run at `154b29b592182600d118736f1c2d312d92fcc9a3` proves local AOF
-restart and RDB restore semantics. Hosted route/browser cookie behavior,
-provider-managed persistence, externally retained backup, deployed process
-rehearsal, and external relational DB restore remain open. No endpoint or
-durable credential is recorded.
+restart and RDB restore semantics. A clean-HEAD role-wiring run at
+`cc0d5891159065eaa51d59607b250eda1aee3014` also binds the actual local
+indexer/keeper/monitor seams without starting a signer or live monitor loop.
+Hosted route/browser cookie behavior, provider-managed persistence, externally
+retained backup, deployed process rehearsal, and external relational DB restore
+remain open. No endpoint or durable credential is recorded.
 
 ## Selected candidate
 
@@ -150,6 +152,43 @@ This remains **partial local parity**. It does not prove the managed provider,
 deployed web replicas, hosted `/api/admin/auth`, browser `Set-Cookie` enforcement,
 indexer/bot/monitor, persistent external storage, backup/restore, or cross-host
 behavior.
+
+## Local runtime-role wiring check (2026-08-25)
+
+`test:runtime-role-topology` invokes
+`scripts/test-runtime-role-topology.mjs`. Its retained clean-HEAD run uses exact
+Windows Node `24.5.0` at SHA
+`cc0d5891159065eaa51d59607b250eda1aee3014` and runs four isolated child
+checks with an empty dotenv file and unique OS-temp monitor directory:
+
+- the actual indexer run and watch entrypoints fail closed on an active
+  two-process SQLite lease before any RPC work, preserve opaque ownership, and
+  recover only after bounded crash expiry;
+- a separate actual indexer crash/restart test uses two loopback-only RPC
+  fixtures, rejects a non-canonical fork, resumes from the committed cursor,
+  and persists only finalized canonical rows;
+- two keeper workers execute the production SQLite daily-budget seam that
+  `bot.ts` calls before signing, proving restart persistence, atomic final-slot
+  admission, idempotency, cost/signature caps, and malformed-state refusal;
+- the actual monitor summary preflight and restart/recovery drill report zero
+  duplicate alerts, reject repo-local backup configuration, and remove all
+  owned state without starting the live polling loop.
+
+The orchestrator binds all `12` relevant blobs to that exact SHA, requires a
+clean tracked tree for retained publication, bounds child output/runtime, and
+verifies the protected SQLite base/WAL/SHM identity before and after. The
+retained artifact is
+`artifacts/runtime-topology/local-role-topology.json`, SHA-256
+`F6949B9AB379C3350A5918CC20CC6D9BB8134E7E9DAEB3F074936D47419C0FE7`.
+It explicitly records that the bot entrypoint/signer and live monitor loop were
+not started, no external endpoint was configured, and no wallet or transaction
+action occurred.
+
+This is **local role-wiring partial evidence**, complementary to the separate
+Valkey HTTPS and persistence artifacts above. The roles do not share one
+deployed external store in this run. It does not prove deployed process
+identity, provider durability, cross-host coordination, external database
+restore, real alert delivery, or any wallet/signing/RPC/Preview/chain behavior.
 
 ## Runtime evidence required
 

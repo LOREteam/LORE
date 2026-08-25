@@ -11,16 +11,20 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 - Branch: `codex/repo-cleanup`.
 - The current tested code baseline is
-  `154b29b592182600d118736f1c2d312d92fcc9a3`. Its exact one-path commit
-  extends the direct Valkey runner with unprivileged AOF restart and separate
-  RDB restore. A retained clean-HEAD Node `24.5.0` run reports all four executed
-  source paths bound to that SHA, exact `appendonly=yes` / `appendfsync=always`,
-  preserved values and absolute expiries after restart, byte-exact backup copy,
-  pre-mutation recovery in a separate container, stable provenance through exact
-  owned cleanup, and unchanged protected base/WAL/SHM identity. Parent
-  `9ce4e5ca9` is the HTTPS session-rotation packet; `b53489ed` is the keeper
-  extension. These are immutable local partial-parity baselines, not the final
-  release seal.
+  `cc0d5891159065eaa51d59607b250eda1aee3014`. Its exact three-path commit
+  adds the local runtime-role orchestrator and package/ignore wiring. A retained
+  clean-HEAD Node `24.5.0` run binds all `12` relevant blobs to that SHA and
+  combines four existing production-seam tests: actual indexer run/watch lease
+  contention before RPC, actual indexer crash/restart through two loopback-only
+  providers, the production SQLite keeper-budget seam used by `bot.ts` before
+  signing, and the actual monitor summary preflight/restart drill. The signer is
+  not started, monitor live polling is not started, no external endpoint is
+  configured, all owned temp state is removed, and protected base/WAL/SHM
+  identity stays unchanged. Artifact SHA-256 is
+  `F6949B9AB379C3350A5918CC20CC6D9BB8134E7E9DAEB3F074936D47419C0FE7`.
+  Parent `154b29b59` is the direct Valkey persistence/restore packet; `9ce4e5ca9`
+  is HTTPS session rotation. These are immutable local partial-parity baselines,
+  not deployed topology or the final release seal.
 - Latest fully detached broad local-gate baseline: `333d7a81bb8780c5fc631646492ece53bbfa3926`
   (`test: cover bounded deposits recovery transport`). Its `3c8886acc` parent
   provides bounded shared admission/lease hardening and one 20-second,
@@ -46,10 +50,11 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   The prior authorized 74-path packet and its later corrective packets are
   committed, including the seven-path P1.17 packet at `a5ff9f595`, both
   mobile-mining packages at `aaf515d20` and `39f68888`, and local HTTPS/REST
-  Valkey parity through local persistence/restore at `154b29b59`. The current five-path expected staging packet is
+  Valkey parity through local persistence/restore at `154b29b59`, and local
+  runtime-role wiring at `cc0d58911`. The current five-path expected staging packet is
   documentation-only: four current Valkey/worklist/state documents plus the
   self-excluded manifest. The manifest describes the proposed amended index
-  relative to parent `154b29b59`; the user-granted local commit authority does
+  relative to parent `cc0d58911`; the user-granted local commit authority does
   not widen that exact boundary.
 - A disposable detached checkout of the current code mirror completed fresh
   local composite gates with exit `0`: lint, isolated business, P1 hardening,
@@ -289,6 +294,7 @@ replacement needs another separately reviewed plan and exact approval.
 | Transactional-ledger design | [`transactional-ledgers-design.md`](transactional-ledgers-design.md) specifies the external transactional consent state machine, idempotent intent/outbox/reconciliation protocol, immutable audit chain, and canonical activity/reorg model. It is an unimplemented design: no external PostgreSQL-compatible store, cross-host writer, migration, or restore evidence exists. | Design complete; implementation and external verification remain open |
 | Valkey Lua-engine persistence/restore | [`valkey-upstash-parity-plan.md`](valkey-upstash-parity-plan.md) records direct Valkey `8.1.9` `linux/amd64` execution against the pinned OCI-index digest. The unprivileged, networkless, no-host-port container executes all three exact scripts with `appendonly=yes` and `appendfsync=always`; restart preserves values and absolute expiries. A byte-exact RDB is copied before deliberate state mutation, the original container is removed, and a distinct restore container recovers the pre-mutation snapshot and deadlines. The retained artifact SHA-256 is `4E96A817F1CE5C9DFBE80AA2AF24D2D5D41561C9E7617BF36288442EAAE682A5`; it binds four paths to exact SHA `154b29b592182600d118736f1c2d312d92fcc9a3`, reports clean tracked state and stable cleanup, and leaves no temp/container or protected-DB change. | Partial local engine persistence proof; provider durability, externally retained backup, deployed process rehearsal, and external relational DB restore remain open |
 | Valkey HTTPS rate-limit/keeper/session parity | The self-spawning harness executes the real `consumeExternalRateLimit`, `reserveExternalKeeperDailyBudget`, `issueAdminSession`, `readAdminSession`, and `rotateAdminSession` seams from two independent Windows Node `24.5.0` processes through verified Caddy TLS/SNI, a digest-pinned SRH image selected from tag `0.0.10` (no self-reported runtime version), and pinned Valkey `8.1.9`. In addition to the rate-limit and keeper matrix, concurrent session rotation has exactly one CAS winner, both replicas read one shared active identity, the old cookie is rejected for authenticated reads, stale rotation preserves the exact record/deadline, and wrong Bearer fails without state mutation. The claim is intentionally limited to rotation CAS; it is not broad session-replay or hosted-route/browser proof. Valkey/SRH publish no host ports. The retained artifact SHA-256 is `5A6326429ECD7DE768837A9B9AF4AFAE2EEF53745DA4FAE91223301193972BDE` and reports seven relevant blobs bound to exact SHA `9ce4e5ca9809cda7b856603e2f51e1200b0f7735`, clean tracked state, stable provenance through cleanup, graceful replica DB close/exit, exact owned cleanup, and unchanged protected base/WAL/SHM identity. | Committed honest local partial proof; hosted route/browser cookie behavior, deployed replicas/provider durability/restore, and cross-host rehearsal remain open |
+| Local indexer/keeper/monitor process wiring | `scripts/test-runtime-role-topology.mjs` starts four isolated child checks on exact Node `24.5.0`: actual indexer run/watch processes lose to an active two-process SQLite lease before RPC; actual indexer crash/restart resumes only finalized canonical rows through two loopback fixtures; two keeper workers share the production SQLite budget seam that `bot.ts` calls before signing; and the actual monitor summary/drill preserves alert state across restart with zero duplicate alerts. The bot signer and monitor live loop are intentionally not started. The retained artifact SHA-256 is `F6949B9AB379C3350A5918CC20CC6D9BB8134E7E9DAEB3F074936D47419C0FE7`; all 12 sources bind to exact SHA `cc0d5891159065eaa51d59607b250eda1aee3014`, tracked state is clean, owned OS-temp cleanup passes, and protected DB identity is unchanged. | Honest local role-wiring partial proof; no deployed processes, unified external store, cross-host behavior, provider restore, signing, RPC, wallet, or live monitoring proof |
 | V10 Preview/consent | Preview environment `30/30`, canonical envelope `9/9`, analyzer `10/10`, one-shot store `10/10`, runtime enforcement `2/2`, fee policy, the full release-operations runner, TypeScript, targeted syntax checks, and diff hygiene passed on the verified isolated Node `24.5.0` / npm `11.5.1` runtime. No actual Preview was generated because the tree is dirty and exact public runtime configuration was not confirmed; `authorizationReady` and all live actions remain false. | Local implementation pass only; no live authorization or campaign evidence |
 | P1.17 mechanism | Self-tests pass on the current working tree: collector `158/158` (schema `4`, maximum duration `7200000`) and verifier `119/119` (schema `4`). The headed path controls the measured top-level window through page-scoped CDP, rejects unknown/minimized initial state before mutation, arms restore before the mutating command, verifies `minimized` and exact original-state readback, and restores before detach even after action/readback failure. Every routed API request is registered before fulfillment, but its epoch start is accepted only from the later BrowserContext `response` event; pre-response `0`, failure, unresolved terminal state, overflow, or drain timeout fails closed. The bounded raw cohort includes visible-control and hidden candidates. Strict verification independently recomputes the exact half-open hidden subset, path totals, rate, and cap/count parity, and validates the declared response lifecycle, terminal outcomes, and zero-pending drain. It cannot independently detect a coherent rewrite of an unsigned producer artifact, so claims are limited to internal consistency plus exact clean-SHA provenance. Raw state polling is bounded to three seconds. Actuation fields are diagnostic telemetry, while the existing strict raw `setInterval(100)` chain, trusted transition, witness, Long Task, polling, cadence, and internal-consistency checks remain authoritative. No synthetic visibility event can satisfy the native gate. | Local harness correction only; final clean-SHA native-hidden/timer evidence and the two-hour strict run remain open |
 | P1.17 native witness | The latest 60-second loopback diagnostic accepted CDP `minimized`, waited `3019ms` without raw hidden, restored the exact original `normal` state, and re-observed raw visible after `5ms`. Its full raw request cohort was `8/8`, with positive response-captured epoch starts, eight `requestfinished` terminals, zero pending drain, and no missing/failed/unresolved/truncated entry. Native hidden remained `false`, so request accounting and timer status correctly stayed `not-measured`; report/runtime remained `partial`/`measured-partial`, and no hidden polling count is claimed. The separate temporary witness stayed a control rather than the actuator. The two-hour run was not started. | Current host/session cannot provide qualifying native-hidden evidence; repeat only on an interactive browser session that produces raw trusted transitions |

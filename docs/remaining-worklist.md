@@ -392,6 +392,16 @@ under [`docs/archive/`](archive/).
       removal, and protected-DB invariants pass. This does not close provider
       durability, externally retained backup, deployed process rehearsal, or
       external relational DB restore.
+- [x] Bind the existing local indexer/keeper/monitor process seams into one
+      clean-HEAD orchestrator. Exact commit `cc0d58911` runs actual indexer
+      lease-contention and crash/restart entrypoints, two production SQLite
+      keeper-budget workers, and the actual monitor summary/restart drill on
+      Node `24.5.0`. The signer and monitor live loop are intentionally not
+      started; only loopback RPC fixtures are used. All 12 sources bind to the
+      commit, owned OS-temp cleanup and protected-DB invariants pass, and the
+      retained artifact SHA-256 is
+      `F6949B9AB379C3350A5918CC20CC6D9BB8134E7E9DAEB3F074936D47419C0FE7`.
+      This does not close deployed/provider/cross-host/external-restore work.
 - [ ] Provision the reviewed deployed shared runtime and repeat all three
       application paths against that provider-managed HTTPS REST contract.
 - [ ] Exercise deployed web replicas, indexer/bot/monitor, shared limiter/lock,

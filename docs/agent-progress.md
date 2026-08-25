@@ -9,13 +9,21 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Continuation point
 
 - The current tested code baseline and parent of this documentation-only packet
-  is `154b29b592182600d118736f1c2d312d92fcc9a3`. It commits the exact one-path
-  direct Valkey persistence/restore extension. Its retained clean-HEAD run on
-  Node `24.5.0` binds all four executed paths to that SHA, proves exact AOF
-  configuration and restart survival, copies a byte-exact RDB, restores the
-  pre-mutation state in a separate container, stays stable through exact owned
-  cleanup, and preserves protected base/WAL/SHM identity. Parent `9ce4e5ca9` is
-  the HTTPS session-rotation packet; generated artifact directories stay excluded.
+  is `cc0d5891159065eaa51d59607b250eda1aee3014`. Its exact three-path packet
+  adds one local runtime-role orchestrator and package/ignore wiring. The retained
+  clean-HEAD Node `24.5.0` run binds all `12` relevant blobs to that SHA. It runs
+  the actual indexer entrypoint under two-process lease contention before RPC,
+  then through crash/restart against two loopback-only RPC fixtures; it exercises
+  the production SQLite keeper-budget seam used before bot signing without
+  starting the signer; and it runs the actual monitor summary preflight plus
+  restart/recovery drill in a unique OS-temp directory without live polling.
+  Protected base/WAL/SHM identity is unchanged and exact owned temp cleanup passes.
+  Artifact SHA-256 is
+  `F6949B9AB379C3350A5918CC20CC6D9BB8134E7E9DAEB3F074936D47419C0FE7`.
+  This is local role-wiring evidence only: deployed processes/provider state,
+  cross-host behavior, external DB restore, signing, wallet, RPC, Preview, and
+  chain behavior remain unproved. Parent `154b29b59` is the direct Valkey
+  persistence/restore packet; generated artifact directories stay excluded.
 - Earlier security-reviewed baseline `3c8886acc1fa33045aa7bcc1d03bab9fa84fd09b` closes the
   final deposits-recovery transport bound found by targeted security review:
   recovery head/log reads use one `http(RPC_URL, { timeout: 20_000,
