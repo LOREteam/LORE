@@ -172,6 +172,7 @@ const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 const BUSINESS_LOGIC_DEFAULT_TIMEOUT_MS = 600_000;
 const BUSINESS_LOGIC_MAX_TIMEOUT_MS = 900_000;
 const BUSINESS_LOGIC_WATCHDOG_HEADROOM_MS = 30_000;
+const P1_HARDENING_DEFAULT_TIMEOUT_MS = 450_000;
 let checkTimeoutMs;
 let npmLauncher;
 let quietNpmEnv;
@@ -270,6 +271,11 @@ function formatPackageVersion(value) {
 }
 
 function timeoutPolicyForScript(script, baseTimeoutMs) {
+  if (script === "test:p1-hardening:all:summary") {
+    return {
+      watchdogTimeoutMs: Math.max(baseTimeoutMs, P1_HARDENING_DEFAULT_TIMEOUT_MS),
+    };
+  }
   if (script !== "test:logic:summary") {
     return { watchdogTimeoutMs: baseTimeoutMs };
   }
@@ -1078,6 +1084,8 @@ function runBehaviorSelfTest() {
     execution.timings.map((item) => item.elapsedMs).join(",") === "3,2,1";
   const timeoutPolicyPass =
     JSON.stringify(timeoutPolicyForScript("lint:summary", 300_000)) === JSON.stringify({ watchdogTimeoutMs: 300_000 }) &&
+    JSON.stringify(timeoutPolicyForScript("test:p1-hardening:all:summary", 300_000)) === JSON.stringify({ watchdogTimeoutMs: 450_000 }) &&
+    JSON.stringify(timeoutPolicyForScript("test:p1-hardening:all:summary", 700_000)) === JSON.stringify({ watchdogTimeoutMs: 700_000 }) &&
     JSON.stringify(timeoutPolicyForScript("test:logic:summary", 300_000)) === JSON.stringify({ summaryTimeoutMs: 600_000, watchdogTimeoutMs: 630_000 }) &&
     JSON.stringify(timeoutPolicyForScript("test:logic:summary", 700_000)) === JSON.stringify({ summaryTimeoutMs: 700_000, watchdogTimeoutMs: 730_000 }) &&
     JSON.stringify(timeoutPolicyForScript("test:logic:summary", 1_800_000)) === JSON.stringify({ summaryTimeoutMs: 900_000, watchdogTimeoutMs: 1_800_000 });
