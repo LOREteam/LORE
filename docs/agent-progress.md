@@ -8,12 +8,13 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
-- Current `HEAD` is `aaf515d20a0a0e487b5ded9128cf843659697f89`. It commits
-  the exact five-path mobile-mining Package A after focused SSR x2, audit x2,
+- Current `HEAD` is `39f68888ababf5bd26d4f9d895972986e9a40042`. It commits
+  the exact five-path mobile-mining Package B after focused SSR x2, audit x2,
   exact staged-blob digest, protected-DB, and independent review. Its
-  `a5ff9f595` parent commits the seven-path P1.17 lifecycle/verifier packet. The
-  current tracked change is only the Package B full-Hub SSR test; the 32
-  generated artifact paths in three retained directories remain excluded.
+  `aaf515d20` parent commits Package A and `a5ff9f595` commits the preceding
+  P1.17 lifecycle/verifier packet. The current tracked packet adds only the
+  HTTPS REST rate-limit parity harness, its package entry, and current-state
+  documentation; retained generated artifact directories remain excluded.
 - Earlier security-reviewed baseline `3c8886acc1fa33045aa7bcc1d03bab9fa84fd09b` closes the
   final deposits-recovery transport bound found by targeted security review:
   recovery head/log reads use one `http(RPC_URL, { timeout: 20_000,
@@ -730,14 +731,14 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   an external HTTPS/Privy gate.
 - The current Preview/consent implementation packet is locally complete; only
   its live campaign, external topology, and authorization evidence remain open.
-- Real Redis/Valkey execution remains open for `RATE_LIMIT_SCRIPT`,
-  `KEEPER_DAILY_BUDGET_SCRIPT`, and `ROTATE_SESSION_SCRIPT`. The proposed
-  production-parity candidate is Valkey `8.1.9` at the immutable manifest
-  digest and Upstash-style HTTPS REST façade recorded in
-  [`valkey-upstash-parity-plan.md`](valkey-upstash-parity-plan.md); it is not
-  yet provisioned or verified. No Redis/Valkey binary, process, or service was
-  found; Docker client `29.5.2` exists but its service/engine is stopped. Local
-  JavaScript models and a raw container alone do not satisfy this gate.
+- Direct execution now covers all three exact production Lua programs on
+  pinned Valkey `8.1.9`. The new local parity harness also executes the real
+  `consumeExternalRateLimit` from two independent Node processes through
+  verified Caddy TLS/SNI and pinned SRH into the same Valkey keyspace. Focused
+  x2 plus the package entry pass `allowed, allowed, blocked`, wrong Bearer,
+  `{result}`/`{error}`, TTL non-reset, exact cleanup, and protected-DB identity.
+  This is partial local `RATE_LIMIT_SCRIPT` evidence only; keeper/session HTTPS,
+  deployed replicas/provider, persistent external DB, and restore remain open.
 - Header balance provenance now carries wagmi fetching/error/stale/updated-at metadata:
   a known balance remains visible on refresh, stale data, or RPC error, and the card
   exposes an explicit state plus any trusted last-updated timestamp. It does not infer
@@ -746,7 +747,7 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   scan, and hosted CI cycle is open; the dirty working tree invalidates older
   final-SHA/sealed claims.
 - The user has granted local-commit authority. Stage only the exact current
-  5-path Package A manifest after its zero-omission audit; historical
+  five-path Valkey parity packet after its zero-omission audit; historical
   7/74/318/320 scopes
   do not widen that staging boundary or authorize external actions.
 - P1.17 needs a final canonical/profile sealed pair and a real physical

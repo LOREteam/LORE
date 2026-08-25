@@ -10,12 +10,12 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Current `HEAD` is `aaf515d20a0a0e487b5ded9128cf843659697f89`. It commits
-  mobile-mining Package A after the exact five-path manifest, SSR focused x2,
-  audit x2, TypeScript, protected-DB, and independent review. Its `a5ff9f595`
-  parent commits the seven-path P1.17 request-lifecycle and strict-verifier
-  packet. These are immutable local baselines, not the final clean-SHA release
-  seal.
+- Current `HEAD` is `39f68888ababf5bd26d4f9d895972986e9a40042`. It commits
+  mobile-mining Package B after its exact five-path manifest, full-Hub denied-RPC
+  SSR focused x2, audit x2, TypeScript, protected-DB, and independent review.
+  Its `aaf515d20` parent commits Package A and `a5ff9f595` commits the preceding
+  seven-path P1.17 request-lifecycle packet. These are immutable local
+  baselines, not the final clean-SHA release seal.
 - Latest fully detached broad local-gate baseline: `333d7a81bb8780c5fc631646492ece53bbfa3926`
   (`test: cover bounded deposits recovery transport`). Its `3c8886acc` parent
   provides bounded shared admission/lease hardening and one 20-second,
@@ -39,12 +39,12 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   It is not the current permission scope. The current HEAD-bound permission
   manifest is [`docs/release-candidate-current.md`](release-candidate-current.md).
   The prior authorized 74-path packet and its later corrective packets are
-  committed, including the seven-path P1.17 packet at `a5ff9f595` and
-  mobile-mining Package A at `aaf515d20`. The current five-path expected
-  staging packet contains the full-Hub SSR Package B test,
-  three current-state documents, and the self-excluded manifest. It is not yet
-  staged; the user has granted local commit authority, while the refreshed
-  exact manifest remains the staging boundary.
+  committed, including the seven-path P1.17 packet at `a5ff9f595` and both
+  mobile-mining packages at `aaf515d20` and `39f68888`. The current five-path
+  expected staging packet contains the new HTTPS REST rate-limit parity harness,
+  its package entry, two current-state documents, and the self-excluded
+  manifest. It is not yet staged; the user has granted local commit authority,
+  while the refreshed exact manifest remains the staging boundary.
 - A disposable detached checkout of the current code mirror completed fresh
   local composite gates with exit `0`: lint, isolated business, P1 hardening,
   performance self-test, V10 invariants, SQLite operations, hermetic build,
@@ -272,7 +272,7 @@ replacement needs another separately reviewed plan and exact approval.
 | Latest P1.10 fee-policy review | The remaining source assertions bind pre-wallet/signer fee validation, guarded submission sinks, or live-write helpers. No equivalent safe public behavior seam exists without simulating risky signing paths, so they remain fail-closed structural coverage. Focused x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Reviewed; no removal justified |
 | Latest P1.10 mobile-mining seam | The standalone mobile-mining runner removes one redundant `walletSetup` source assertion only after its stale-settlement behavior scenario proves reset invalidates the old rejected attempt without unlocking or overwriting the new retry. Module `69/21/48 -> 68/20/48`; focused x2, audit x2, and self-test `17/17` pass. It is outside the coordinator graph, so the current official totals are `5820/6346` with `526` source operands. | Local test-only progress; partial objective |
 | Latest P1.10 docked mobile-action seam | Package A replaces two static dock-wiring assertions with real React SSR checks against the rendered manual and Auto-Miner opening tags. Both in-panel actions must carry `max-[899px]:hidden` while the separate mobile dock owns the primary CTA. Standalone classification is `68/20/48 -> 68/18/50`; focused x2, audit x2 (`5820/6346`, `526` source), self-test `17/17`, targeted ESLint, diff hygiene, protected-DB identity, and independent review pass. The runner remains outside the coordinator graph, so this module delta is not an aggregate delta. | Committed locally at `aaf515d20`; no production change |
-| Latest P1.10 full-Hub mobile seam | Package B renders the real `WagmiProvider -> HubContent -> HubSidePanel` path under a denied custom transport and records zero RPC calls. It replaces two gameplay-stage source assertions and one obsolete-component literal guard with final-markup checks: responsive desktop blur is scoped, unscoped mobile blur is absent, and exactly one `mobile-mine-action` dock renders. Standalone classification is `68/18/50 -> 68/15/53`; focused x2, audit x2, self-test `17/17`, exact-runtime TypeScript, targeted ESLint, diff hygiene, protected-DB identity, and independent review pass. The direct SSR Next Image warning is non-blocking because production `next.config.mjs` already configures qualities `75` and `85`. | Local test-only progress; Package B complete and not yet committed |
+| Latest P1.10 full-Hub mobile seam | Package B renders the real `WagmiProvider -> HubContent -> HubSidePanel` path under a denied custom transport and records zero RPC calls. It replaces two gameplay-stage source assertions and one obsolete-component literal guard with final-markup checks: responsive desktop blur is scoped, unscoped mobile blur is absent, and exactly one `mobile-mine-action` dock renders. Standalone classification is `68/18/50 -> 68/15/53`; focused x2, audit x2, self-test `17/17`, exact-runtime TypeScript, targeted ESLint, diff hygiene, protected-DB identity, and independent review pass. The direct SSR Next Image warning is non-blocking because production `next.config.mjs` already configures qualities `75` and `85`. | Committed locally at `39f68888`; no production change |
 | Latest P1.10 rebate-history seam | The request-boundary runner removes two static pagination assertions only after the existing isolated child executes the real route: `limit=65` returns `400` before any DB read, while `limit=64` reaches the page read with exact `{ beforeEpoch: null, limit: 64 }` and fails closed on its mocked multicall. Focused API and route-child runners passed x2; audit x2 and self-test `17/17` pass. | Local test-only progress; partial and uncommitted |
 | Latest P1.10 claim-candidates seam | The integer-query runner replaces two static pagination assertions with a fresh child that executes the real handler: `limit=401` returns `400` without opening its poisoned DB path, while `limit=400` reaches the page read with exact `{ beforeEpoch: null, limit: 400 }`. Focused x2, audit x2, and self-test `17/17` pass. | Local test-only progress; partial and uncommitted |
 | Latest P1.10 auth-content-type seam | The request-boundary runner removes two redundant admin/chat auth source assertions because the independent API matrix executes both real routes with `text/plain` and proves exact JSON `415`, `no-store`, and `Vary: Cookie` handling. Focused domain and matrix runners x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Local test-only progress; partial and uncommitted |
@@ -282,6 +282,7 @@ replacement needs another separately reviewed plan and exact approval.
 | Latest P1.10 OpenGraph query seam | The real API matrix renders the same canonical jackpot event with malicious `amount`, `kind`, `tile`, and `epoch` inputs and proves an identical PNG. The redundant static URL-parameter assertion is removed. Public-presentation and API-matrix runners x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Local test-only progress; partial and uncommitted |
 | Transactional-ledger design | [`transactional-ledgers-design.md`](transactional-ledgers-design.md) specifies the external transactional consent state machine, idempotent intent/outbox/reconciliation protocol, immutable audit chain, and canonical activity/reorg model. It is an unimplemented design: no external PostgreSQL-compatible store, cross-host writer, migration, or restore evidence exists. | Design complete; implementation and external verification remain open |
 | Valkey Lua-engine check | [`valkey-upstash-parity-plan.md`](valkey-upstash-parity-plan.md) now records a direct Valkey `8.1.9` `linux/amd64` Lua execution against the pinned OCI-index digest. The isolated, no-network, no-host-port, read-only, non-persistent container passed the exact rate-limit, keeper-budget, and session-rotation script cases; the redacted artifact records script hashes only. | Partial engine evidence only; the HTTPS REST façade, two application replicas, durable external database, and restore evidence remain open |
+| Valkey HTTPS rate-limit parity | The self-spawning harness executes the real `consumeExternalRateLimit` from two independent Node processes through verified Caddy TLS/SNI, pinned SRH `0.0.10`, and pinned Valkey `8.1.9`. Focused x2 and the npm entrypoint pass `allowed, allowed, blocked`; wrong Bearer fails both raw REST and the production caller, `{result}`/`{error}` envelopes and non-reset TTL pass, Valkey/SRH publish no host ports, exact owned cleanup passes, and protected SQLite is unchanged. All three images are executed by exact Linux AMD64 manifest digests; only Caddy exposes one loopback port. | Honest local partial proof for `RATE_LIMIT_SCRIPT`; keeper/session HTTPS, deployed replicas/provider, persistence, and restore remain open |
 | V10 Preview/consent | Preview environment `30/30`, canonical envelope `9/9`, analyzer `10/10`, one-shot store `10/10`, runtime enforcement `2/2`, fee policy, the full release-operations runner, TypeScript, targeted syntax checks, and diff hygiene passed on the verified isolated Node `24.5.0` / npm `11.5.1` runtime. No actual Preview was generated because the tree is dirty and exact public runtime configuration was not confirmed; `authorizationReady` and all live actions remain false. | Local implementation pass only; no live authorization or campaign evidence |
 | P1.17 mechanism | Self-tests pass on the current working tree: collector `158/158` (schema `4`, maximum duration `7200000`) and verifier `119/119` (schema `4`). The headed path controls the measured top-level window through page-scoped CDP, rejects unknown/minimized initial state before mutation, arms restore before the mutating command, verifies `minimized` and exact original-state readback, and restores before detach even after action/readback failure. Every routed API request is registered before fulfillment, but its epoch start is accepted only from the later BrowserContext `response` event; pre-response `0`, failure, unresolved terminal state, overflow, or drain timeout fails closed. The bounded raw cohort includes visible-control and hidden candidates. Strict verification independently recomputes the exact half-open hidden subset, path totals, rate, and cap/count parity, and validates the declared response lifecycle, terminal outcomes, and zero-pending drain. It cannot independently detect a coherent rewrite of an unsigned producer artifact, so claims are limited to internal consistency plus exact clean-SHA provenance. Raw state polling is bounded to three seconds. Actuation fields are diagnostic telemetry, while the existing strict raw `setInterval(100)` chain, trusted transition, witness, Long Task, polling, cadence, and internal-consistency checks remain authoritative. No synthetic visibility event can satisfy the native gate. | Local harness correction only; final clean-SHA native-hidden/timer evidence and the two-hour strict run remain open |
 | P1.17 native witness | The latest 60-second loopback diagnostic accepted CDP `minimized`, waited `3019ms` without raw hidden, restored the exact original `normal` state, and re-observed raw visible after `5ms`. Its full raw request cohort was `8/8`, with positive response-captured epoch starts, eight `requestfinished` terminals, zero pending drain, and no missing/failed/unresolved/truncated entry. Native hidden remained `false`, so request accounting and timer status correctly stayed `not-measured`; report/runtime remained `partial`/`measured-partial`, and no hidden polling count is claimed. The separate temporary witness stayed a control rather than the actuator. The two-hour run was not started. | Current host/session cannot provide qualifying native-hidden evidence; repeat only on an interactive browser session that produces raw trusted transitions |
@@ -325,12 +326,13 @@ replacement needs another separately reviewed plan and exact approval.
 - Restart a new SHA-bound local campaign only after its starting commit is
   captured and sufficient free disk is available. Do not reuse the stopped
   campaign as final evidence.
-- Direct, isolated engine execution now covers `RATE_LIMIT_SCRIPT`,
-  `KEEPER_DAILY_BUDGET_SCRIPT`, and `ROTATE_SESSION_SCRIPT` on pinned Valkey
-  `8.1.9` / Linux AMD64. It is not REST-parity, replica, persistence, or
-  production evidence. Two replicas, a transactional cross-host consent ledger,
-  external DB restore, hosted HTTPS/Privy, physical mobile wallets, signed
-  canary, and 24–48 hour topology evidence also remain external.
+- Direct engine execution covers all three production Lua programs on pinned
+  Valkey `8.1.9` / Linux AMD64. A separate local harness now covers the real
+  `RATE_LIMIT_SCRIPT` application request through authenticated HTTPS REST and
+  two independent Node processes. This is not a deployed-provider or deployed-
+  replica claim: keeper/session HTTPS, persistent external DB/restore,
+  transactional cross-host consent, hosted HTTPS/Privy, physical mobile
+  wallets, signed canary, and 24–48 hour topology evidence remain open.
 
 ## External and live blockers
 
@@ -343,9 +345,10 @@ replacement needs another separately reviewed plan and exact approval.
   configuration, and a fresh exact consent are still required. Any signing,
   approval, bet, claim, canary, soak, deployment, push, or hosted rollout needs
   its own fresh explicit authority and, for chain writes, bounded consent.
-- Production HTTPS still fails with `ERR_CERT_COMMON_NAME_INVALID`; real
-  Redis/Valkey plus two replicas, the P1.17 headed two-hour/mobile/Privy run,
-  and a shared transactional cross-host consent ledger remain unchecked.
+- Production HTTPS still fails with `ERR_CERT_COMMON_NAME_INVALID`; deployed
+  provider-managed Redis/Valkey and web-replica topology, the P1.17 headed
+  two-hour/mobile/Privy run, and a shared transactional cross-host consent
+  ledger remain unchecked.
 
 ## Safety boundaries
 

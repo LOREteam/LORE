@@ -41,6 +41,7 @@
     "test:p1-hardening:all": "node scripts/run-p1-hardening-tests.mjs --include-evm",
     "test:p1-hardening:all:summary": "node scripts/run-p1-hardening-tests.mjs --include-evm --summary-only",
     "test:valkey:lua-engine": "node scripts/test-valkey-lua-engine.mjs",
+    "test:valkey:rest-rate-limit": "node scripts/test-valkey-rest-rate-limit.mjs",
     "perf:p1:self-test": "node scripts/collect-p1-performance-evidence.mjs --self-test",
     "perf:p1:evidence": "node scripts/collect-p1-performance-evidence.mjs",
     "perf:p1:verify": "node scripts/verify-p1-performance-evidence.mjs",

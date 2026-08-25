@@ -1,7 +1,7 @@
 # Current release-candidate permission manifest
 
 Snapshot date: 2026-08-25. Base `HEAD`:
-`aaf515d20a0a0e487b5ded9128cf843659697f89` on `codex/repo-cleanup`.
+`39f68888ababf5bd26d4f9d895972986e9a40042` on `codex/repo-cleanup`.
 
 Status: the user has granted authority for local commits. This manifest remains
 the exact staging boundary for the current packet; that authority does not
@@ -16,28 +16,28 @@ The path set below is taken from NUL-delimited
 evidence boundary. It does not authorize a push, deployment, hosting change,
 wallet/RPC action, Preview, signing, or chain transaction.
 
-- Candidate: `4` other tracked paths; `0` other untracked paths.
-- Excluded and retained generated evidence: `32` paths in `3` top-level
+- Candidate: `3` other tracked paths; `1` other untracked path.
+- Excluded and retained generated evidence: `33` paths in `3` top-level
   directories under `artifacts/`.
 - Authorized/expected staging paths: `5` (the `4` candidates plus this
   self-excluded manifest).
 - Exactness: `missing=0`, `extra=0`, `duplicates=0` under the exclusion above.
 - Canonical path-set SHA-256 (UTF-8, sorted paths, LF after every path):
-  `0f5d111f245a0e8487052ab62ec1162351b83cca5cabf31066f1a7c2cf711e2b`.
-- Canonical staged content-set SHA-256 for the other `4` candidate files (this
+  `2c1b71198bf1a5257a8b738737d440a9708a5845fec759f90a4c51e41c29f5d3`.
+- Canonical current content-set SHA-256 for the other `4` candidate files (this
   self-referential manifest excluded; sorted
-  `path + NUL + staged blob SHA-256 + LF`):
-  `1159a0cc031f32a5bcce3d3431e68953e061369103deb9760012cdc90eaacfe6`.
+  `path + NUL + file SHA-256 + LF`):
+  `af7f234c7702d9448892adfe2cc91fdc9bb4e9498a89e9635e07e75d698245ca`.
 
 ```text
 docs/agent-progress.md
 docs/current_state.md
 docs/release-candidate-current.md
-docs/remaining-worklist.md
-scripts/test-mobile-mining-action.ts
+package.json
+scripts/test-valkey-rest-rate-limit.mjs
 ```
 
-The 32 historical/test artifacts stay on disk and must not be staged by a
+The 33 historical/test artifacts stay on disk and must not be staged by a
 future authorized packet. Any candidate path-set change invalidates this
 manifest and requires a fresh zero-omission audit before a new permission is
 requested or used.
