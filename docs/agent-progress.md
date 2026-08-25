@@ -9,6 +9,19 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Continuation point
 
 - The current tested code baseline and parent of this documentation-only packet
+  is `c4f921db3`. Exact clean SHA `7918fba2a` reproduced the required
+  `test:logic:summary` failure under its former `300000ms` prelaunch watchdog,
+  while the identical suite passed with a diagnostic `600000ms` child limit in
+  `387897ms`. The correction makes the standalone default `600000ms` and gives
+  prelaunch a separate `630000ms` watchdog with `30000ms` headroom; configured
+  values remain bounded by the existing `900000ms` summary maximum. The
+  post-fix full coordinator passed in `382920ms` with all API/wallet proof groups
+  true and zero failures. Focused timeout/prelaunch tests x2, syntax, focused
+  ESLint, audit x2, self-test `17/17`, exact manifest/digests, and protected DB
+  identity pass. Audit schema v2 is `5821/6345` behavioral (`91.74%`), `524`
+  source operands, `113` modules, and `71/2/71` coordinator fan-out. A new
+  detached final-SHA seal remains required.
+- The prior independently reviewed P1.10 baseline
   is `8797e30d3e985a8307ad24c721258da7a86f341a`. Its exact two-file P1.10
   packet removes one `LogSourceSummary` source regex only after the existing
   fresh admin-session child executes the real authorized `/api/admin/ops` GET.

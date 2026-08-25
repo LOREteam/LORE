@@ -33,6 +33,15 @@ under [`docs/archive/`](archive/).
       `npm ci`; run dependency gates, full local/prelaunch gates, hermetic
       build, typecheck, supported browser/HTTP smoke, V10 properties, and DB
       invariants when disk permits.
+- [x] Diagnose the current final-SHA prelaunch failure. The full isolated
+      business suite passed on exact clean SHA `7918fba2a` in `387897ms` when
+      given a diagnostic `600000ms` child limit, proving the former equal
+      `300000ms` inner/outer timeout race rather than a product assertion
+      failure. Commit `c4f921db3` uses a `600000ms` standalone default and a
+      distinct `630000ms` prelaunch watchdog. Its post-fix full coordinator
+      passed in `382920ms`; focused timeout/prelaunch tests x2, syntax, ESLint,
+      audit x2, self-test, manifest exactness, and protected DB identity pass.
+      A new detached final-SHA full prelaunch run is still required.
 - [x] Diagnose the first final-SHA composite local-check failure: direct mode
       bypassed `business-logic-isolated-runner.mjs`. The current candidate uses
       the mandatory isolated runner; focused policy tests pass twice. It still
@@ -96,7 +105,7 @@ under [`docs/archive/`](archive/).
 - [x] Committed audited baseline at `d3916c37d`: `5387/6166` behavioral assertions
       (`87.37%`) across `106` modules; the coordinator has `95` direct runner
       imports, `2` side-effect imports, and `95` direct runner calls.
-- [x] Current committed schema-v2 packet reports `5820/6344` behavioral
+- [x] Current committed schema-v2 packet reports `5821/6345` behavioral
       assertions (`91.74%`) with `524` source operands across `113` modules;
       the audit self-test passes `17/17`. The v2 denominator includes all
       Node 24 assert methods and the source count includes confirmed transparent

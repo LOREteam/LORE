@@ -10,7 +10,21 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- The current tested code baseline is
+- Current tested code baseline `c4f921db3` fixes the required prelaunch
+  `test:logic:summary` false failure. Exact clean SHA `7918fba2a` first proved
+  the suite needs `387897ms`, beyond both the former `180000ms` summary default
+  and `300000ms` prelaunch watchdog. The runner now defaults to `600000ms`; the
+  prelaunch policy gives it `600000ms` internally and a distinct `630000ms`
+  outer watchdog, preserving at least `30000ms` headroom and the existing
+  `900000ms` summary parser maximum. The post-fix full isolated coordinator
+  passed in `382920ms` with every API/wallet proof group true, zero assertion
+  failures, and no timeout. Focused timeout/prelaunch tests passed twice,
+  syntax, focused ESLint, audit x2, audit self-test `17/17`, diff hygiene, and
+  protected DB identity pass. The audit is `5821/6345` behavioral (`91.74%`),
+  `524` source operands, `113` modules, and `71/2/71` coordinator fan-out. This
+  is local harness reliability evidence; detached final-SHA prelaunch sealing,
+  hosted CI, and final supported security scan remain open.
+- The prior P1.10 tested baseline is
   `8797e30d3e985a8307ad24c721258da7a86f341a`. Its exact two-file P1.10
   commit removes one `LogSourceSummary` source regex only after the existing
   fresh admin-session child executes the real authorized `/api/admin/ops` GET.
@@ -56,7 +70,7 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   `8797e30d3`. The current four-path expected staging packet is
   documentation-only: three current progress/worklist/state documents plus the
   self-excluded manifest. The manifest describes the proposed amended index
-  relative to parent `8797e30d3`; the user-granted local commit authority does
+  relative to parent `c4f921db3`; the user-granted local commit authority does
   not widen that exact boundary.
 - A disposable detached checkout of the current code mirror completed fresh
   local composite gates with exit `0`: lint, isolated business, P1 hardening,
