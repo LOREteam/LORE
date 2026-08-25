@@ -21,6 +21,7 @@ import { getCanonicalLastIndexedBlock, getMetaBigInt, getMetaNumber, getUserBets
 import {
   CONTRACT_ADDRESS,
   CONTRACT_DEPLOY_BLOCK,
+  depositsRecoveryPublicClient,
   filterByCurrentEpoch,
   isSafePositiveInteger,
   publicClient,
@@ -247,7 +248,7 @@ async function getLogsByTopicAndUser(
   fromBlock: bigint,
   toBlock: bigint,
 ) {
-  const all: Awaited<ReturnType<typeof publicClient.getLogs>> = [];
+  const all: Awaited<ReturnType<typeof depositsRecoveryPublicClient.getLogs>> = [];
   const startBlock = fromBlock > CONTRACT_DEPLOY_BLOCK ? fromBlock : CONTRACT_DEPLOY_BLOCK;
   if (startBlock > toBlock) return all;
   for (let from = startBlock; from <= toBlock; from += LOG_CHUNK_BLOCKS) {
@@ -257,8 +258,8 @@ async function getLogsByTopicAndUser(
       topics: [topic0, null, userTopic],
       fromBlock: from,
       toBlock: to,
-    } as unknown as Parameters<typeof publicClient.getLogs>[0];
-    const logs = await publicClient.getLogs(logsRequest);
+    } as unknown as Parameters<typeof depositsRecoveryPublicClient.getLogs>[0];
+    const logs = await depositsRecoveryPublicClient.getLogs(logsRequest);
     all.push(...logs);
   }
   return all;
@@ -541,7 +542,7 @@ async function recoverDepositsFromChain(user: string, currentEpochNum: number | 
   if (!ENABLE_FINALIZED_CHAIN_RECOVERY) return [];
 
   const latestIndexedBlock = getMetaBigInt("lastIndexedBlock");
-  const headBlock = await publicClient.getBlockNumber();
+  const headBlock = await depositsRecoveryPublicClient.getBlockNumber();
   const recoveryRange = planFinalizedDepositsRecoveryRange({
     enabled: ENABLE_FINALIZED_CHAIN_RECOVERY,
     headBlock,

@@ -34,6 +34,15 @@ export const publicClient = createPublicClient({
   ),
 });
 
+// Background deposits recovery has a finite shared lease. Keep its transport to
+// one endpoint so a fallback chain cannot extend a logical RPC call beyond the
+// lease's explicit worst-case budget. Recovery is optional and safely returns
+// indexed data when this bounded read path fails.
+export const depositsRecoveryPublicClient = createPublicClient({
+  chain: APP_CHAIN,
+  transport: http(RPC_URL, { timeout: 20_000, retryCount: 1 }),
+});
+
 export async function fetchStorageJson<T>(path: string, limitToLast?: number) {
   try {
     const data = readJsonPath<T>(path, limitToLast);

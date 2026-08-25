@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const depositsRouteSource = readFileSync("app/api/deposits/route.ts", "utf8");
+const dataBridgeSource = readFileSync("app/api/_lib/dataBridge.ts", "utf8");
 
 assert.match(
   depositsRouteSource,
@@ -13,6 +14,18 @@ assert.match(
   depositsRouteSource,
   /DEPOSITS_RECOVERY_SHARED_LOCK_TTL_MS = 1_800_000/,
   "the shared recovery lock must outlive the bounded worst-case RPC sequence",
+);
+
+assert.match(
+  dataBridgeSource,
+  /export const depositsRecoveryPublicClient = createPublicClient\(\{[\s\S]*transport: http\(RPC_URL, \{ timeout: 20_000, retryCount: 1 \}\)/,
+  "recovery must use one bounded RPC transport rather than an unbounded fallback chain",
+);
+
+assert.match(
+  depositsRouteSource,
+  /depositsRecoveryPublicClient,[\s\S]*depositsRecoveryPublicClient\.getLogs\([\s\S]*depositsRecoveryPublicClient\.getBlockNumber\(/,
+  "the recovery head and log reads must use the bounded single-transport client",
 );
 
 assert.match(
