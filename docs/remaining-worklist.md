@@ -383,6 +383,15 @@ under [`docs/archive/`](archive/).
       seven-path source binding, post-cleanup provenance, graceful SQLite close,
       exact cleanup, and protected-DB identity. This is not hosted route/browser,
       provider, persistence, restore, or broad session-replay evidence.
+- [x] Prove pinned Valkey engine persistence and restore semantics locally.
+      Exact commit `154b29b59` runs all three scripts with unprivileged
+      `appendonly=yes` / `appendfsync=always`, verifies a real restart preserves
+      values and absolute expiries, copies a byte-exact RDB, deliberately mutates
+      the original, removes it, and restores the pre-mutation snapshot in a
+      distinct container. Clean-HEAD source binding, exact owned cleanup, OS-temp
+      removal, and protected-DB invariants pass. This does not close provider
+      durability, externally retained backup, deployed process rehearsal, or
+      external relational DB restore.
 - [ ] Provision the reviewed deployed shared runtime and repeat all three
       application paths against that provider-managed HTTPS REST contract.
 - [ ] Exercise deployed web replicas, indexer/bot/monitor, shared limiter/lock,

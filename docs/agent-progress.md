@@ -9,13 +9,13 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Continuation point
 
 - The current tested code baseline and parent of this documentation-only packet
-  is `9ce4e5ca9809cda7b856603e2f51e1200b0f7735`. It commits the exact one-path
-  HTTPS/REST Valkey session-rotation extension. Its retained clean-HEAD run on
-  Node `24.5.0` binds all seven executed paths to that SHA, keeps the tracked
-  worktree clean and stable through cleanup, acknowledges graceful DB close and
-  replica exit, removes every owned Docker resource, and preserves the protected
-  base/WAL/SHM identity. Parent `b53489ed` is the keeper packet; retained
-  generated artifact directories stay excluded.
+  is `154b29b592182600d118736f1c2d312d92fcc9a3`. It commits the exact one-path
+  direct Valkey persistence/restore extension. Its retained clean-HEAD run on
+  Node `24.5.0` binds all four executed paths to that SHA, proves exact AOF
+  configuration and restart survival, copies a byte-exact RDB, restores the
+  pre-mutation state in a separate container, stays stable through exact owned
+  cleanup, and preserves protected base/WAL/SHM identity. Parent `9ce4e5ca9` is
+  the HTTPS session-rotation packet; generated artifact directories stay excluded.
 - Earlier security-reviewed baseline `3c8886acc1fa33045aa7bcc1d03bab9fa84fd09b` closes the
   final deposits-recovery transport bound found by targeted security review:
   recovery head/log reads use one `http(RPC_URL, { timeout: 20_000,
@@ -680,6 +680,21 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
     each correction is present in the retained clean-HEAD artifact. Hosted route
     and browser cookie enforcement, deployed/provider topology, persistence,
     restore, indexer/bot/monitor, and cross-host behavior remain open.
+83. Commit `154b29b592182600d118736f1c2d312d92fcc9a3` upgrades the direct
+    Valkey `8.1.9` runner from an ephemeral Lua check to a bounded local
+    persistence/restore drill. The unprivileged digest-pinned container runs
+    with `appendonly=yes` and `appendfsync=always`; a real process restart
+    preserves rate, keeper, and session values plus their exact absolute
+    expiries. `SAVE` then produces a byte-exact RDB backup. After intentional
+    post-snapshot mutation, the original container is removed and a distinct
+    restore container recovers the pre-mutation values and deadlines from that
+    RDB. Two final exact-Node focused runs, syntax, targeted ESLint, diff hygiene,
+    exact full-ID/ownership-label cleanup, OS-temp removal, and protected-DB
+    invariants pass. The retained clean-HEAD artifact binds four paths to this
+    SHA with `trackedWorktreeClean=true` and `stableThroughCleanup=true`. This is
+    local engine semantics only: provider-managed durability, externally retained
+    backup, deployed process rehearsal, and external relational DB restore remain
+    open.
 
 ## Pre-document verification snapshot
 

@@ -3,9 +3,12 @@
 Status: direct engine execution covers all three production Lua scripts, and a
 hermetic HTTPS/REST check covers the real rate-limit, keeper daily-budget, and
 admin-session rotation application paths from two Node processes at exact local
-SHA `9ce4e5ca9809cda7b856603e2f51e1200b0f7735`. Hosted route/browser cookie
-behavior, a deployed provider/shared runtime, persistence, restore, and non-web
-processes remain open. No endpoint or durable credential is recorded.
+SHA `9ce4e5ca9809cda7b856603e2f51e1200b0f7735`. A separate clean-HEAD direct
+engine run at `154b29b592182600d118736f1c2d312d92fcc9a3` proves local AOF
+restart and RDB restore semantics. Hosted route/browser cookie behavior,
+provider-managed persistence, externally retained backup, deployed process
+rehearsal, and external relational DB restore remain open. No endpoint or
+durable credential is recorded.
 
 ## Selected candidate
 
@@ -66,27 +69,37 @@ authentication, response shape, bounded errors, and scripting semantics. It
 must not expose a Standard token to browsers, log credentials, silently proxy
 unknown commands, or fall back to a local in-memory store.
 
-## Direct Lua-engine check (2026-08-25)
+## Direct Lua-engine persistence and restore check (2026-08-25)
 
-`npm run test:valkey:lua-engine` directly executes the three exact Lua strings
-currently extracted from the application on Valkey `8.1.9`. The test pins the
-OCI index digest and requests `linux/amd64`; it starts a unique container with
-no network, no published ports, read-only root, no persistence, temporary
-`/tmp` and `/data`, a random process-only password, and only the entrypoint
-capabilities (`CHOWN`, `SETUID`, `SETGID`) needed by the official image.
+The `test:valkey:lua-engine` package entry targets
+`scripts/test-valkey-lua-engine.mjs`; the retained clean-HEAD run invoked it
+with exact Node `24.5.0` at SHA `154b29b592182600d118736f1c2d312d92fcc9a3`.
+It extracts and executes the three exact application Lua strings on Valkey
+`8.1.9`, pins the OCI index digest, and requests `linux/amd64`. The primary and
+restore containers have no network or published ports, run as unprivileged UID
+`999` with all capabilities dropped and a read-only root, and mount only owned
+OS-temp data directories. A random password remains process-local.
 
-The 2026-08-25 run passed these engine-level behaviors: global rate-limit
-increment/TTL, keeper reservation/replay/conflict/cap/malformed-state handling,
-and atomic session rotation/replay rejection. Its redacted artifact is
-`artifacts/valkey-runtime/valkey-lua-engine.json`; it records Valkey `8.1.9`,
-the image/platform digest, source-script hashes, and no secret or endpoint.
-The container is stopped and forcibly removed in `finally`, including on a test
-failure.
+The primary uses exact `appendonly=yes` and `appendfsync=always`. After the
+rate-limit, keeper, and session matrices run, a real process restart preserves
+their values and absolute expiries. `SAVE` creates a non-empty RDB copied
+byte-for-byte to a separate owned backup path. The original state is then
+deliberately changed, its container is removed, and a distinct restore
+container loads only the backup RDB. It recovers the exact pre-mutation values
+and expiry deadlines. Full container IDs and unique ownership labels are checked
+before removal; label scans, OS-temp absence, post-cleanup source provenance,
+and protected base/WAL/SHM identity must pass before artifact publication.
+
+The redacted artifact is `artifacts/valkey-runtime/valkey-lua-engine.json`,
+SHA-256 `4E96A817F1CE5C9DFBE80AA2AF24D2D5D41561C9E7617BF36288442EAAE682A5`.
+It records Valkey `8.1.9`, host/container identity, four source bindings, exact
+script hashes, backup format/size/hash, and no secret, endpoint, or data body.
 
 This is intentionally **partial** evidence. It is direct TCP CLI testing of a
-single ephemeral container, not an Upstash-compatible HTTPS façade, two
-independent application replicas, a persistent external database, or restore
-evidence. It does not authorize deployment, an external request, or wallet
+local engine and owned temporary storage, not provider-managed durability,
+externally retained backup, an Upstash-compatible HTTPS restore rehearsal,
+deployed web/indexer/bot/monitor recovery, or external relational database
+restore. It does not authorize deployment, an external request, or wallet
 activity.
 
 ## Local HTTPS rate-limit, keeper, and session application check (2026-08-25)
