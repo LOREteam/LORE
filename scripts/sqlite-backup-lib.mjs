@@ -1,5 +1,5 @@
-import { existsSync, linkSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, linkSync, mkdtempSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 
 const BACKUP_FILE_PATTERN = /^lore-backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.sqlite$/;
@@ -8,6 +8,7 @@ function removeTemporaryBackupArtifacts(filePath) {
   for (const suffix of ["", "-shm", "-wal"]) {
     rmSync(`${filePath}${suffix}`, { force: true });
   }
+  rmSync(dirname(filePath), { recursive: true, force: true });
 }
 
 function regularFileStat(filePath) {
@@ -45,8 +46,8 @@ export async function createSqliteBackup(sourceInput, outputInput, options = {})
     throw new Error("Backup source must be an existing regular file");
   }
   if (existsSync(outputPath)) throw new Error("Backup output already exists");
-  const temporaryOutputPath = `${outputPath}.partial-${process.pid}-${Date.now()}`;
-  if (existsSync(temporaryOutputPath)) throw new Error("Backup temporary output already exists");
+  const temporaryOutputDirectory = mkdtempSync(join(dirname(outputPath), ".lore-backup-stage-"));
+  const temporaryOutputPath = join(temporaryOutputDirectory, "backup.sqlite");
 
   try {
     const source = new DatabaseSync(sourcePath, { readOnly: true });

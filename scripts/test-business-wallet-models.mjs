@@ -50,6 +50,11 @@ const logs = [rawValue, 1n].map((value, logIndex) => ({
   transactionHash: mixedHash,
   transactionIndex: 0,
 }));
+const overCapLogs = Array.from({ length: 501 }, (_, logIndex) => ({
+  ...logs[0],
+  logIndex,
+  transactionHash: "0x" + (logIndex + 10).toString(16).padStart(64, "0"),
+}));
 const malformedLog = { ...logs[0], data: "0x" };
 let blockNumberCalls = 0;
 const getLogsRequests = [];
@@ -69,6 +74,8 @@ const publicClient = {
       result = request.topics.length === 2 ? [malformedLog] : [];
     } else if (logScenario === "malformed-incoming") {
       result = request.topics.length === 2 ? [] : [malformedLog];
+    } else if (logScenario === "over-cap") {
+      result = request.topics.length === 2 ? overCapLogs : [];
     } else {
       throw new Error("unexpected wallet-transfer log scenario");
     }
@@ -166,6 +173,10 @@ try {
       "0x2222222222222222222222222222222222222222",
     ),
   ];
+  const liveCapCoverageResult = await runDecodeCoverageScenario(
+    "over-cap",
+    embedded,
+  );
 
   probeResult = {
     transfers: persisted.transfers,
@@ -184,6 +195,7 @@ try {
     invalidRpcCalls,
     invalidStorageWrites,
     decodeSkipCoverageResults,
+    liveCapCoverageResult,
     fetchCalls,
   };
 } finally {
@@ -1373,6 +1385,17 @@ export async function runWalletModelTests() {
       },
     ],
     "both inbound and outbound decode skips must make the persisted transfer history partial",
+  );
+  assert.deepEqual(
+    walletTransferExecutableProbe.liveCapCoverageResult,
+    {
+      returnedLogCounts: [501, 0],
+      scanCoverage: "partial",
+      transferCount: 500,
+      historyRowsTruncated: true,
+      storageWrites: 1,
+    },
+    "a live over-cap response must remain bounded and report lower-bound partial history",
   );
   assert.deepEqual(
     {

@@ -143,9 +143,9 @@ assertSqliteArtifactsUnchanged(
   { allowShmLockChanges: true },
 );
 assert.equal(
-  readdirSync(drillDir).some((entry) => entry.startsWith(`${backupPath.split(/[\\/]/).pop()}.partial-`)),
+  readdirSync(drillDir).some((entry) => entry.startsWith(".lore-backup-stage-")),
   false,
-  "backup must publish only the validated final artifact and leave no partial output",
+  "backup must publish only the validated final artifact and leave no private staging directory",
 );
 const summaryOnlyBackupPath = resolve(drillDir, "summary-only-backup.sqlite");
 rmSync(summaryOnlyBackupPath, { force: true });
@@ -202,9 +202,9 @@ assert.equal(
   "failed atomic publication must not overwrite a competing final artifact",
 );
 assert.equal(
-  readdirSync(drillDir).some((entry) => entry.startsWith("late-collision.sqlite.partial-")),
+  readdirSync(drillDir).some((entry) => entry.startsWith(".lore-backup-stage-")),
   false,
-  "failed atomic publication must clean its validated temporary artifact",
+  "failed atomic publication must clean its private staging directory",
 );
 const sourceRows = Number(source.prepare("SELECT COUNT(*) AS count FROM drill_rows").get()?.count ?? -1);
 const scopeAudit = auditSqliteScopes(sourcePath, "sepolia:0x0000000000000000000000000000000000000001");
@@ -399,9 +399,9 @@ await assert.rejects(
 );
 assert.equal(existsSync(corruptBackupPath), false, "failed corrupt-source backup must not publish final artifact");
 assert.equal(
-  readdirSync(drillDir).some((entry) => entry.startsWith(`${corruptBackupPath.split(/[\\/]/).pop()}.partial-`)),
+  readdirSync(drillDir).some((entry) => entry.startsWith(".lore-backup-stage-")),
   false,
-  "failed corrupt-source backup must clean partial artifacts",
+  "failed corrupt-source backup must clean its private staging directory",
 );
 
 mkdirSync(restoreBackupDir, { recursive: true });
