@@ -1,7 +1,7 @@
 # Current release-candidate permission manifest
 
-Snapshot date: 2026-08-25. Base `HEAD`:
-`7eee0cd9bc228d0d5068db133e749ecb95dc88da` on `codex/repo-cleanup`.
+Snapshot date: 2026-08-26. Base `HEAD`:
+`8797e30d3e985a8307ad24c721258da7a86f341a` on `codex/repo-cleanup`.
 
 Status: the user has granted authority for local commits. This manifest remains
 the exact staging boundary for the current packet; that authority does not
@@ -11,10 +11,10 @@ generation, approval, or a chain transaction.
 ## Exact current scope
 
 The path set below is taken from the NUL-delimited proposed amended index via
-`git diff --cached --name-only -z 7eee0cd9bc228d0d5068db133e749ecb95dc88da`.
+`git diff --cached --name-only -z 8797e30d3e985a8307ad24c721258da7a86f341a`.
 It is the exact four-path change relative to that parent and records the local
-evidence boundary for the documentation-only clean-HEAD AdminOps behavioral
-replacement record containing this manifest.
+evidence boundary for the documentation-only clean-HEAD AdminOps path-redaction
+behavior record containing this manifest.
 It does not authorize a push, deployment, hosting change, wallet/RPC action,
 Preview, signing, or chain transaction.
 
@@ -29,7 +29,7 @@ Preview, signing, or chain transaction.
 - Canonical current content-set SHA-256 for the other `3` candidate files (this
   self-referential manifest excluded; sorted
   `path + NUL + file SHA-256 + LF`):
-  `cac1bca9f6ff3ee4a2e8f85dec69bafe3dcc8e202301cdbd46846088c7731a9e`.
+  `e1f476558e425dbe6e5914fd7b25056490bd1ffbbffb21112fe3398b4c049f93`.
 
 ```text
 docs/agent-progress.md

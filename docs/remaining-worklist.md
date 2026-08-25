@@ -1,6 +1,6 @@
 # Remaining Worklist
 
-Last updated: 2026-08-25. This is the active queue. Historical detail belongs
+Last updated: 2026-08-26. This is the active queue. Historical detail belongs
 under [`docs/archive/`](archive/).
 
 ## P0: trustworthy local release candidate
@@ -96,8 +96,8 @@ under [`docs/archive/`](archive/).
 - [x] Committed audited baseline at `d3916c37d`: `5387/6166` behavioral assertions
       (`87.37%`) across `106` modules; the coordinator has `95` direct runner
       imports, `2` side-effect imports, and `95` direct runner calls.
-- [x] Current committed schema-v2 packet reports `5820/6345` behavioral
-      assertions (`91.73%`) with `525` source operands across `113` modules;
+- [x] Current committed schema-v2 packet reports `5820/6344` behavioral
+      assertions (`91.74%`) with `524` source operands across `113` modules;
       the audit self-test passes `17/17`. The v2 denominator includes all
       Node 24 assert methods and the source count includes confirmed transparent
       transitive bindings, so it is not directly comparable to schema v1.
@@ -253,6 +253,16 @@ under [`docs/archive/`](archive/).
       reproduction, protected-DB identity, and independent review. No P0--P2;
       reviewer P3 notes this is current-callback coverage, not a blanket future
       guard for a new unexecuted effect/error-only path. Fresh hosted Linux
+      execution remains open.
+- [x] Remove the redundant AdminOps log-summary source regex only after the
+      existing fresh admin-session child executes the real authorized
+      `/api/admin/ops` GET from an owned absolute temporary root. Every returned
+      `logSources` entry omits an own `file` property and the complete serialized
+      payload omits the exact escaped root. Exact commit `8797e30d3` passed
+      focused x2, audit x2 (`5820/6344`, `524` source), self-test `17/17`,
+      syntax, ESLint, diff, full isolated business, clean-HEAD reproduction,
+      cross-platform escaping probes, protected-DB identity, and independent
+      review with no P0--P3. Ubuntu/Windows CI wiring is present; fresh hosted
       execution remains open.
 - [ ] Continue replacing source operands only when a stable public behavior seam
       exists; preserve meaningful policy/source bindings.

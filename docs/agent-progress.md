@@ -1,6 +1,6 @@
 # Agent Progress
 
-Last updated: 2026-08-25.
+Last updated: 2026-08-26.
 
 Current truth is in [`current_state.md`](current_state.md). The active queue is
 [`remaining-worklist.md`](remaining-worklist.md); long-running testnet work is
@@ -9,21 +9,21 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Continuation point
 
 - The current tested code baseline and parent of this documentation-only packet
-  is `7eee0cd9bc228d0d5068db133e749ecb95dc88da`. Its exact one-file P1.10
-  packet removes one redundant AdminOps source-regex only after the existing
-  fresh handler child imports the real client, invokes all `9` current callbacks,
-  forbids direct `response.json()`, and proves the exact six bounded JSON-read
-  method/route IDs with zero direct JSON or network calls. Focused x2, audit x2,
-  self-test `17/17`, syntax, ESLint, diff hygiene, the full isolated business
-  gate, clean-HEAD focused/audit reproduction, and protected DB identity pass on
-  Node `24.5.0`. The audit is now `5820/6345` behavioral (`91.73%`) with `525`
-  source operands across `113` modules; coordinator fan-out stays `71/2/71`.
-  Independent review found no P0--P2 issue. Its P3 caveat is retained: the child
-  proves all current callbacks, but is not a blanket future guard for a new
-  unexecuted effect/error-only path. Fresh Windows execution passed; Linux wiring
-  exists in hosted `test:logic`, but no fresh hosted Linux run was produced.
-  Parent `cc0d58911` is the local runtime-role packet; all deployed/provider/live
-  boundaries remain open.
+  is `8797e30d3e985a8307ad24c721258da7a86f341a`. Its exact two-file P1.10
+  packet removes one `LogSourceSummary` source regex only after the existing
+  fresh admin-session child executes the real authorized `/api/admin/ops` GET.
+  The public payload must omit an own `file` property from every `logSources`
+  entry and must not contain the exact cross-platform escaped absolute runtime
+  root anywhere. Focused x2, audit x2, self-test `17/17`, syntax, ESLint, diff
+  hygiene, the full isolated business gate, clean-HEAD focused/audit
+  reproduction, protected DB identity, and cross-platform escaping probes pass
+  on Node `24.5.0`. The audit is now `5820/6344` behavioral (`91.74%`) with
+  `524` source operands across `113` modules; coordinator fan-out stays
+  `71/2/71`. Independent review found no P0--P3 issue and confirmed the domain
+  child is wired into Ubuntu `test:logic` and Windows `test:logic:summary`; only
+  local Windows execution is fresh, so hosted parity remains open. Parent
+  `7eee0cd9b` is the independently reviewed AdminOps bounded-JSON client seam;
+  all deployed/provider/live boundaries remain open.
 - Earlier security-reviewed baseline `3c8886acc1fa33045aa7bcc1d03bab9fa84fd09b` closes the
   final deposits-recovery transport bound found by targeted security review:
   recovery head/log reads use one `http(RPC_URL, { timeout: 20_000,
@@ -61,7 +61,7 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   Recompute its manifest before any
   new commit request; no current staging, push, deployment, wallet/RPC, or
   chain authority exists.
-- The current P1.10 audit is `5820/6345` behavioral (`91.73%`) with `525`
+- The current P1.10 audit is `5820/6344` behavioral (`91.74%`) with `524`
   source operands across `113` modules. Direct coordinator fan-out is `71`
   imports, `2` side-effect imports, and `71` calls; the audit self-test passes
   `17/17`.
@@ -75,8 +75,9 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   `2115` files / `286318496` bytes. The exact runtime/dependencies, current
   test/release evidence, recovery assets, browser state, project data, and
   SQLite files were excluded.
-- No commit, push, deploy, hosted change, wallet/RPC, signing, or chain action
-  occurred, and no actual Preview was generated. The only external read was
+- The local test commit `8797e30d3` occurred; no push, deploy, hosted change,
+  wallet/RPC, signing, or chain action occurred, and no actual Preview was
+  generated. The only external read was
   the guest HTTPS probe already recorded below; it stopped at the TLS error.
 - The turn-start protected trio was exact (`258048`-byte base,
   `280192`-byte WAL, `32768`-byte SHM), but a diagnostic common-suite import was

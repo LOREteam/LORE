@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-08-25.
+Last updated: 2026-08-26.
 
 This file is the current repository truth. Historical detail is retained under
 [`docs/archive/`](archive/). The active queue is
@@ -11,19 +11,20 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 - Branch: `codex/repo-cleanup`.
 - The current tested code baseline is
-  `7eee0cd9bc228d0d5068db133e749ecb95dc88da`. Its exact one-file P1.10
-  commit removes one redundant AdminOps source-regex only after the existing
-  fresh handler child imports the real client, invokes all `9` current callbacks,
-  makes direct `response.json()` fail, and proves the exact six bounded JSON-read
-  method/route IDs with zero direct JSON or network calls. Focused x2, audit x2,
-  self-test `17/17`, syntax, ESLint, diff hygiene, the complete isolated business
-  gate, clean-HEAD focused/audit reproduction, and protected DB identity pass on
-  exact Node `24.5.0`. The current audit is `5820/6345` behavioral (`91.73%`)
-  with `525` source operands across `113` modules and unchanged `71/2/71`
-  coordinator fan-out. Independent review found no P0--P2 issue; its P3 caveat
-  is that this proves all current callbacks, not a hypothetical future unexecuted
-  effect/error-only path. Windows executed locally; fresh hosted Linux evidence
-  remains open. Parent `cc0d58911` is the local runtime-role partial baseline.
+  `8797e30d3e985a8307ad24c721258da7a86f341a`. Its exact two-file P1.10
+  commit removes one `LogSourceSummary` source regex only after the existing
+  fresh admin-session child executes the real authorized `/api/admin/ops` GET.
+  Every returned `logSources` entry must omit an own `file` property, and the
+  entire serialized payload must omit the exact escaped absolute runtime root.
+  Focused x2, audit x2, self-test `17/17`, syntax, ESLint, diff hygiene, the
+  complete isolated business gate, clean-HEAD focused/audit reproduction,
+  cross-platform escaping probes, and protected DB identity pass on exact Node
+  `24.5.0`. The current audit is `5820/6344` behavioral (`91.74%`) with `524`
+  source operands across `113` modules and unchanged `71/2/71` coordinator
+  fan-out. Independent review found no P0--P3 issue and confirmed Ubuntu/Windows
+  CI wiring; fresh execution is local Windows only, so hosted parity remains
+  open. Parent `7eee0cd9b` is the AdminOps bounded-JSON client seam, and parent
+  `cc0d58911` is the local runtime-role partial baseline.
 - Latest fully detached broad local-gate baseline: `333d7a81bb8780c5fc631646492ece53bbfa3926`
   (`test: cover bounded deposits recovery transport`). Its `3c8886acc` parent
   provides bounded shared admission/lease hardening and one 20-second,
@@ -50,11 +51,12 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   committed, including the seven-path P1.17 packet at `a5ff9f595`, both
   mobile-mining packages at `aaf515d20` and `39f68888`, and local HTTPS/REST
   Valkey parity through local persistence/restore at `154b29b59`, and local
-  runtime-role wiring at `cc0d58911`, and the AdminOps behavioral replacement at
-  `7eee0cd9b`. The current four-path expected staging packet is
+  runtime-role wiring at `cc0d58911`, the AdminOps bounded-JSON behavioral
+  replacement at `7eee0cd9b`, and the real admin-ops path-redaction behavior at
+  `8797e30d3`. The current four-path expected staging packet is
   documentation-only: three current progress/worklist/state documents plus the
   self-excluded manifest. The manifest describes the proposed amended index
-  relative to parent `7eee0cd9b`; the user-granted local commit authority does
+  relative to parent `8797e30d3`; the user-granted local commit authority does
   not widen that exact boundary.
 - A disposable detached checkout of the current code mirror completed fresh
   local composite gates with exit `0`: lint, isolated business, P1 hardening,
@@ -180,8 +182,8 @@ replacement needs another separately reviewed plan and exact approval.
   browser/session data, the protected SQLite trio, and staged recovery assets were retained.
   Workspace cleanup now excludes recovery-prefix directories and fails closed on
   symlink/junction paths that resolve outside the repository.
-- The current committed P1.10 schema-v2 audit is `5820/6345` behavioral
-  assertions (`91.73%`) with `525` source operands across `113` modules.
+- The current committed P1.10 schema-v2 audit is `5820/6344` behavioral
+  assertions (`91.74%`) with `524` source operands across `113` modules.
   Coordinator fan-out is `71` runner imports, `2` side-effect imports, and
   `71` direct calls; the audit self-test passes `17/17`. Schema v2 counts the
   full Node 24 assert surface, fails closed on unknown assert methods, resolves
@@ -194,6 +196,12 @@ replacement needs another separately reviewed plan and exact approval.
   they guard a Windows-only local-campaign fixture; Linux deliberately returns
   before that fixture, so no equivalent Linux behavior seam exists and the
   assertions remain fail-closed structural coverage.
+  The latest domain child executes the real authorized `/api/admin/ops` route
+  from an owned absolute temporary root and proves all returned log-source
+  metadata omits the internal `file` property and the whole public JSON omits
+  that escaped root. The child stays outside the official audit module set, so
+  its two assertions do not inflate the behavioral numerator; removing the one
+  redundant source guard changes only the aggregate denominator/source count.
   Extraction remains partial. The
   latest seams execute public deposits/rebates/jackpots failure responses,
   normal/exact rebate limiter responses, bounded all-or-fail rebate-history
@@ -276,7 +284,8 @@ replacement needs another separately reviewed plan and exact approval.
 | Current local business suite | The full isolated suite passed on the current dirty worktree after correcting a synchronous negative assertion and removing three dotenv import-time signing-environment side effects. It used an owned OS-temp SQLite path; it does not repair or validate the pre-run protected DB trio. | Pass locally; mutable worktree evidence only |
 | Pre-doc local gate packet | At `7905dc764`: P1 hardening `42/42` in `139491ms`; TypeScript `typegen` plus `tsc`, standalone V10 and V9 local invariants, global-stats `10000+`, leaderboard `110003`, and the hermetic wrapper passed. | Pass locally only; not final immutable-SHA evidence |
 | Read-only browser smoke | Local read-only Playwright smoke passed; screenshot: `artifacts/smoke-browser/sha7905-current-readonly.png`. It did not sign, create a wallet, approve, bet, claim, or send a transaction. | Local UI evidence only, not launch, hosted, or live-wallet proof |
-| P1.10 audit | At clean code SHA `7eee0cd9b`, schema v2 reports `5820/6345` behavioral assertions (`91.73%`) and `525` source operands across `113` modules; coordinator fan-out is `71/2/71`, and self-test passes `17/17`. The latest AdminOps packet runs the real client in a fresh child, invokes all nine current callbacks, forbids direct response JSON, and proves exact bounded-reader IDs with zero network calls. Focused x2, audit x2, syntax, ESLint, diff hygiene, full isolated business, clean-HEAD reproduction, protected-DB identity, and independent review pass. Reviewer P3: this current-callback proof is not a blanket guard for a future unexecuted effect/error-only path. | Committed local test-only progress; P1.10 remains partial and hosted Linux remains open |
+| Prior P1.10 AdminOps client seam | At clean code SHA `7eee0cd9b`, schema v2 reports `5820/6345` behavioral assertions (`91.73%`) and `525` source operands across `113` modules; coordinator fan-out is `71/2/71`, and self-test passes `17/17`. The AdminOps packet runs the real client in a fresh child, invokes all nine current callbacks, forbids direct response JSON, and proves exact bounded-reader IDs with zero network calls. Focused x2, audit x2, syntax, ESLint, diff hygiene, full isolated business, clean-HEAD reproduction, protected-DB identity, and independent review pass. Reviewer P3: this current-callback proof is not a blanket guard for a future unexecuted effect/error-only path. | Committed local test-only progress; parent evidence for current P1.10 packet |
+| Current P1.10 AdminOps path seam | At clean code SHA `8797e30d3`, schema v2 reports `5820/6344` behavioral assertions (`91.74%`) and `524` source operands across `113` modules; coordinator fan-out remains `71/2/71`. The real authorized ops route omits own `file` properties from every source and its exact escaped runtime root from the full public payload. Focused x2, audit x2, self-test `17/17`, syntax, ESLint, diff hygiene, full isolated business, clean-HEAD reproduction, escaping probes, protected-DB identity, and independent review pass with no P0--P3. | Committed local test-only progress; P1.10 remains partial and hosted CI parity remains open |
 | P1 hardening timeout boundary | A direct isolated `preview-env-boundary` run completed all `30/30` cases in `150472ms`, narrowly exceeding its former `150000ms` parent budget. The runner now retains a bounded `210000ms` limit. Two clean focused P1 runs then passed `41/41` in `270912ms` and `263360ms`; their preview steps took `99120ms` and `98406ms`. Audit schema v2 remained `5819/6345` behavioral assertions (`91.71%`), and its self-test passed `17/17`. | Local test-harness reliability only; P1.10 remains partial and no live behavior is implied |
 | Latest P1.10 fee-policy seam | The standalone runner removes one redundant direct-approval source assertion only after existing builder behavior covers bounded legacy/EIP-1559 requests, fixed gas, legacy-field preservation, ignored caller gas override, and invalid-fee rejection. Focused x2, audit x2, and self-test `17/17` pass; the current official coordinator audit is `5820/6345` with `525` source operands. | Local test-only progress; partial objective |
 | Latest P1.10 fee-policy review | The remaining source assertions bind pre-wallet/signer fee validation, guarded submission sinks, or live-write helpers. No equivalent safe public behavior seam exists without simulating risky signing paths, so they remain fail-closed structural coverage. Focused x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Reviewed; no removal justified |
