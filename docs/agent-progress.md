@@ -19,6 +19,12 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   summary passed L1--L17. Do not call the full `check-local` green for this SHA:
   its full run was stopped during a long active ESLint stage and recorded exit
   `4294967295`. No external/wallet/RPC/Preview action occurred.
+- The current uncommitted P1 fixture packet restores the API recovery matrix
+  after that transport split by mocking `depositsRecoveryPublicClient` for its
+  head/log seams. It leaves the production client and route untouched. Two
+  focused matrices pass 9 routes, 85 black-box requests, five mutants, and the
+  shared two-process limiter; TypeScript and two behavior audits pass at
+  `5819/6345` behavioral, 526 source operands, and self-test `17/17`.
 
 - Branch `codex/repo-cleanup`; immutable baseline `HEAD` is
   `63da5c4428d429ddda7e5d5a8fd7df56f01e5c73`. Its clean detached worktree

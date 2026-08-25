@@ -22,6 +22,13 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   during an anomalously long ESLint stage and returned exit `4294967295`; it is
   explicitly not final-SHA full-gate evidence. No push, deployment, wallet,
   signing, RPC, Preview, or chain action occurred.
+- The P1 API route matrix fixture now mocks `depositsRecoveryPublicClient` for
+  the recovery head/log seams rather than the unrelated general public client.
+  This restores executable recovery coverage after the bounded single-transport
+  hardening: two focused matrices passed 9 routes, 85 black-box requests, five
+  fault mutants, and the two-process shared limiter. TypeScript and two
+  schema-v2 behavior audits passed (`5819/6345` behavioral, 526 source
+  operands; self-test `17/17`). No production route behavior changed.
 - The goal's `318` paths describe a historical snapshot at `281c5fd02`; that
   candidate later grew to `320` paths and was committed in eight local commits.
   It is not the current permission scope. The current HEAD-bound permission

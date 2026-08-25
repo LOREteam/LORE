@@ -566,10 +566,10 @@ async function runDepositsRecoveryScenario(options: { globalBoundMutant?: boolea
   storage.putJsonPath("gamedata/_meta/currentEpoch", 12);
   storage.putJsonPath("gamedata/_meta/lastIndexedBlock", "100");
 
-  const { publicClient } = await import("../../app/api/_lib/dataBridge");
+  const { depositsRecoveryPublicClient, publicClient } = await import("../../app/api/_lib/dataBridge");
   const originalReadContract = publicClient.readContract;
-  const originalGetBlockNumber = publicClient.getBlockNumber;
-  const originalGetLogs = publicClient.getLogs;
+  const originalGetBlockNumber = depositsRecoveryPublicClient.getBlockNumber;
+  const originalGetLogs = depositsRecoveryPublicClient.getLogs;
   let activeLogCalls = 0;
   let maxActiveLogCalls = 0;
   let logCallCount = 0;
@@ -581,8 +581,8 @@ async function runDepositsRecoveryScenario(options: { globalBoundMutant?: boolea
     "missing-log-index",
   ];
   publicClient.readContract = (async () => 12n) as typeof publicClient.readContract;
-  publicClient.getBlockNumber = (async () => 130n) as typeof publicClient.getBlockNumber;
-  publicClient.getLogs = (async (request: { topics?: readonly unknown[] }) => {
+  depositsRecoveryPublicClient.getBlockNumber = (async () => 130n) as typeof depositsRecoveryPublicClient.getBlockNumber;
+  depositsRecoveryPublicClient.getLogs = (async (request: { topics?: readonly unknown[] }) => {
     activeLogCalls += 1;
     maxActiveLogCalls = Math.max(maxActiveLogCalls, activeLogCalls);
     logCallCount += 1;
@@ -596,7 +596,7 @@ async function runDepositsRecoveryScenario(options: { globalBoundMutant?: boolea
     } finally {
       activeLogCalls -= 1;
     }
-  }) as typeof publicClient.getLogs;
+  }) as typeof depositsRecoveryPublicClient.getLogs;
 
   const route = await loadRoute("deposits");
   let routes: [RouteModule, RouteModule] = [route, route];
@@ -663,8 +663,8 @@ async function runDepositsRecoveryScenario(options: { globalBoundMutant?: boolea
   } finally {
     Date.now = originalNow;
     publicClient.readContract = originalReadContract;
-    publicClient.getBlockNumber = originalGetBlockNumber;
-    publicClient.getLogs = originalGetLogs;
+    depositsRecoveryPublicClient.getBlockNumber = originalGetBlockNumber;
+    depositsRecoveryPublicClient.getLogs = originalGetLogs;
   }
 }
 
