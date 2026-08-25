@@ -704,6 +704,14 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 - A new local campaign and supported security scan are blocked by disk and/or
   entitlement, not by a false green claim.
 
+- P1.17's headed native-visibility witness now runs in a separate temporary
+  Chromium process. A same-window Playwright tab did not cause native page
+  visibility to become `hidden` on this Windows host, so it was not a valid
+  backgrounding test. The new witness is no-network and uses a temporary
+  profile; collector self-test `87/87`, syntax, and diff hygiene pass. No
+  native-hidden, timer-throttling, two-hour, or final-SHA claim follows from
+  this harness-only change.
+
 - Exact SHA `333d7a81bb8780c5fc631646492ece53bbfa3926` now has a fresh detached
   `npm ci` evidence packet: TypeScript, P1 hardening `41/41` in `302424ms`,
   hermetic build, ESLint (six warnings and zero errors), full `check-local`

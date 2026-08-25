@@ -240,6 +240,13 @@ under [`docs/archive/`](archive/).
       evidence, hidden Long Task saturation, unthrottled/frozen cadence,
       truncation, API request-count mismatch, and summary tampering. A measured
       zero hidden request count is kept distinct from observed polling.
+- [x] Separate the headed native-visibility witness into its own temporary
+      Chromium process. Switching a Playwright tab in the measured browser did
+      not change native visibility on this Windows host, so it could not prove
+      backgrounding. The collector now foregrounds a no-network witness window
+      without overriding the measured page's visibility API; syntax, diff
+      hygiene, and collector self-test `87/87` pass. This is a harness repair,
+      not native-hidden or timer-throttling evidence.
 - [ ] On the final immutable clean SHA, seal the canonical/profile pair, run
       the 60–90 second headed native-hidden preflight, then one two-hour
       read-only loopback collection and strict verification. No current

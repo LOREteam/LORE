@@ -1168,6 +1168,7 @@ function phaseRequestSummary(phase, phaseCounts) {
 async function collectRuntimeEvidence(options, routePaths) {
   let ownedServer = null;
   let browser = null;
+  let nativeAuditWitnessBrowser = null;
   try {
     const baseUrl = options.baseUrl ?? (ownedServer = await startLocalNextServer(options.distDirRelativePath)).baseUrl;
     const baseOrigin = new URL(baseUrl).origin;
@@ -1492,7 +1493,22 @@ async function collectRuntimeEvidence(options, routePaths) {
     let nativeAuditAnalysis = analyzeNativeBackgroundAudit(null);
     const shouldRunNativeAudit = !options.headless
       && nativeHiddenEvidenceDuration(options.durationMs, true) > 0;
-    const backgroundProbe = await context.newPage();
+    // A second tab in Playwright's browser window is not a reliable native
+    // visibility witness on Windows: Chrome can keep both documents visible
+    // while it switches the active tab.  Run the witness in a separate,
+    // temporary browser process so foregrounding it exercises actual window
+    // backgrounding without touching the measured page's visibility API.
+    let backgroundProbe;
+    if (shouldRunNativeAudit) {
+      nativeAuditWitnessBrowser = await chromium.launch(browserLaunchOptions(executablePath, false));
+      const nativeAuditWitnessContext = await nativeAuditWitnessBrowser.newContext({
+        viewport: { width: 1440, height: 900 },
+        serviceWorkers: "block",
+      });
+      backgroundProbe = await nativeAuditWitnessContext.newPage();
+    } else {
+      backgroundProbe = await context.newPage();
+    }
     await backgroundProbe.goto("data:text/html,<title>background-probe</title>");
     if (shouldRunNativeAudit) {
       await page.bringToFront();
@@ -1902,6 +1918,7 @@ async function collectRuntimeEvidence(options, routePaths) {
       blockers: [...new Set(blockers)],
     };
   } finally {
+    if (nativeAuditWitnessBrowser) await nativeAuditWitnessBrowser.close().catch(() => {});
     if (browser) await browser.close().catch(() => {});
     if (ownedServer) await ownedServer.close().catch(() => {});
   }

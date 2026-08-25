@@ -1,7 +1,7 @@
 # Current release-candidate permission manifest
 
 Snapshot date: 2026-08-25. Base `HEAD`:
-`333d7a81bb8780c5fc631646492ece53bbfa3926` on `codex/repo-cleanup`.
+`5e8dc4faa5be8a529a57b2a5699eaf4f0b995114` on `codex/repo-cleanup`.
 
 Status: the user has granted authority for local commits. This manifest remains
 the exact staging boundary for the current packet; that authority does not
@@ -16,21 +16,23 @@ The path set below is taken from NUL-delimited
 evidence boundary. It does not authorize a push, deployment, hosting change,
 wallet/RPC action, Preview, signing, or chain transaction.
 
-- Candidate: `2` tracked paths; `0` untracked paths.
+- Candidate: `4` tracked paths; `0` untracked paths.
 - Excluded and retained generated evidence: `32` paths in `3` top-level
   directories under `artifacts/`.
-- Staged paths: `3` (including this self-excluded manifest).
+- Staged paths: `5` (including this self-excluded manifest).
 - Exactness: `missing=0`, `extra=0`, `duplicates=0` under the exclusion above.
 - Canonical path-set SHA-256 (UTF-8, sorted paths, LF after every path):
-  `39dc14a00c8f804d02c74fd1309f88fa28bd97f7aaea7f74cdf29d9ad89b4751`.
-- Canonical content-set SHA-256 for the other `2` candidate files (this
+  `1fcde825cd80a7fbba06055b1d53331a34c7088661c13cd504476a4cab10d773`.
+- Canonical content-set SHA-256 for the other `4` candidate files (this
   self-referential manifest excluded; sorted `path + NUL + file SHA-256 + LF`):
-  `ecc04ddfa33ae7a2ca02f062b09629b5f9e27570bb1242097912a1fc540d0698`.
+  `796bfc451763f12d9b40cc472a5b0f1a6c487dadbcee1ecb2ec826816486faf7`.
 
 ```text
 docs/agent-progress.md
 docs/current_state.md
 docs/release-candidate-current.md
+docs/remaining-worklist.md
+scripts/collect-p1-performance-evidence.mjs
 ```
 
 The 32 historical/test artifacts stay on disk and must not be staged by a
