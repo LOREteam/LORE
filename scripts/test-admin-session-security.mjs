@@ -1082,6 +1082,17 @@ assert.equal(authorizedOpsResponse.status, 200, "admin ops must accept a fresh a
 const authorizedOpsPayload = await authorizedOpsResponse.json();
 assert.equal(authorizedOpsPayload.status, "ok");
 const serializedOpsPayload = JSON.stringify(authorizedOpsPayload);
+assert.equal(
+  authorizedOpsPayload.logSources.some((source) => Object.hasOwn(source, "file")),
+  false,
+  "admin ops log metadata must not expose internal file paths",
+);
+const serializedTestRunDir = JSON.stringify(testRunDir).slice(1, -1);
+assert.equal(
+  serializedOpsPayload.includes(serializedTestRunDir),
+  false,
+  "admin ops payload must not expose its absolute runtime directory",
+);
 for (const forbidden of [omittedPrefixSecret, visibleSecret, visibleUrl, visibleWallet]) {
   assert.equal(serializedOpsPayload.includes(forbidden), false, `admin ops payload must redact ${forbidden}`);
 }

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -725,12 +724,6 @@ export async function runErrorBoundaryAndJsonTests() {
       messageBounded: true,
     },
     "chunk route warnings must expose only a sanitized message bounded to 180 characters",
-  );
-  const adminOpsRouteSource = readFileSync("app/api/admin/ops/route.ts", "utf8");
-  assert.doesNotMatch(
-    adminOpsRouteSource,
-    /type LogSourceSummary = \{[\s\S]*\n\s*file:\s*string;/,
-    "admin ops log source responses must not expose absolute server log paths",
   );
   const hostileRenderError = Object.assign(
     new Error("Bearer render-secret https://private-render.invalid/path"),
