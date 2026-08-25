@@ -33,6 +33,9 @@ import {
   MARKER_FILE_DIGEST_DOMAIN,
   MIN_NATIVE_HIDDEN_EVIDENCE_MS,
   MIN_SIMULATED_AUTO_MINER_EVIDENCE_MS,
+  NATIVE_REQUEST_SAMPLE_LIMIT,
+  NATIVE_REQUEST_TIMING_CAPTURE_EVENT,
+  NATIVE_REQUEST_TIMING_DRAIN_TIMEOUT_MS,
   NATIVE_TIMER_HEARTBEAT_INTERVAL_MS,
   NATIVE_TIMER_HEARTBEAT_LIMIT,
   NATIVE_TIMER_HIDDEN_PHASE_MS,
@@ -60,8 +63,11 @@ const DEFAULT_DURATION_MS = 30_000;
 const MIN_DURATION_MS = 9_000;
 const MAX_DURATION_MS = TWO_HOURS_MS;
 const MAX_ERROR_CHARS = 600;
-const MAX_REQUEST_SAMPLES = 20_000;
+const MAX_REQUEST_SAMPLES = NATIVE_REQUEST_SAMPLE_LIMIT;
 const MAX_GIT_OUTPUT_BYTES = 4 * 1_024 * 1_024;
+const NATIVE_WINDOW_STATE_TIMEOUT_MS = 3_000;
+const NATIVE_WINDOW_STATE_POLL_MS = 100;
+const NATIVE_REQUEST_DRAIN_POLL_MS = 20;
 const AUTO_MINE_DEBUG_OVERRIDE_STORAGE_KEY = "lineaore:auto-mine-debug-override:v1";
 const AUTO_MINE_DEBUG_OVERRIDE_EVENT = "lineaore:auto-mine-debug-override-change:v1";
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
@@ -1062,6 +1068,280 @@ function browserLaunchOptions(executablePath, headless) {
   };
 }
 
+function nativeObservationMatchesState(observation, expectedState) {
+  const expectedHidden = expectedState === "hidden";
+  return observation !== null
+    && typeof observation === "object"
+    && observation.nativeState === expectedState
+    && observation.nativeHidden === expectedHidden
+    && observation.exposedState === expectedState
+    && observation.exposedHidden === expectedHidden
+    && observation.ownVisibilityState === false
+    && observation.ownHidden === false;
+}
+
+function countApiRequestsWithinWindow(samples, startMs, endMs) {
+  const counts = new Map();
+  if (!Array.isArray(samples) || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    return counts;
+  }
+  for (const sample of samples) {
+    if (!Number.isFinite(sample?.requestStartedAtMs)
+      || sample.requestStartedAtMs <= 0
+      || sample.requestStartedAtMs < startMs
+      || sample.requestStartedAtMs >= endMs
+      || typeof sample.pathname !== "string") {
+      continue;
+    }
+    counts.set(sample.pathname, (counts.get(sample.pathname) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function appendBoundedRequestSample(samples, sample, limit = MAX_REQUEST_SAMPLES) {
+  if (!Array.isArray(samples) || !Number.isSafeInteger(limit) || limit < 1) {
+    throw new Error("Invalid bounded request sample store");
+  }
+  if (samples.length >= limit) return false;
+  samples.push(sample);
+  return true;
+}
+
+function hasValidResponseRequestStartTime(sample) {
+  return Number.isFinite(sample?.requestStartedAtMs)
+    && sample.requestStartedAtMs > 0
+    && sample.timingCapturedAt === NATIVE_REQUEST_TIMING_CAPTURE_EVENT;
+}
+
+function createResponseRequestTimingCapture() {
+  const pendingSamples = new Map();
+  return {
+    track(request, sample, { nativeAudit = false } = {}) {
+      if ((typeof request !== "object" && typeof request !== "function")
+        || request === null
+        || typeof request.timing !== "function"
+        || !sample
+        || typeof sample !== "object"
+        || typeof nativeAudit !== "boolean"
+        || pendingSamples.has(request)) {
+        throw new Error("Invalid Playwright request timing sample");
+      }
+      sample.requestStartedAtMs = null;
+      sample.timingCapturedAt = null;
+      sample.terminalEvent = null;
+      pendingSamples.set(request, { sample, nativeAudit });
+    },
+    captureAtResponse(request) {
+      const pending = pendingSamples.get(request);
+      if (!pending || pending.sample.timingCapturedAt !== null) return false;
+      let startTime = null;
+      try {
+        startTime = request.timing()?.startTime;
+      } catch {}
+      pending.sample.requestStartedAtMs = Number.isFinite(startTime) && startTime > 0
+        ? startTime
+        : null;
+      pending.sample.timingCapturedAt = NATIVE_REQUEST_TIMING_CAPTURE_EVENT;
+      return true;
+    },
+    finalizeAtTerminal(request, terminalEvent) {
+      if (!["requestfinished", "requestfailed"].includes(terminalEvent)) {
+        throw new Error("Invalid Playwright request terminal event");
+      }
+      const pending = pendingSamples.get(request);
+      if (!pending) return false;
+      pending.sample.terminalEvent = terminalEvent;
+      pendingSamples.delete(request);
+      return true;
+    },
+    pendingNativeAuditCount() {
+      let count = 0;
+      for (const pending of pendingSamples.values()) {
+        if (pending.nativeAudit) count += 1;
+      }
+      return count;
+    },
+  };
+}
+
+function attachResponseRequestTimingCapture(context, capture) {
+  if (!context || typeof context.on !== "function" || typeof context.off !== "function"
+    || !capture || typeof capture.captureAtResponse !== "function"
+    || typeof capture.finalizeAtTerminal !== "function") {
+    throw new Error("Invalid Playwright request timing listener");
+  }
+  const onResponse = (response) => capture.captureAtResponse(response.request());
+  const onRequestFinished = (request) => capture.finalizeAtTerminal(request, "requestfinished");
+  const onRequestFailed = (request) => capture.finalizeAtTerminal(request, "requestfailed");
+  context.on("response", onResponse);
+  context.on("requestfinished", onRequestFinished);
+  context.on("requestfailed", onRequestFailed);
+  let attached = true;
+  return () => {
+    if (!attached) return false;
+    attached = false;
+    context.off("response", onResponse);
+    context.off("requestfinished", onRequestFinished);
+    context.off("requestfailed", onRequestFailed);
+    return true;
+  };
+}
+
+async function waitForNativeRequestTimingDrain(capture, {
+  timeoutMs = NATIVE_REQUEST_TIMING_DRAIN_TIMEOUT_MS,
+  pollMs = NATIVE_REQUEST_DRAIN_POLL_MS,
+} = {}) {
+  if (!capture || typeof capture.pendingNativeAuditCount !== "function"
+    || !Number.isSafeInteger(timeoutMs) || timeoutMs < 0
+    || !Number.isSafeInteger(pollMs) || pollMs < 1) {
+    throw new Error("Invalid native request timing drain");
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const pendingSampleCount = capture.pendingNativeAuditCount();
+    if (!Number.isSafeInteger(pendingSampleCount) || pendingSampleCount < 0) {
+      throw new Error("Invalid pending native request timing count");
+    }
+    if (pendingSampleCount === 0) {
+      return { status: "drained", timeoutMs, pendingSampleCount: 0 };
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return { status: "timed-out", timeoutMs, pendingSampleCount };
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, remainingMs)));
+  }
+}
+
+async function waitForNativeState(readSnapshot, expectedState, {
+  timeoutMs = NATIVE_WINDOW_STATE_TIMEOUT_MS,
+  pollMs = NATIVE_WINDOW_STATE_POLL_MS,
+} = {}) {
+  if (typeof readSnapshot !== "function" || !["visible", "hidden"].includes(expectedState)) {
+    throw new Error("Invalid native visibility wait");
+  }
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0
+    || !Number.isSafeInteger(pollMs) || pollMs < 1) {
+    throw new Error("Invalid native visibility wait timing");
+  }
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (true) {
+    last = await readSnapshot();
+    if (nativeObservationMatchesState(last, expectedState)) {
+      return { matched: true, last };
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return { matched: false, last };
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, remainingMs)));
+  }
+}
+
+async function createMeasuredWindowController(context, page) {
+  const session = await context.newCDPSession(page);
+  try {
+    const { windowId, bounds } = await session.send("Browser.getWindowForTarget");
+    if (!Number.isSafeInteger(windowId) || windowId < 1 || !bounds || typeof bounds !== "object") {
+      throw new Error("Chromium did not expose a valid measured browser window");
+    }
+    if (!["normal", "maximized", "fullscreen"].includes(bounds.windowState)) {
+      throw new Error("Chromium did not expose a restorable visible measured browser window state");
+    }
+    return {
+      session,
+      windowId,
+      originalBounds: bounds,
+      needsRestore: false,
+    };
+  } catch (error) {
+    await session.detach().catch(() => {});
+    throw error;
+  }
+}
+
+async function setMeasuredWindowState(session, windowId, windowState) {
+  if (!session || !Number.isSafeInteger(windowId) || windowId < 1
+    || !["normal", "minimized", "maximized", "fullscreen"].includes(windowState)) {
+    throw new Error("Invalid measured browser window state request");
+  }
+  await session.send("Browser.setWindowBounds", {
+    windowId,
+    bounds: { windowState },
+  });
+  const observed = await session.send("Browser.getWindowBounds", { windowId });
+  if (observed?.bounds?.windowState !== windowState) {
+    throw new Error(`Chromium window state did not become ${windowState}`);
+  }
+  return observed.bounds;
+}
+
+function restorableWindowState(bounds) {
+  if (!["normal", "maximized", "fullscreen"].includes(bounds?.windowState)) {
+    throw new Error("Measured browser window has no restorable visible original state");
+  }
+  return bounds.windowState;
+}
+
+async function setMeasuredWindowTargetState(controller, windowState) {
+  if (!controller || !controller.session || !Number.isSafeInteger(controller.windowId)
+    || controller.windowId < 1
+    || !["normal", "minimized", "maximized", "fullscreen"].includes(windowState)) {
+    throw new Error("Invalid measured browser window controller");
+  }
+  controller.needsRestore = true;
+  return setMeasuredWindowState(controller.session, controller.windowId, windowState);
+}
+
+async function restoreMeasuredWindow(controller) {
+  if (!controller?.needsRestore) return null;
+  const restoredBounds = await setMeasuredWindowState(
+    controller.session,
+    controller.windowId,
+    restorableWindowState(controller.originalBounds),
+  );
+  controller.needsRestore = false;
+  return restoredBounds;
+}
+
+async function withMeasuredWindowState(controller, windowState, operation) {
+  if (typeof operation !== "function") {
+    throw new Error("Invalid measured browser window operation");
+  }
+  let targetBounds = null;
+  let value;
+  let operationError = null;
+  try {
+    targetBounds = await setMeasuredWindowTargetState(controller, windowState);
+    value = await operation(targetBounds);
+  } catch (error) {
+    operationError = error;
+  }
+
+  let restoredBounds = null;
+  try {
+    restoredBounds = await restoreMeasuredWindow(controller);
+  } catch (restoreError) {
+    if (operationError) {
+      throw new AggregateError(
+        [operationError, restoreError],
+        "Measured browser window operation and restore both failed",
+      );
+    }
+    throw restoreError;
+  }
+  if (operationError) throw operationError;
+  return { targetBounds, restoredBounds, value };
+}
+
+async function closeMeasuredWindowController(controller) {
+  if (!controller?.session) return;
+  try {
+    if (controller.needsRestore) await restoreMeasuredWindow(controller);
+  } finally {
+    await controller.session.detach();
+  }
+}
+
 function normalizeBrowserSwitchMetadata(commandLineArguments) {
   const effectiveSwitchNames = new Set();
   const disabledFeatures = new Set();
@@ -1169,6 +1449,12 @@ async function collectRuntimeEvidence(options, routePaths) {
   let ownedServer = null;
   let browser = null;
   let nativeAuditWitnessBrowser = null;
+  let measuredWindowController = null;
+  let detachRequestTimingCapture = null;
+  let nativeWindowActuation = {
+    status: "not-run",
+    method: "cdp-window-bounds",
+  };
   try {
     const baseUrl = options.baseUrl ?? (ownedServer = await startLocalNextServer(options.distDirRelativePath)).baseUrl;
     const baseOrigin = new URL(baseUrl).origin;
@@ -1189,16 +1475,58 @@ async function collectRuntimeEvidence(options, routePaths) {
     let currentPhase = "setup";
     const phaseApiCounts = new Map();
     const requestSamples = [];
+    let requestSamplesTruncated = false;
+    const nativeAuditRequestSamples = [];
+    let nativeAuditRequestCapturedCount = 0;
+    let captureNativeAuditRequests = false;
+    let nativeAuditRequestSamplesTruncated = false;
+    let sealedNativeAuditRequestSamples = null;
+    let nativeAuditRequestDrain = {
+      status: "not-run",
+      timeoutMs: NATIVE_REQUEST_TIMING_DRAIN_TIMEOUT_MS,
+      pendingSampleCount: 0,
+    };
+    const responseRequestTimingCapture = createResponseRequestTimingCapture();
     let blockedExternalRequestCount = 0;
     let blockedApiWriteRequestCount = 0;
-    const countApi = (phase, pathname) => {
+    const countApi = (request, phase, pathname) => {
       const counts = phaseApiCounts.get(phase) ?? new Map();
       counts.set(pathname, (counts.get(pathname) ?? 0) + 1);
       phaseApiCounts.set(phase, counts);
-      if (requestSamples.length < MAX_REQUEST_SAMPLES) {
-        requestSamples.push({ phase, pathname, at: Date.now() });
+      const sample = {
+        phase,
+        pathname,
+        at: Date.now(),
+        requestStartedAtMs: null,
+        timingCapturedAt: null,
+        terminalEvent: null,
+      };
+      let sampleStored = false;
+      let nativeAuditSampleStored = false;
+      if (appendBoundedRequestSample(requestSamples, sample)) {
+        sampleStored = true;
+      } else {
+        requestSamplesTruncated = true;
+      }
+      if (captureNativeAuditRequests) {
+        nativeAuditRequestCapturedCount += 1;
+        if (appendBoundedRequestSample(nativeAuditRequestSamples, sample)) {
+          sampleStored = true;
+          nativeAuditSampleStored = true;
+        } else {
+          nativeAuditRequestSamplesTruncated = true;
+        }
+      }
+      if (sampleStored) {
+        responseRequestTimingCapture.track(request, sample, {
+          nativeAudit: nativeAuditSampleStored,
+        });
       }
     };
+    detachRequestTimingCapture = attachResponseRequestTimingCapture(
+      context,
+      responseRequestTimingCapture,
+    );
     await context.route("**/*", async (route) => {
       const request = route.request();
       let url;
@@ -1217,7 +1545,7 @@ async function collectRuntimeEvidence(options, routePaths) {
         await route.continue();
         return;
       }
-      countApi(currentPhase, url.pathname);
+      countApi(request, currentPhase, url.pathname);
       if (!["GET", "HEAD"].includes(request.method())) {
         blockedApiWriteRequestCount += 1;
         await route.fulfill({ status: 405, contentType: "application/json", body: JSON.stringify({ error: "read-only perf harness" }) });
@@ -1500,6 +1828,12 @@ async function collectRuntimeEvidence(options, routePaths) {
     // backgrounding without touching the measured page's visibility API.
     let backgroundProbe;
     if (shouldRunNativeAudit) {
+      measuredWindowController = await createMeasuredWindowController(context, page);
+      nativeWindowActuation = {
+        status: "ready",
+        method: "cdp-window-bounds",
+        originalState: measuredWindowController.originalBounds.windowState ?? "unknown",
+      };
       nativeAuditWitnessBrowser = await chromium.launch(browserLaunchOptions(executablePath, false));
       const nativeAuditWitnessContext = await nativeAuditWitnessBrowser.newContext({
         viewport: { width: 1440, height: 900 },
@@ -1513,6 +1847,7 @@ async function collectRuntimeEvidence(options, routePaths) {
     if (shouldRunNativeAudit) {
       await page.bringToFront();
       await page.waitForTimeout(100);
+      captureNativeAuditRequests = true;
       await page.evaluate((config) => window.__p1PerfVisibility.startNativeAudit(config), {
         intervalMs: NATIVE_TIMER_HEARTBEAT_INTERVAL_MS,
         heartbeatLimit: NATIVE_TIMER_HEARTBEAT_LIMIT,
@@ -1538,10 +1873,6 @@ async function collectRuntimeEvidence(options, routePaths) {
         endSnapshot: visibleBeforeEndSnapshot,
       };
 
-      await backgroundProbe.bringToFront();
-      await page.waitForTimeout(100);
-      const hiddenStartSnapshot = await page.evaluate(() =>
-        window.__p1PerfVisibility.nativeAuditPhaseSnapshot());
       const witnessSnapshot = () => ({
         atMs: performance.now(),
         timeOriginMs: performance.timeOrigin,
@@ -1554,32 +1885,79 @@ async function collectRuntimeEvidence(options, routePaths) {
         ownVisibilityState: Object.prototype.hasOwnProperty.call(document, "visibilityState"),
         ownHidden: Object.prototype.hasOwnProperty.call(document, "hidden"),
       });
-      const hiddenWitnessStart = await backgroundProbe.evaluate(witnessSnapshot);
-      const nativeHiddenAtStart = hiddenStartSnapshot.nativeState === "hidden"
-        && hiddenStartSnapshot.nativeHidden === true;
-      currentPhase = "native-hidden";
-      const hiddenStartWall = Date.now();
-      if (nativeHiddenAtStart) {
-        while (Date.now() - hiddenStartWall < NATIVE_TIMER_HIDDEN_PHASE_MS) {
-          const remaining = NATIVE_TIMER_HIDDEN_PHASE_MS - (Date.now() - hiddenStartWall);
-          await page.waitForTimeout(Math.min(options.sampleIntervalMs, Math.max(1, remaining)));
-        }
-      }
-      const hiddenEndSnapshot = await page.evaluate(() =>
-        window.__p1PerfVisibility.nativeAuditPhaseSnapshot());
-      const hiddenControllerDurationMs = Date.now() - hiddenStartWall;
-      const hiddenWitnessEnd = await backgroundProbe.evaluate(witnessSnapshot);
-      nativeWhileBackgrounded = await page.evaluate(() => window.__p1PerfVisibility.snapshot());
-      const hiddenPhase = {
-        requestedMs: NATIVE_TIMER_HIDDEN_PHASE_MS,
-        controllerDurationMs: hiddenControllerDurationMs,
-        timeOriginMs: hiddenStartSnapshot.timeOriginMs,
-        startPerformanceMs: hiddenStartSnapshot.atMs,
-        endPerformanceMs: hiddenEndSnapshot.atMs,
-        startSnapshot: hiddenStartSnapshot,
-        endSnapshot: hiddenEndSnapshot,
-        witnessStart: hiddenWitnessStart,
-        witnessEnd: hiddenWitnessEnd,
+      currentPhase = "native-hidden-transition";
+      await backgroundProbe.bringToFront();
+      const windowLifecycle = await withMeasuredWindowState(
+        measuredWindowController,
+        "minimized",
+        async (minimizedBounds) => {
+          try {
+            const hiddenTransitionStartedAt = Date.now();
+            const hiddenTransition = await waitForNativeState(
+              () => page.evaluate(() => window.__p1PerfVisibility.nativeAuditPhaseSnapshot()),
+              "hidden",
+            );
+            nativeWindowActuation = {
+              ...nativeWindowActuation,
+              status: hiddenTransition.matched ? "native-hidden-observed" : "minimized-without-native-hidden",
+              minimizedReadbackState: minimizedBounds.windowState,
+              nativeHiddenObservedAfterMinimize: hiddenTransition.matched,
+              hiddenTransitionWaitMs: Date.now() - hiddenTransitionStartedAt,
+            };
+            currentPhase = hiddenTransition.matched
+              ? "native-hidden"
+              : "native-hidden-unqualified";
+            const hiddenStartSnapshot = hiddenTransition.matched
+              ? await page.evaluate(() => window.__p1PerfVisibility.nativeAuditPhaseSnapshot())
+              : hiddenTransition.last;
+            const hiddenWitnessStart = await backgroundProbe.evaluate(witnessSnapshot);
+            const nativeHiddenAtStart = hiddenTransition.matched;
+            const hiddenStartWall = Date.now();
+            if (nativeHiddenAtStart) {
+              while (Date.now() - hiddenStartWall < NATIVE_TIMER_HIDDEN_PHASE_MS) {
+                const remaining = NATIVE_TIMER_HIDDEN_PHASE_MS - (Date.now() - hiddenStartWall);
+                await page.waitForTimeout(Math.min(options.sampleIntervalMs, Math.max(1, remaining)));
+              }
+            }
+            const hiddenEndSnapshot = await page.evaluate(() =>
+              window.__p1PerfVisibility.nativeAuditPhaseSnapshot());
+            const hiddenControllerDurationMs = Date.now() - hiddenStartWall;
+            currentPhase = "native-hidden-ending";
+            const hiddenWitnessEnd = await backgroundProbe.evaluate(witnessSnapshot);
+            nativeWhileBackgrounded = await page.evaluate(() => window.__p1PerfVisibility.snapshot());
+            return {
+              hiddenPhase: {
+                requestedMs: NATIVE_TIMER_HIDDEN_PHASE_MS,
+                controllerDurationMs: hiddenControllerDurationMs,
+                timeOriginMs: hiddenStartSnapshot.timeOriginMs,
+                startPerformanceMs: hiddenStartSnapshot.atMs,
+                endPerformanceMs: hiddenEndSnapshot.atMs,
+                startSnapshot: hiddenStartSnapshot,
+                endSnapshot: hiddenEndSnapshot,
+                witnessStart: hiddenWitnessStart,
+                witnessEnd: hiddenWitnessEnd,
+              },
+              nativeHiddenAtStart,
+              hiddenControllerDurationMs,
+              hiddenStartSnapshot,
+              hiddenEndSnapshot,
+            };
+          } finally {
+            currentPhase = "native-visible-transition";
+          }
+        },
+      );
+      const {
+        hiddenPhase,
+        nativeHiddenAtStart,
+        hiddenControllerDurationMs,
+        hiddenStartSnapshot,
+        hiddenEndSnapshot,
+      } = windowLifecycle.value;
+      const restoredBounds = windowLifecycle.restoredBounds;
+      nativeWindowActuation = {
+        ...nativeWindowActuation,
+        restoredReadbackState: restoredBounds?.windowState ?? "unknown",
       };
       if (nativeHiddenAtStart) {
         nativeHiddenPhase = {
@@ -1593,10 +1971,22 @@ async function collectRuntimeEvidence(options, routePaths) {
       }
 
       await page.bringToFront();
-      await page.waitForTimeout(100);
-      currentPhase = "native-visible-after";
-      const visibleAfterStartSnapshot = await page.evaluate(() =>
-        window.__p1PerfVisibility.nativeAuditPhaseSnapshot());
+      const visibleTransitionStartedAt = Date.now();
+      const visibleTransition = await waitForNativeState(
+        () => page.evaluate(() => window.__p1PerfVisibility.nativeAuditPhaseSnapshot()),
+        "visible",
+      );
+      nativeWindowActuation = {
+        ...nativeWindowActuation,
+        nativeVisibleObservedAfterRestore: visibleTransition.matched,
+        visibleTransitionWaitMs: Date.now() - visibleTransitionStartedAt,
+      };
+      const visibleAfterStartSnapshot = visibleTransition.matched
+        ? await page.evaluate(() => window.__p1PerfVisibility.nativeAuditPhaseSnapshot())
+        : visibleTransition.last;
+      currentPhase = visibleTransition.matched
+        ? "native-visible-after"
+        : "native-visible-unqualified";
       const visibleAfterStartWall = Date.now();
       await page.waitForTimeout(NATIVE_TIMER_VISIBLE_CONTROL_MS);
       const visibleAfterEndSnapshot = await page.evaluate(() =>
@@ -1612,6 +2002,11 @@ async function collectRuntimeEvidence(options, routePaths) {
         endSnapshot: visibleAfterEndSnapshot,
       };
       const rawAudit = await page.evaluate(() => window.__p1PerfVisibility.stopNativeAudit());
+      captureNativeAuditRequests = false;
+      nativeAuditRequestDrain = await waitForNativeRequestTimingDrain(
+        responseRequestTimingCapture,
+      );
+      sealedNativeAuditRequestSamples = nativeAuditRequestSamples.map((sample) => ({ ...sample }));
       const rawAuditLongTasks = await page.evaluate(({ startMs, endMs, limit }) => {
         const matching = window.__p1PerfLongTasks
           .filter((entry) => entry.startTime < endMs && entry.startTime + entry.duration > startMs)
@@ -1800,7 +2195,49 @@ async function collectRuntimeEvidence(options, routePaths) {
       .filter((component) => component.commitCount > 0 || component.actualDurationMs > 0)
       .sort((left, right) => right.actualDurationMs - left.actualDurationMs || left.name.localeCompare(right.name));
     const nativeHiddenObserved = nativeWhileBackgrounded.nativeState === "hidden" || nativeWhileBackgrounded.nativeHidden === true;
-    const nativeHiddenApiRequestCount = [...(phaseApiCounts.get("native-hidden") ?? new Map()).values()]
+    const nativeHiddenRequestWindow = nativeHiddenPhase && nativeAudit?.phases?.["native-hidden"]
+      ? {
+          startMs: nativeAudit.phases["native-hidden"].timeOriginMs
+            + nativeAudit.phases["native-hidden"].startPerformanceMs,
+          endMs: nativeAudit.phases["native-hidden"].timeOriginMs
+            + nativeAudit.phases["native-hidden"].endPerformanceMs,
+        }
+      : null;
+    const nativeAccountingRequestSamples = sealedNativeAuditRequestSamples
+      ?? nativeAuditRequestSamples.map((sample) => ({ ...sample }));
+    const nativeAuditMissingStartTimeCount = nativeAccountingRequestSamples.filter(
+      (sample) => !hasValidResponseRequestStartTime(sample),
+    ).length;
+    const nativeAuditUnresolvedSampleCount = nativeAccountingRequestSamples.filter(
+      (sample) => sample.terminalEvent === null,
+    ).length;
+    const nativeAuditFailedSampleCount = nativeAccountingRequestSamples.filter(
+      (sample) => sample.terminalEvent === "requestfailed",
+    ).length;
+    const nativeHiddenRequestAccountingComplete = nativeHiddenRequestWindow !== null
+      && !nativeAuditRequestSamplesTruncated
+      && nativeAuditRequestCapturedCount === nativeAccountingRequestSamples.length
+      && nativeAuditRequestDrain.status === "drained"
+      && nativeAuditRequestDrain.pendingSampleCount === 0
+      && nativeAuditMissingStartTimeCount === 0
+      && nativeAuditUnresolvedSampleCount === 0
+      && nativeAuditFailedSampleCount === 0
+      && nativeAccountingRequestSamples.every(
+        (sample) => sample.terminalEvent === "requestfinished",
+      );
+    const qualifyingNativeHiddenRequestSamples = nativeHiddenRequestAccountingComplete
+      ? nativeAccountingRequestSamples.filter((sample) =>
+          sample.requestStartedAtMs >= nativeHiddenRequestWindow.startMs
+          && sample.requestStartedAtMs < nativeHiddenRequestWindow.endMs)
+      : [];
+    const qualifyingNativeHiddenApiCounts = nativeHiddenRequestAccountingComplete
+      ? countApiRequestsWithinWindow(
+          qualifyingNativeHiddenRequestSamples,
+          nativeHiddenRequestWindow.startMs,
+          nativeHiddenRequestWindow.endMs,
+        )
+      : new Map();
+    const nativeHiddenApiRequestCount = [...qualifyingNativeHiddenApiCounts.values()]
       .reduce((total, count) => total + count, 0);
     const runtimeApplicability = createRuntimeApplicability({
       requestedDurationMs: options.durationMs,
@@ -1812,8 +2249,11 @@ async function collectRuntimeEvidence(options, routePaths) {
       lastFiniteHeapElapsedMs: finiteHeapSamples.at(-1)?.elapsedMs ?? null,
       syntheticVisibilityOverrideInstalled: syntheticVisibilityCapability.overrideInstalled,
       nativeHiddenObserved,
-      nativeHiddenMeasurementDurationMs: nativeHiddenPhase?.actualMs ?? 0,
-      nativeHiddenContinuityMeasured: nativeAuditAnalysis.continuityMeasured,
+      nativeHiddenMeasurementDurationMs: nativeHiddenRequestAccountingComplete
+        ? (nativeHiddenPhase?.actualMs ?? 0)
+        : 0,
+      nativeHiddenContinuityMeasured: nativeHiddenRequestAccountingComplete
+        && nativeAuditAnalysis.continuityMeasured,
       browserTimerThrottlingMeasured: nativeAuditAnalysis.timerThrottlingMeasured,
       nativeHiddenApiRequestCount,
       reactCommitObserverInstalled: finalPageMetrics.reactCommits.installed,
@@ -1833,6 +2273,9 @@ async function collectRuntimeEvidence(options, routePaths) {
     const blockers = [...runtimeApplicability.blockers];
     if (!finalPageMetrics.longTaskSupported) blockers.push("Long Task API is unavailable in this browser runtime.");
     if (finiteHeapSamples.length === 0) blockers.push("Chromium performance.memory is unavailable.");
+    if (nativeHiddenPhase && !nativeHiddenRequestAccountingComplete) {
+      blockers.push("Native hidden API request timing was incomplete or truncated; no polling count is claimed.");
+    }
 
     return {
       status: blockers.length === 0 ? "measured" : "measured-partial",
@@ -1863,6 +2306,7 @@ async function collectRuntimeEvidence(options, routePaths) {
       routeFirstLoad,
       visibility: {
         syntheticCapability: syntheticVisibilityCapability,
+        nativeWindowActuation,
         nativeBeforeBackground,
         nativeWhileBackgrounded,
         nativeHiddenObserved,
@@ -1879,11 +2323,39 @@ async function collectRuntimeEvidence(options, routePaths) {
       polling: {
         phases: Object.fromEntries(timedPhases.map((phase) => [
           phase.name,
-          phaseRequestSummary(phase, phaseApiCounts.get(phase.name) ?? new Map()),
+          phaseRequestSummary(
+            phase,
+            phase.name === "native-hidden"
+              ? qualifyingNativeHiddenApiCounts
+              : (phaseApiCounts.get(phase.name) ?? new Map()),
+          ),
         ])),
+        nativeHiddenRequestAccounting: {
+          status: nativeHiddenRequestWindow === null
+            ? "not-measured"
+            : (nativeHiddenRequestAccountingComplete ? "complete" : "incomplete"),
+          clock: "request.timing.startTime",
+          captureEvent: NATIVE_REQUEST_TIMING_CAPTURE_EVENT,
+          startMs: nativeHiddenRequestWindow?.startMs ?? null,
+          endMs: nativeHiddenRequestWindow?.endMs ?? null,
+          capturedSampleCount: nativeAuditRequestCapturedCount,
+          qualifyingSampleCount: qualifyingNativeHiddenRequestSamples.length,
+          samplesTruncated: nativeAuditRequestSamplesTruncated,
+          missingStartTime: nativeAuditMissingStartTimeCount > 0,
+          missingStartTimeSampleCount: nativeAuditMissingStartTimeCount,
+          unresolvedSampleCount: nativeAuditUnresolvedSampleCount,
+          failedSampleCount: nativeAuditFailedSampleCount,
+          drain: nativeAuditRequestDrain,
+          samples: nativeAccountingRequestSamples.map((sample) => ({
+            pathname: sample.pathname,
+            requestStartedAtMs: sample.requestStartedAtMs,
+            timingCapturedAt: sample.timingCapturedAt,
+            terminalEvent: sample.terminalEvent,
+          })),
+        },
         blockedExternalRequestCount,
         requestSampleCount: requestSamples.length,
-        requestSamplesTruncated: requestSamples.length >= MAX_REQUEST_SAMPLES,
+        requestSamplesTruncated,
         requestSamples,
       },
       memory: {
@@ -1918,6 +2390,14 @@ async function collectRuntimeEvidence(options, routePaths) {
       blockers: [...new Set(blockers)],
     };
   } finally {
+    if (detachRequestTimingCapture) {
+      try {
+        detachRequestTimingCapture();
+      } catch {}
+    }
+    if (measuredWindowController) {
+      await closeMeasuredWindowController(measuredWindowController).catch(() => {});
+    }
     if (nativeAuditWitnessBrowser) await nativeAuditWitnessBrowser.close().catch(() => {});
     if (browser) await browser.close().catch(() => {});
     if (ownedServer) await ownedServer.close().catch(() => {});
@@ -2072,6 +2552,390 @@ async function runSelfTest() {
     effectiveSwitchNames: [],
     disabledFeatures: [],
   });
+  const visibleNativeFixture = {
+    nativeState: "visible",
+    nativeHidden: false,
+    exposedState: "visible",
+    exposedHidden: false,
+    ownVisibilityState: false,
+    ownHidden: false,
+  };
+  const hiddenNativeFixture = {
+    ...visibleNativeFixture,
+    nativeState: "hidden",
+    nativeHidden: true,
+    exposedState: "hidden",
+    exposedHidden: true,
+  };
+  assert.equal(nativeObservationMatchesState(visibleNativeFixture, "visible"), true);
+  assert.equal(nativeObservationMatchesState(visibleNativeFixture, "hidden"), false);
+  const boundaryRequestCounts = countApiRequestsWithinWindow([
+    { phase: "native-hidden-transition", pathname: "/api/a", requestStartedAtMs: 999 },
+    { phase: "native-hidden-transition", pathname: "/api/a", requestStartedAtMs: 1_000 },
+    { phase: "native-hidden", pathname: "/api/a", requestStartedAtMs: 1_500 },
+    { phase: "native-hidden-ending", pathname: "/api/b", requestStartedAtMs: 1_999 },
+    { phase: "native-hidden", pathname: "/api/c", requestStartedAtMs: 2_000 },
+    { phase: "native-hidden", pathname: "/api/d", requestStartedAtMs: null },
+  ], 1_000, 2_000);
+  assert.deepEqual([...boundaryRequestCounts], [["/api/a", 2], ["/api/b", 1]]);
+  assert.deepEqual([...countApiRequestsWithinWindow([], 2_000, 1_000)], []);
+  const exactLimitSamples = [];
+  let finalWithinLimitStored = false;
+  for (let index = 0; index < NATIVE_REQUEST_SAMPLE_LIMIT; index += 1) {
+    finalWithinLimitStored = appendBoundedRequestSample(exactLimitSamples, { index });
+  }
+  assert.equal(finalWithinLimitStored, true);
+  assert.equal(exactLimitSamples.length, NATIVE_REQUEST_SAMPLE_LIMIT);
+  assert.equal(appendBoundedRequestSample(exactLimitSamples, { overflow: true }), false);
+  assert.equal(exactLimitSamples.length, NATIVE_REQUEST_SAMPLE_LIMIT);
+
+  const timingListeners = new Map();
+  const timingEventSource = {
+    on(event, listener) {
+      const listeners = timingListeners.get(event) ?? new Set();
+      listeners.add(listener);
+      timingListeners.set(event, listeners);
+      return this;
+    },
+    off(event, listener) {
+      timingListeners.get(event)?.delete(listener);
+      return this;
+    },
+    emit(event, value) {
+      for (const listener of [...(timingListeners.get(event) ?? [])]) listener(value);
+    },
+  };
+  let lifecycleStartTime = 0;
+  const lifecycleRequest = {
+    timing: () => ({ startTime: lifecycleStartTime }),
+  };
+  const lifecycleSample = {
+    pathname: "/api/lifecycle",
+    at: 1_787_673_393_341.636,
+  };
+  const lifecycleCapture = createResponseRequestTimingCapture();
+  lifecycleCapture.track(lifecycleRequest, lifecycleSample, { nativeAudit: true });
+  assert.equal(lifecycleSample.requestStartedAtMs, null);
+  assert.equal(lifecycleSample.timingCapturedAt, null);
+  assert.equal(lifecycleSample.terminalEvent, null);
+  assert.equal(lifecycleCapture.pendingNativeAuditCount(), 1);
+  assert.equal(lifecycleCapture.captureAtResponse({ timing: () => ({ startTime: 1 }) }), false);
+  const detachLifecycleCapture = attachResponseRequestTimingCapture(
+    timingEventSource,
+    lifecycleCapture,
+  );
+  lifecycleStartTime = 1_787_673_383_341.636;
+  timingEventSource.emit("response", { request: () => lifecycleRequest });
+  assert.equal(lifecycleSample.requestStartedAtMs, lifecycleStartTime);
+  assert.equal(lifecycleSample.timingCapturedAt, NATIVE_REQUEST_TIMING_CAPTURE_EVENT);
+  assert.equal(hasValidResponseRequestStartTime(lifecycleSample), true);
+  lifecycleStartTime += 100;
+  timingEventSource.emit("response", { request: () => lifecycleRequest });
+  assert.equal(lifecycleSample.requestStartedAtMs, lifecycleStartTime - 100);
+  timingEventSource.emit("requestfinished", lifecycleRequest);
+  assert.equal(lifecycleSample.terminalEvent, "requestfinished");
+  assert.equal(lifecycleCapture.pendingNativeAuditCount(), 0);
+  assert.deepEqual([...countApiRequestsWithinWindow(
+    [lifecycleSample],
+    lifecycleSample.requestStartedAtMs - 1,
+    lifecycleSample.requestStartedAtMs + 1,
+  )], [["/api/lifecycle", 1]]);
+  assert.deepEqual(await waitForNativeRequestTimingDrain(lifecycleCapture, {
+    timeoutMs: 0,
+    pollMs: 1,
+  }), {
+    status: "drained",
+    timeoutMs: 0,
+    pendingSampleCount: 0,
+  });
+  assert.equal(detachLifecycleCapture(), true);
+  assert.equal(detachLifecycleCapture(), false);
+
+  let detachedStartTime = 1_787_673_384_000;
+  const detachedRequest = { timing: () => ({ startTime: detachedStartTime }) };
+  const detachedSample = {};
+  lifecycleCapture.track(detachedRequest, detachedSample, { nativeAudit: true });
+  timingEventSource.emit("response", { request: () => detachedRequest });
+  timingEventSource.emit("requestfinished", detachedRequest);
+  assert.equal(detachedSample.requestStartedAtMs, null);
+  assert.equal(detachedSample.terminalEvent, null);
+  assert.deepEqual(await waitForNativeRequestTimingDrain(lifecycleCapture, {
+    timeoutMs: 0,
+    pollMs: 1,
+  }), {
+    status: "timed-out",
+    timeoutMs: 0,
+    pendingSampleCount: 1,
+  });
+  detachedStartTime += 1;
+
+  const zeroTimingCapture = createResponseRequestTimingCapture();
+  const zeroTimingRequest = { timing: () => ({ startTime: 0 }) };
+  const zeroTimingSample = {};
+  zeroTimingCapture.track(zeroTimingRequest, zeroTimingSample, { nativeAudit: true });
+  assert.equal(zeroTimingCapture.captureAtResponse(zeroTimingRequest), true);
+  assert.equal(zeroTimingCapture.finalizeAtTerminal(zeroTimingRequest, "requestfinished"), true);
+  assert.equal(hasValidResponseRequestStartTime(zeroTimingSample), false);
+  assert.equal(zeroTimingSample.requestStartedAtMs, null);
+  assert.equal(zeroTimingSample.timingCapturedAt, NATIVE_REQUEST_TIMING_CAPTURE_EVENT);
+
+  const failedTimingCapture = createResponseRequestTimingCapture();
+  const failedTimingRequest = { timing: () => ({ startTime: 0 }) };
+  const failedTimingSample = {};
+  failedTimingCapture.track(failedTimingRequest, failedTimingSample, { nativeAudit: true });
+  assert.equal(failedTimingCapture.finalizeAtTerminal(failedTimingRequest, "requestfailed"), true);
+  assert.equal(failedTimingSample.terminalEvent, "requestfailed");
+  assert.equal(hasValidResponseRequestStartTime(failedTimingSample), false);
+  assert.equal(failedTimingCapture.pendingNativeAuditCount(), 0);
+
+  const failedAfterResponseCapture = createResponseRequestTimingCapture();
+  const failedAfterResponseRequest = { timing: () => ({ startTime: 1_787_673_385_000 }) };
+  const failedAfterResponseSample = {};
+  failedAfterResponseCapture.track(
+    failedAfterResponseRequest,
+    failedAfterResponseSample,
+    { nativeAudit: true },
+  );
+  assert.equal(failedAfterResponseCapture.captureAtResponse(failedAfterResponseRequest), true);
+  assert.equal(
+    failedAfterResponseCapture.finalizeAtTerminal(failedAfterResponseRequest, "requestfailed"),
+    true,
+  );
+  assert.equal(failedAfterResponseSample.requestStartedAtMs, 1_787_673_385_000);
+  assert.equal(failedAfterResponseSample.terminalEvent, "requestfailed");
+  assert.equal(
+    failedAfterResponseCapture.finalizeAtTerminal(failedAfterResponseRequest, "requestfailed"),
+    false,
+  );
+
+  const delayedDrainCapture = createResponseRequestTimingCapture();
+  const delayedDrainRequest = { timing: () => ({ startTime: 1_787_673_386_000 }) };
+  const delayedDrainSample = {};
+  delayedDrainCapture.track(delayedDrainRequest, delayedDrainSample, { nativeAudit: true });
+  setTimeout(() => {
+    delayedDrainCapture.captureAtResponse(delayedDrainRequest);
+    delayedDrainCapture.finalizeAtTerminal(delayedDrainRequest, "requestfinished");
+  }, 1);
+  assert.deepEqual(await waitForNativeRequestTimingDrain(delayedDrainCapture, {
+    timeoutMs: 100,
+    pollMs: 1,
+  }), {
+    status: "drained",
+    timeoutMs: 100,
+    pendingSampleCount: 0,
+  });
+  assert.equal(hasValidResponseRequestStartTime(delayedDrainSample), true);
+  assert.equal(delayedDrainSample.terminalEvent, "requestfinished");
+  const nativeSnapshots = [visibleNativeFixture, hiddenNativeFixture];
+  const matchedNativeState = await waitForNativeState(
+    async () => nativeSnapshots.shift(),
+    "hidden",
+    { timeoutMs: 10, pollMs: 1 },
+  );
+  assert.equal(matchedNativeState.matched, true);
+  assert.deepEqual(matchedNativeState.last, hiddenNativeFixture);
+  const timedOutNativeState = await waitForNativeState(
+    async () => visibleNativeFixture,
+    "hidden",
+    { timeoutMs: 0, pollMs: 1 },
+  );
+  assert.equal(timedOutNativeState.matched, false);
+  const windowCommands = [];
+  const fakeWindowSession = {
+    async send(method, params) {
+      windowCommands.push({ method, params });
+      if (method === "Browser.getWindowBounds") return { bounds: { windowState: "minimized" } };
+      return {};
+    },
+  };
+  assert.deepEqual(await setMeasuredWindowState(fakeWindowSession, 7, "minimized"), {
+    windowState: "minimized",
+  });
+  assert.deepEqual(windowCommands, [
+    {
+      method: "Browser.setWindowBounds",
+      params: { windowId: 7, bounds: { windowState: "minimized" } },
+    },
+    {
+      method: "Browser.getWindowBounds",
+      params: { windowId: 7 },
+    },
+  ]);
+  await assert.rejects(
+    setMeasuredWindowState({
+      async send(method) {
+        return method === "Browser.getWindowBounds" ? { bounds: { windowState: "normal" } } : {};
+      },
+    }, 7, "minimized"),
+    /did not become minimized/,
+  );
+  assert.equal(restorableWindowState({ windowState: "maximized" }), "maximized");
+  assert.throws(() => restorableWindowState({ windowState: "minimized" }), /no restorable visible original state/);
+  let invalidControllerDetached = false;
+  await assert.rejects(
+    createMeasuredWindowController({
+      async newCDPSession() {
+        return {
+          async send() {
+            return { windowId: 8, bounds: { windowState: "minimized" } };
+          },
+          async detach() {
+            invalidControllerDetached = true;
+          },
+        };
+      },
+    }, {}),
+    /restorable visible measured browser window state/,
+  );
+  assert.equal(invalidControllerDetached, true);
+
+  const runSuccessfulWindowLifecycle = async (originalState) => {
+    const requestedStates = [];
+    const armedAtMutation = [];
+    let detached = false;
+    let requestedState = originalState;
+    const controller = {
+      windowId: 9,
+      originalBounds: { windowState: originalState },
+      needsRestore: false,
+      session: {
+        async send(method, params) {
+          if (method === "Browser.setWindowBounds") {
+            requestedState = params.bounds.windowState;
+            requestedStates.push(requestedState);
+            armedAtMutation.push(controller.needsRestore);
+            return {};
+          }
+          if (method === "Browser.getWindowBounds") {
+            return { bounds: { windowState: requestedState } };
+          }
+          throw new Error(`Unexpected fixture CDP method: ${method}`);
+        },
+        async detach() {
+          detached = true;
+        },
+      },
+    };
+    const result = await withMeasuredWindowState(
+      controller,
+      "minimized",
+      async () => "fixture-complete",
+    );
+    return {
+      controller,
+      requestedStates,
+      armedAtMutation,
+      result,
+      isDetached: () => detached,
+    };
+  };
+  const maximizedLifecycle = await runSuccessfulWindowLifecycle("maximized");
+  await closeMeasuredWindowController(maximizedLifecycle.controller);
+  assert.deepEqual(maximizedLifecycle.requestedStates, ["minimized", "maximized"]);
+  assert.deepEqual(maximizedLifecycle.armedAtMutation, [true, true]);
+  assert.equal(maximizedLifecycle.result.value, "fixture-complete");
+  assert.equal(maximizedLifecycle.controller.needsRestore, false);
+  assert.equal(maximizedLifecycle.isDetached(), true);
+  const normalLifecycle = await runSuccessfulWindowLifecycle("normal");
+  assert.deepEqual(normalLifecycle.requestedStates, ["minimized", "normal"]);
+  const fullscreenLifecycle = await runSuccessfulWindowLifecycle("fullscreen");
+  assert.deepEqual(fullscreenLifecycle.requestedStates, ["minimized", "fullscreen"]);
+  assert.equal(fullscreenLifecycle.controller.needsRestore, false);
+
+  const verificationFailureStates = [];
+  let verificationRequestedState = "maximized";
+  const verificationFailureController = {
+    windowId: 10,
+    originalBounds: { windowState: "maximized" },
+    needsRestore: false,
+    session: {
+      async send(method, params) {
+        if (method === "Browser.setWindowBounds") {
+          verificationRequestedState = params.bounds.windowState;
+          verificationFailureStates.push(verificationRequestedState);
+          return {};
+        }
+        if (method === "Browser.getWindowBounds") {
+          return {
+            bounds: {
+              windowState: verificationRequestedState === "minimized"
+                ? "normal"
+                : verificationRequestedState,
+            },
+          };
+        }
+        throw new Error(`Unexpected fixture CDP method: ${method}`);
+      },
+    },
+  };
+  await assert.rejects(
+    withMeasuredWindowState(verificationFailureController, "minimized", async () => null),
+    /did not become minimized/,
+  );
+  assert.deepEqual(verificationFailureStates, ["minimized", "maximized"]);
+  assert.equal(verificationFailureController.needsRestore, false);
+
+  const operationFailureStates = [];
+  let operationRequestedState = "fullscreen";
+  const operationFailureController = {
+    windowId: 11,
+    originalBounds: { windowState: "fullscreen" },
+    needsRestore: false,
+    session: {
+      async send(method, params) {
+        if (method === "Browser.setWindowBounds") {
+          operationRequestedState = params.bounds.windowState;
+          operationFailureStates.push(operationRequestedState);
+          return {};
+        }
+        return { bounds: { windowState: operationRequestedState } };
+      },
+    },
+  };
+  await assert.rejects(
+    withMeasuredWindowState(operationFailureController, "minimized", async () => {
+      throw new Error("fixture operation failed");
+    }),
+    /fixture operation failed/,
+  );
+  assert.deepEqual(operationFailureStates, ["minimized", "fullscreen"]);
+  assert.equal(operationFailureController.needsRestore, false);
+
+  let restoreFailureRequestedState = "normal";
+  let restoreFailureDetached = false;
+  const restoreFailureController = {
+    windowId: 12,
+    originalBounds: { windowState: "maximized" },
+    needsRestore: false,
+    session: {
+      async send(method, params) {
+        if (method === "Browser.setWindowBounds") {
+          restoreFailureRequestedState = params.bounds.windowState;
+          return {};
+        }
+        return {
+          bounds: {
+            windowState: restoreFailureRequestedState === "maximized"
+              ? "normal"
+              : restoreFailureRequestedState,
+          },
+        };
+      },
+      async detach() {
+        restoreFailureDetached = true;
+      },
+    },
+  };
+  await assert.rejects(
+    withMeasuredWindowState(restoreFailureController, "minimized", async () => null),
+    /did not become maximized/,
+  );
+  assert.equal(restoreFailureController.needsRestore, true);
+  await assert.rejects(
+    closeMeasuredWindowController(restoreFailureController),
+    /did not become maximized/,
+  );
+  assert.equal(restoreFailureDetached, true);
   assert.deepEqual(createSimulatedAutoMineOverride(3, 1234), {
     phase: "running",
     progress: "Read-only performance simulation tick 3",
@@ -2726,7 +3590,7 @@ async function runSelfTest() {
   assert.equal(clusteredHeapApplicability.duration.memoryCoverage.finiteHeapWindowMs, 5 * 60_000);
   assert.equal(clusteredHeapApplicability.visibility.nativeBrowserBackground.timerCadenceMeasured, false);
   assert.equal(clusteredHeapApplicability.visibility.nativeBrowserBackground.measuredDurationMs, 0);
-  console.log(JSON.stringify({ status: "pass", cases: 87, schemaVersion: 4, maxDurationMs: MAX_DURATION_MS }));
+  console.log(JSON.stringify({ status: "pass", cases: 158, schemaVersion: 4, maxDurationMs: MAX_DURATION_MS }));
 }
 
 async function main() {

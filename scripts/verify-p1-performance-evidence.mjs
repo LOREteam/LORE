@@ -17,6 +17,9 @@ import {
   BUILD_OUTPUT_DIGEST_DOMAIN,
   createDualBuildBinding,
   MARKER_FILE_DIGEST_DOMAIN,
+  NATIVE_REQUEST_SAMPLE_LIMIT,
+  NATIVE_REQUEST_TIMING_CAPTURE_EVENT,
+  NATIVE_REQUEST_TIMING_DRAIN_TIMEOUT_MS,
   NATIVE_TIMER_HEARTBEAT_INTERVAL_MS,
   NATIVE_TIMER_HEARTBEAT_LIMIT,
   NATIVE_TIMER_HIDDEN_PHASE_MS,
@@ -403,11 +406,49 @@ function createPassingFixture() {
       },
       polling: {
         blockedExternalRequestCount: 0,
+        nativeHiddenRequestAccounting: {
+          status: "complete",
+          clock: "request.timing.startTime",
+          captureEvent: NATIVE_REQUEST_TIMING_CAPTURE_EVENT,
+          startMs: nativeAudit.phases["native-hidden"].timeOriginMs
+            + nativeAudit.phases["native-hidden"].startPerformanceMs,
+          endMs: nativeAudit.phases["native-hidden"].timeOriginMs
+            + nativeAudit.phases["native-hidden"].endPerformanceMs,
+          capturedSampleCount: 2,
+          qualifyingSampleCount: 2,
+          samplesTruncated: false,
+          missingStartTime: false,
+          missingStartTimeSampleCount: 0,
+          unresolvedSampleCount: 0,
+          failedSampleCount: 0,
+          drain: {
+            status: "drained",
+            timeoutMs: NATIVE_REQUEST_TIMING_DRAIN_TIMEOUT_MS,
+            pendingSampleCount: 0,
+          },
+          samples: [
+            {
+              pathname: "/api/game-data",
+              requestStartedAtMs: nativeAudit.phases["native-hidden"].timeOriginMs
+                + nativeAudit.phases["native-hidden"].startPerformanceMs + 1_000,
+              timingCapturedAt: NATIVE_REQUEST_TIMING_CAPTURE_EVENT,
+              terminalEvent: "requestfinished",
+            },
+            {
+              pathname: "/api/game-data",
+              requestStartedAtMs: nativeAudit.phases["native-hidden"].timeOriginMs
+                + nativeAudit.phases["native-hidden"].startPerformanceMs + 2_000,
+              timingCapturedAt: NATIVE_REQUEST_TIMING_CAPTURE_EVENT,
+              terminalEvent: "requestfinished",
+            },
+          ],
+        },
         phases: {
           "native-hidden": {
             requestedMs: NATIVE_TIMER_HIDDEN_PHASE_MS,
             actualMs: NATIVE_TIMER_HIDDEN_PHASE_MS,
             total: 2,
+            perMinute: 1.33,
             byPath: { "/api/game-data": 2 },
           },
           "simulated-auto-miner": { actualMs: 120_000, total: 4, byPath: { "/api/game-data": 4 } },
@@ -505,12 +546,49 @@ async function runSelfTest() {
   const passing = createPassingFixture();
   assert.deepEqual(assessStrictPerformanceEvidence(passing).failures, []);
   cases += 1;
+
+  const setOutsideWindowRawCohort = (fixture, sampleCount) => {
+    const accounting = fixture.runtime.polling.nativeHiddenRequestAccounting;
+    accounting.samples = Array.from({ length: sampleCount }, () => ({
+      pathname: "/api/game-data",
+      requestStartedAtMs: accounting.startMs - 1,
+      timingCapturedAt: NATIVE_REQUEST_TIMING_CAPTURE_EVENT,
+      terminalEvent: "requestfinished",
+    }));
+    accounting.capturedSampleCount = sampleCount;
+    accounting.qualifyingSampleCount = 0;
+    accounting.samplesTruncated = false;
+    accounting.missingStartTime = false;
+    accounting.missingStartTimeSampleCount = 0;
+    accounting.unresolvedSampleCount = 0;
+    accounting.failedSampleCount = 0;
+    fixture.runtime.polling.phases["native-hidden"].total = 0;
+    fixture.runtime.polling.phases["native-hidden"].perMinute = 0;
+    fixture.runtime.polling.phases["native-hidden"].byPath = {};
+    fixture.runtime.visibility.coverage.nativeBrowserBackground.apiRequestCount = 0;
+    fixture.runtime.visibility.coverage.nativeBrowserBackground.apiPollingObserved = false;
+  };
+
   const zeroApiPollPassing = createPassingFixture();
-  zeroApiPollPassing.runtime.polling.phases["native-hidden"].total = 0;
-  zeroApiPollPassing.runtime.polling.phases["native-hidden"].byPath = {};
-  zeroApiPollPassing.runtime.visibility.coverage.nativeBrowserBackground.apiRequestCount = 0;
-  zeroApiPollPassing.runtime.visibility.coverage.nativeBrowserBackground.apiPollingObserved = false;
+  setOutsideWindowRawCohort(zeroApiPollPassing, 2);
   assert.deepEqual(assessStrictPerformanceEvidence(zeroApiPollPassing).failures, []);
+  cases += 1;
+
+  const exactLimitRawCohortPassing = createPassingFixture();
+  setOutsideWindowRawCohort(exactLimitRawCohortPassing, NATIVE_REQUEST_SAMPLE_LIMIT);
+  assert.deepEqual(assessStrictPerformanceEvidence(exactLimitRawCohortPassing).failures, []);
+  cases += 1;
+
+  const halfOpenBoundaryPassing = createPassingFixture();
+  const halfOpenAccounting = halfOpenBoundaryPassing.runtime.polling.nativeHiddenRequestAccounting;
+  halfOpenAccounting.samples[0].requestStartedAtMs = halfOpenAccounting.startMs;
+  halfOpenAccounting.samples[1].requestStartedAtMs = halfOpenAccounting.endMs;
+  halfOpenAccounting.qualifyingSampleCount = 1;
+  halfOpenBoundaryPassing.runtime.polling.phases["native-hidden"].total = 1;
+  halfOpenBoundaryPassing.runtime.polling.phases["native-hidden"].perMinute = 0.67;
+  halfOpenBoundaryPassing.runtime.polling.phases["native-hidden"].byPath = { "/api/game-data": 1 };
+  halfOpenBoundaryPassing.runtime.visibility.coverage.nativeBrowserBackground.apiRequestCount = 1;
+  assert.deepEqual(assessStrictPerformanceEvidence(halfOpenBoundaryPassing).failures, []);
   cases += 1;
 
   const expectFailure = (code, mutate) => {
@@ -642,6 +720,115 @@ async function runSelfTest() {
   expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
     fixture.runtime.polling.phases["native-hidden"].total = 0;
     fixture.runtime.polling.phases["native-hidden"].byPath = {};
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    delete fixture.runtime.polling.nativeHiddenRequestAccounting;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.status = "incomplete";
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.clock = "Date.now";
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.captureEvent = "route-interception";
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.startMs += 1;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.endMs += 1;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.samplesTruncated = true;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.missingStartTime = true;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.missingStartTimeSampleCount = 1;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.unresolvedSampleCount = 1;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.failedSampleCount = 1;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.drain.status = "timed-out";
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.drain.timeoutMs += 1;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.drain.pendingSampleCount = 1;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.qualifyingSampleCount = 1;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.capturedSampleCount = 1;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.capturedSampleCount = 3;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.capturedSampleCount =
+      NATIVE_REQUEST_SAMPLE_LIMIT + 1;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    setOutsideWindowRawCohort(fixture, NATIVE_REQUEST_SAMPLE_LIMIT + 1);
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.phases["native-hidden"].byPath = { "/api/other": 2 };
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.samples[0].requestStartedAtMs =
+      fixture.runtime.polling.nativeHiddenRequestAccounting.startMs - 1;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.samples[0].requestStartedAtMs = 0;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.samples[0].requestStartedAtMs = -1;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.samples[0].requestStartedAtMs = Number.NaN;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.samples[0].requestStartedAtMs = Number.POSITIVE_INFINITY;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.samples[0].timingCapturedAt =
+      "route-interception";
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.samples[0].terminalEvent =
+      "requestfailed";
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.samples[0].terminalEvent = null;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.samples[0].terminalEvent =
+      "unexpected-terminal";
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    const accounting = fixture.runtime.polling.nativeHiddenRequestAccounting;
+    accounting.qualifyingSampleCount = 0;
+    accounting.samples = [];
+    fixture.runtime.polling.phases["native-hidden"].total = 0;
+    fixture.runtime.polling.phases["native-hidden"].perMinute = 0;
+    fixture.runtime.polling.phases["native-hidden"].byPath = {};
+    fixture.runtime.visibility.coverage.nativeBrowserBackground.apiRequestCount = 0;
+    fixture.runtime.visibility.coverage.nativeBrowserBackground.apiPollingObserved = false;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.nativeHiddenRequestAccounting.samples[0].requestStartedAtMs =
+      fixture.runtime.polling.nativeHiddenRequestAccounting.endMs;
+  });
+  expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
+    fixture.runtime.polling.phases["native-hidden"].perMinute = 99;
   });
   expectFailure("runtime.visibility.native-hidden-continuous", (fixture) => {
     delete fixture.runtime.visibility.nativeAudit;

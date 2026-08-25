@@ -240,7 +240,7 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
     Collector passes `87/87`; verifier passes `85/85` and rejects broken
     continuity, weak controls, hidden Long Task saturation,
     unthrottled/frozen cadence, truncation, API request-count mismatches, and
-    summary tampering. Zero requests remain a truthful count rather than an
+    internally inconsistent summary changes. Zero requests remain a truthful count rather than an
     observed-polling claim. These are mechanism self-tests, not browser evidence.
 36. Privy `3.27.2`'s `Submit` and 24x24 controls are already formally accepted
     as an upstream-only exception. The focused app-owned accessibility boundary
@@ -593,6 +593,30 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
     sinks, or live-write helpers, with no equivalent safe public behavior seam
     that avoids simulating risky signing. Focused fee-policy x2, audit x2,
     self-test, syntax, diff, and protected-DB checks pass.
+78. The P1.17 headed harness now minimizes and restores the measured top-level
+    Chromium window through a page-scoped CDP session, verifies the reported
+    window state, polls only raw native visibility, records bounded diagnostic
+    actuation telemetry, and restores the original window state before detach.
+    Mutation-success/readback-failure, action-failure, `maximized`/`fullscreen`
+    restore, controller-detach, and exact request-start window paths are covered.
+    Collector self-test `158/158`, verifier self-test `119/119`, syntax, and
+    diff hygiene pass. API requests are registered before fulfillment, but
+    their start time is accepted only after BrowserContext `response`; the
+    bounded raw cohort retains terminal outcome and is drained before sealing.
+    Strict validation independently recomputes the exact half-open hidden
+    subset and rejects pre-response zero, missing, failed, unresolved,
+    wrong-clock, shifted-window, overflow, truncation, or internally
+    inconsistent accounting. It validates the recorded drain and terminal
+    state; an unsigned artifact cannot independently prove that a coherent
+    producer-side rewrite never occurred. The latest 60-second loopback
+    diagnostic confirmed `minimized`, waited `3019ms`
+    without raw hidden, restored the original `normal` state, and re-observed
+    raw visible after `5ms`. Its raw request cohort was exact `8/8`: every
+    timestamp was positive and response-captured, every terminal event was
+    `requestfinished`, and the drain ended at zero with no missing, unresolved,
+    failed, or truncated entry. Because no hidden window existed, accounting
+    correctly stayed `not-measured` and no qualifying polling count is claimed. Thus
+    no native-hidden, throttling, two-hour, or final-SHA claim is made.
 
 ## Pre-document verification snapshot
 
@@ -607,8 +631,8 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   `artifacts/smoke-browser/sha7905-current-readonly.png`; it did not create a
   wallet, sign, approve, bet, claim, or send a transaction. It is not launch,
   hosted, or live-wallet proof.
-- P1.17 self-tests passed again on the current working tree: collector `87/87`
-  (schema `4`, maximum duration `7200000`) and verifier `85/85` (schema `4`).
+- P1.17 self-tests passed again on the current working tree: collector `158/158`
+  (schema `4`, maximum duration `7200000`) and verifier `119/119` (schema `4`).
   They do not replace the final immutable clean-SHA seal pair, headed
   native-hidden two-hour run, browser evidence, or strict verification.
 
@@ -697,20 +721,27 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   scan, and hosted CI cycle is open; the dirty working tree invalidates older
   final-SHA/sealed claims.
 - The user has granted local-commit authority. Stage only the exact current
-  13-path manifest after its zero-omission audit; historical 74/318/320 scopes
+  7-path manifest after its zero-omission audit; historical 74/318/320 scopes
   do not widen that staging boundary or authorize external actions.
 - P1.17 needs a final canonical/profile sealed pair and a real physical
   native-hidden two-hour loopback run.
 - A new local campaign and supported security scan are blocked by disk and/or
   entitlement, not by a false green claim.
 
-- P1.17's headed native-visibility witness now runs in a separate temporary
-  Chromium process. A same-window Playwright tab did not cause native page
-  visibility to become `hidden` on this Windows host, so it was not a valid
-  backgrounding test. The new witness is no-network and uses a temporary
-  profile; collector self-test `87/87`, syntax, and diff hygiene pass. No
-  native-hidden, timer-throttling, two-hour, or final-SHA claim follows from
-  this harness-only change.
+- P1.17's separate temporary Chromium witness remains a visible control. The
+  measured top-level window is now explicitly minimized/restored through CDP,
+  with a three-second raw-state transition bound, exact original-state restore,
+  fail-closed readback, and request-start timestamps bounded to the exact raw
+  hidden snapshot window. Transition labels cannot exclude or admit a request
+  outside that window. On this Windows
+  session CDP reported `minimized`, timed out after `3019ms` without raw hidden,
+  restored the original `normal` state, and re-observed raw visible after `5ms`;
+  collector self-test `158/158`, syntax, and diff hygiene pass. API request
+  timestamps are hydrated only on BrowserContext `response`, then the full
+  bounded cohort is terminal-drained and independently reclassified by its
+  exact start time. Actuation fields
+  are diagnostic telemetry rather than independently strict-attested evidence. No native-hidden,
+  timer-throttling, two-hour, or final-SHA claim follows from this diagnostic.
 
 - Exact SHA `333d7a81bb8780c5fc631646492ece53bbfa3926` now has a fresh detached
   `npm ci` evidence packet: TypeScript, P1 hardening `41/41` in `302424ms`,

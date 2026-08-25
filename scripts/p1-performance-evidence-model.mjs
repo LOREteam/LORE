@@ -18,6 +18,9 @@ export const NATIVE_TIMER_HIDDEN_WARMUP_MS = 30_000;
 export const NATIVE_TIMER_HEARTBEAT_LIMIT = 4_096;
 export const NATIVE_TIMER_TRANSITION_LIMIT = 128;
 export const NATIVE_TIMER_LONG_TASK_LIMIT = 2_048;
+export const NATIVE_REQUEST_SAMPLE_LIMIT = 20_000;
+export const NATIVE_REQUEST_TIMING_CAPTURE_EVENT = "browser-context-response";
+export const NATIVE_REQUEST_TIMING_DRAIN_TIMEOUT_MS = 5_000;
 
 const CLEAN_PORCELAIN_DIGEST_SHA256 = createHash("sha256").update("", "utf8").digest("hex");
 const FULL_SHA_PATTERN = /^[a-f0-9]{40}$/;
@@ -1019,8 +1022,43 @@ function validateNativeHiddenEvidence(runtime) {
   const nativeSnapshot = visibility?.nativeWhileBackgrounded;
   const hidden = visibility?.coverage?.nativeBrowserBackground;
   const phase = runtime?.polling?.phases?.["native-hidden"];
+  const requestAccounting = runtime?.polling?.nativeHiddenRequestAccounting;
+  const capturedRequestSamples = requestAccounting?.samples;
   const auditHiddenPhase = visibility?.nativeAudit?.phases?.["native-hidden"];
   const analysis = analyzeNativeBackgroundAudit(visibility?.nativeAudit);
+  const expectedRequestWindowStartMs = auditHiddenPhase?.timeOriginMs
+    + auditHiddenPhase?.startPerformanceMs;
+  const expectedRequestWindowEndMs = auditHiddenPhase?.timeOriginMs
+    + auditHiddenPhase?.endPerformanceMs;
+  const requestCounts = new Map();
+  const capturedRequestSamplesValid = Array.isArray(capturedRequestSamples)
+    && capturedRequestSamples.every((sample) => {
+      if (!isRecord(sample)
+        || typeof sample.pathname !== "string"
+        || !sample.pathname.startsWith("/api/")
+        || !Number.isFinite(sample.requestStartedAtMs)
+        || sample.requestStartedAtMs <= 0
+        || sample.timingCapturedAt !== NATIVE_REQUEST_TIMING_CAPTURE_EVENT
+        || sample.terminalEvent !== "requestfinished") {
+        return false;
+      }
+      return true;
+    });
+  const qualifyingRequestSamples = capturedRequestSamplesValid
+    ? capturedRequestSamples.filter((sample) =>
+        sample.requestStartedAtMs >= expectedRequestWindowStartMs
+        && sample.requestStartedAtMs < expectedRequestWindowEndMs)
+    : [];
+  for (const sample of qualifyingRequestSamples) {
+    requestCounts.set(sample.pathname, (requestCounts.get(sample.pathname) ?? 0) + 1);
+  }
+  const requestCountsMatchPhase = capturedRequestSamplesValid
+    && isRecord(phase?.byPath)
+    && requestCounts.size === Object.keys(phase.byPath).length
+    && [...requestCounts].every(([pathname, count]) => phase.byPath[pathname] === count);
+  const expectedPhasePerMinute = phase?.actualMs > 0
+    ? Math.round((phase.total * 60_000 / phase.actualMs) * 100) / 100
+    : null;
   return isRecord(safety)
     && safety.browserMode === "headed-native-hidden"
     && safety.headlessTemporaryProfile === false
@@ -1049,8 +1087,34 @@ function validateNativeHiddenEvidence(runtime) {
     && phase.actualMs === hidden.measuredDurationMs
     && phase.actualMs === auditHiddenPhase.controllerDurationMs
     && phase.actualMs >= NATIVE_TIMER_HIDDEN_PHASE_MS
+    && isRecord(requestAccounting)
+    && requestAccounting.status === "complete"
+    && requestAccounting.clock === "request.timing.startTime"
+    && requestAccounting.captureEvent === NATIVE_REQUEST_TIMING_CAPTURE_EVENT
+    && requestAccounting.startMs === expectedRequestWindowStartMs
+    && requestAccounting.endMs === expectedRequestWindowEndMs
+    && requestAccounting.endMs > requestAccounting.startMs
+    && Array.isArray(capturedRequestSamples)
+    && Number.isInteger(requestAccounting.capturedSampleCount)
+    && requestAccounting.capturedSampleCount === capturedRequestSamples.length
+    && requestAccounting.capturedSampleCount <= NATIVE_REQUEST_SAMPLE_LIMIT
+    && Number.isInteger(requestAccounting.qualifyingSampleCount)
+    && requestAccounting.qualifyingSampleCount === qualifyingRequestSamples.length
+    && requestAccounting.samplesTruncated === false
+    && requestAccounting.missingStartTime === false
+    && requestAccounting.missingStartTimeSampleCount === 0
+    && requestAccounting.unresolvedSampleCount === 0
+    && requestAccounting.failedSampleCount === 0
+    && isRecord(requestAccounting.drain)
+    && requestAccounting.drain.status === "drained"
+    && requestAccounting.drain.timeoutMs === NATIVE_REQUEST_TIMING_DRAIN_TIMEOUT_MS
+    && requestAccounting.drain.pendingSampleCount === 0
+    && capturedRequestSamplesValid
+    && requestCountsMatchPhase
     && Number.isInteger(phase.total)
     && phase.total >= 0
+    && phase.total === qualifyingRequestSamples.length
+    && phase.perMinute === expectedPhasePerMinute
     && isRecord(phase.byPath)
     && Object.keys(phase.byPath).every((pathname) => pathname.startsWith("/api/"))
     && Object.values(phase.byPath).every((count) => Number.isInteger(count) && count > 0)

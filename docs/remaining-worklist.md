@@ -232,21 +232,34 @@ under [`docs/archive/`](archive/).
 ### P1.17 sealed performance evidence
 
 - [x] Dual canonical/profiling provenance mechanism is implemented; current
-      working-tree self-tests pass collector `87/87` (schema `4`, maximum
-      duration `7200000`) and verifier `85/85` (schema `4`). A single raw
+      working-tree self-tests pass collector `158/158` (schema `4`, maximum
+      duration `7200000`) and verifier `119/119` (schema `4`). A single raw
       page-timer chain now spans visible control, 90s native-hidden, and visible
       recovery phases; strict verification independently rejects broken hidden
       continuity, unhealthy controls, missing/forbidden Chromium switch
       evidence, hidden Long Task saturation, unthrottled/frozen cadence,
-      truncation, API request-count mismatch, and summary tampering. A measured
+      truncation, API request-count mismatch, and internally inconsistent
+      summary changes. A measured
       zero hidden request count is kept distinct from observed polling.
-- [x] Separate the headed native-visibility witness into its own temporary
-      Chromium process. Switching a Playwright tab in the measured browser did
-      not change native visibility on this Windows host, so it could not prove
-      backgrounding. The collector now foregrounds a no-network witness window
-      without overriding the measured page's visibility API; syntax, diff
-      hygiene, and collector self-test `87/87` pass. This is a harness repair,
-      not native-hidden or timer-throttling evidence.
+- [x] Keep the headed native-visibility witness in its own temporary Chromium
+      process, and actuate the measured top-level window through page-scoped
+      CDP `minimized` plus exact original-state commands with readback, three-
+      second raw-state polling, and fail-closed restore/detach. Qualifying hidden
+      polling is counted by exact request-start timestamps hydrated only after
+      BrowserContext `response`. The full bounded raw cohort is terminal-drained
+      before sealing; strict verification recomputes the half-open subset and
+      rejects pre-response zero, failed/unresolved lifecycle, wrong bounds,
+      overflow, truncation, or internally inconsistent accounting. It validates
+      recorded drain/terminal fields but cannot prove absence of a coherent
+      rewrite of an unsigned producer artifact. Actuation fields remain
+      diagnostic-only telemetry. Collector self-test `158/158` passes. The
+      latest 60-second diagnostic received `minimized`, timed out after `3019ms`
+      without raw hidden, restored the original `normal` state, and re-observed
+      raw visible after `5ms`. Its raw request cohort was exact `8/8`, with
+      positive response timestamps, finished terminals, a zero pending drain,
+      and no invalid/truncated entry. Hidden accounting stayed `not-measured`;
+      this is host/session capability evidence, not native-hidden or timer-
+      throttling proof.
 - [ ] On the final immutable clean SHA, seal the canonical/profile pair, run
       the 60–90 second headed native-hidden preflight, then one two-hour
       read-only loopback collection and strict verification. No current
