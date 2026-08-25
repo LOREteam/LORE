@@ -9,11 +9,12 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Continuation point
 
 - The current tested code baseline and parent of this documentation-only packet
-  is `b53489ededdcfdda694ccb6f5a64655d7d9a5ca2`. It commits the exact five-path
-  HTTPS/REST Valkey keeper parity extension; its clean-HEAD npm rerun binds all
-  relevant blobs to that SHA with stable startup-to-finish provenance, exact
-  owned cleanup, and unchanged post-incident protected base/WAL/SHM identity.
-  Parent `e448e4f` documents the earlier rate-limit-only commit. Retained
+  is `9ce4e5ca9809cda7b856603e2f51e1200b0f7735`. It commits the exact one-path
+  HTTPS/REST Valkey session-rotation extension. Its retained clean-HEAD run on
+  Node `24.5.0` binds all seven executed paths to that SHA, keeps the tracked
+  worktree clean and stable through cleanup, acknowledges graceful DB close and
+  replica exit, removes every owned Docker resource, and preserves the protected
+  base/WAL/SHM identity. Parent `b53489ed` is the keeper packet; retained
   generated artifact directories stay excluded.
 - Earlier security-reviewed baseline `3c8886acc1fa33045aa7bcc1d03bab9fa84fd09b` closes the
   final deposits-recovery transport bound found by targeted security review:
@@ -663,6 +664,22 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
     startup-to-finish provenance, and exact source revision `b53489ed...`.
     Session HTTPS, deployed/provider topology, persistence, and restore remain
     open.
+82. Commit `9ce4e5ca9809cda7b856603e2f51e1200b0f7735` extends that same topology
+    through public `issueAdminSession`, `readAdminSession`, and
+    `rotateAdminSession` seams. Two Windows Node `24.5.0` processes share one
+    digest-pinned Valkey `8.1.9` keyspace behind verified Caddy TLS/SNI and SRH.
+    Concurrent rotation yields exactly one CAS winner; both replicas accept the
+    new cookie and reject the old one for authenticated reads; an explicit stale
+    rotation and wrong-Bearer rotation preserve the exact active record and
+    absolute deadline. The final code has syntax, targeted ESLint, two exact-Node
+    focused passes, the existing admin-session security test, direct three-script
+    Lua regression, diff hygiene, exact Docker/temp cleanup, and protected-DB
+    invariants. Independent review narrowed claims to rotation CAS and required
+    seven source bindings, host/container platform separation, post-cleanup
+    provenance, explicit hosted/browser exclusions, and graceful DB-close ack;
+    each correction is present in the retained clean-HEAD artifact. Hosted route
+    and browser cookie enforcement, deployed/provider topology, persistence,
+    restore, indexer/bot/monitor, and cross-host behavior remain open.
 
 ## Pre-document verification snapshot
 
@@ -752,18 +769,19 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 - The current Preview/consent implementation packet is locally complete; only
   its live campaign, external topology, and authorization evidence remain open.
 - Direct execution now covers all three exact production Lua programs on
-  pinned Valkey `8.1.9`. The new local parity harness also executes the real
-  `consumeExternalRateLimit` and `reserveExternalKeeperDailyBudget` from two
-  independent Node processes through
+  pinned Valkey `8.1.9`. The local parity harness also executes the real
+  `consumeExternalRateLimit`, `reserveExternalKeeperDailyBudget`, and public
+  admin-session issue/read/rotation seams from two independent Node processes through
   verified Caddy TLS/SNI and a digest-pinned SRH image selected from tag
   `0.0.10` into the same Valkey keyspace. The latest retained clean-HEAD run at
-  `b53489ededdcfdda694ccb6f5a64655d7d9a5ca2` passes rate limiting plus keeper
+  `9ce4e5ca9809cda7b856603e2f51e1200b0f7735` passes rate limiting plus keeper
   replay/conflict, atomic cost/signature caps,
   server-time TTL/day-reset, malformed-state and wrong-Bearer refusal, exact
   cleanup, and post-incident base/WAL/SHM pre/post identity. It reports
-  `allRelevantFilesBoundToRevision=true`, `trackedWorktreeClean=true`, and exact
-  source-SHA binding. Session HTTPS, deployed replicas/provider, persistent
-  external DB, and restore remain open.
+  `allRelevantFilesBoundToRevision=true`, `trackedWorktreeClean=true`, stable
+  provenance through cleanup, exact source-SHA binding, and graceful replica DB
+  close/exit. Hosted route/browser cookie enforcement, deployed replicas/provider,
+  persistent external DB, and restore remain open.
 - Header balance provenance now carries wagmi fetching/error/stale/updated-at metadata:
   a known balance remains visible on refresh, stale data, or RPC error, and the card
   exposes an explicit state plus any trusted last-updated timestamp. It does not infer

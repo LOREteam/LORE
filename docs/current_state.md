@@ -10,14 +10,16 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- The current tested code baseline and parent of this documentation-only commit
-  is `cbf916739f6a55682da0af69e5463cec1fec3581`. It commits the exact five-path
-  local HTTPS/REST Valkey rate-limit parity packet after
-  the retained clean-HEAD run, direct Lua-engine regression, exact manifest,
-  post-incident protected base/WAL/SHM invariants, and independent `CLEAN`
-  review. Its `39f68888`
-  parent commits mobile-mining Package B. These are immutable local baselines,
-  not the final clean-SHA release seal.
+- The current tested code baseline is
+  `9ce4e5ca9809cda7b856603e2f51e1200b0f7735`. Its exact one-path commit adds
+  the public `rotateAdminSession` application path to the existing local
+  HTTPS/REST Valkey harness without changing production code. A retained
+  clean-HEAD run on Node `24.5.0` reports all seven executed source paths bound
+  to that SHA, a clean tracked worktree, stable provenance through cleanup,
+  graceful SQLite close/replica exit, exact owned Docker cleanup, and unchanged
+  protected base/WAL/SHM identity. Parent `b53489ed` is the keeper extension;
+  `cbf916739` is the earlier rate-limit packet. These are immutable local
+  partial-parity baselines, not the final release seal.
 - Latest fully detached broad local-gate baseline: `333d7a81bb8780c5fc631646492ece53bbfa3926`
   (`test: cover bounded deposits recovery transport`). Its `3c8886acc` parent
   provides bounded shared admission/lease hardening and one 20-second,
@@ -43,10 +45,10 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   The prior authorized 74-path packet and its later corrective packets are
   committed, including the seven-path P1.17 packet at `a5ff9f595`, both
   mobile-mining packages at `aaf515d20` and `39f68888`, and local HTTPS/REST
-  Valkey parity at `cbf916739`. The current five-path expected staging packet is
+  Valkey parity through session rotation at `9ce4e5ca9`. The current five-path expected staging packet is
   documentation-only: four current Valkey/worklist/state documents plus the
   self-excluded manifest. The manifest describes the proposed amended index
-  relative to parent `cbf916739`; the user-granted local commit authority does
+  relative to parent `9ce4e5ca9`; the user-granted local commit authority does
   not widen that exact boundary.
 - A disposable detached checkout of the current code mirror completed fresh
   local composite gates with exit `0`: lint, isolated business, P1 hardening,
@@ -284,8 +286,8 @@ replacement needs another separately reviewed plan and exact approval.
 | Latest P1.10 Retry-After seam | The existing rate-limit boundary now directly proves zero clamps to one second, fractional values round up, and values above a day clamp to `86400`; the redundant implementation-regex assertion is removed. Focused x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Local test-only progress; partial and uncommitted |
 | Latest P1.10 OpenGraph query seam | The real API matrix renders the same canonical jackpot event with malicious `amount`, `kind`, `tile`, and `epoch` inputs and proves an identical PNG. The redundant static URL-parameter assertion is removed. Public-presentation and API-matrix runners x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Local test-only progress; partial and uncommitted |
 | Transactional-ledger design | [`transactional-ledgers-design.md`](transactional-ledgers-design.md) specifies the external transactional consent state machine, idempotent intent/outbox/reconciliation protocol, immutable audit chain, and canonical activity/reorg model. It is an unimplemented design: no external PostgreSQL-compatible store, cross-host writer, migration, or restore evidence exists. | Design complete; implementation and external verification remain open |
-| Valkey Lua-engine check | [`valkey-upstash-parity-plan.md`](valkey-upstash-parity-plan.md) records direct Valkey `8.1.9` `linux/amd64` execution against the pinned OCI-index digest. The isolated, no-network, no-host-port, read-only, non-persistent container passed the exact rate-limit, keeper-budget, and session-rotation scripts; the redacted artifact records script hashes only. | Partial engine evidence; rate-limit and keeper now have clean-HEAD local HTTPS coverage, while session HTTPS, durable external DB, and restore remain open |
-| Valkey HTTPS rate-limit/keeper parity | The self-spawning harness executes the real `consumeExternalRateLimit` and `reserveExternalKeeperDailyBudget` from two independent Node processes through verified Caddy TLS/SNI, a digest-pinned SRH image selected from tag `0.0.10` (no self-reported runtime version), and pinned Valkey `8.1.9`. Rate limiting passes `allowed, allowed, blocked`. Keeper passes shared reservation totals, cross-process replay, conflict without mutation, atomic cost/signature caps, tightened-policy refusal, server `TIME` plus absolute `PEXPIRETIME` at the next UTC midnight, replay/error deadline preservation, prior-day state reset, malformed-state refusal without mutation, and wrong-Bearer fail-closed without state. Valkey/SRH publish no host ports; exact owned cleanup and post-incident protected base/WAL/SHM identity pass. The retained post-commit artifact reports all relevant blobs bound to exact SHA `b53489ededdcfdda694ccb6f5a64655d7d9a5ca2`, stable startup-to-finish provenance, and a clean tracked worktree. | Committed honest local partial proof; session HTTPS, deployed replicas/provider, persistence, and restore remain open |
+| Valkey Lua-engine check | [`valkey-upstash-parity-plan.md`](valkey-upstash-parity-plan.md) records direct Valkey `8.1.9` `linux/amd64` execution against the pinned OCI-index digest. The isolated, no-network, no-host-port, read-only, non-persistent container passed the exact rate-limit, keeper-budget, and session-rotation scripts; the redacted artifact records script hashes only. | Partial engine evidence; all three scripts now also have clean-HEAD local application-path HTTPS coverage, while durable external DB, restore, and deployed-provider evidence remain open |
+| Valkey HTTPS rate-limit/keeper/session parity | The self-spawning harness executes the real `consumeExternalRateLimit`, `reserveExternalKeeperDailyBudget`, `issueAdminSession`, `readAdminSession`, and `rotateAdminSession` seams from two independent Windows Node `24.5.0` processes through verified Caddy TLS/SNI, a digest-pinned SRH image selected from tag `0.0.10` (no self-reported runtime version), and pinned Valkey `8.1.9`. In addition to the rate-limit and keeper matrix, concurrent session rotation has exactly one CAS winner, both replicas read one shared active identity, the old cookie is rejected for authenticated reads, stale rotation preserves the exact record/deadline, and wrong Bearer fails without state mutation. The claim is intentionally limited to rotation CAS; it is not broad session-replay or hosted-route/browser proof. Valkey/SRH publish no host ports. The retained artifact SHA-256 is `5A6326429ECD7DE768837A9B9AF4AFAE2EEF53745DA4FAE91223301193972BDE` and reports seven relevant blobs bound to exact SHA `9ce4e5ca9809cda7b856603e2f51e1200b0f7735`, clean tracked state, stable provenance through cleanup, graceful replica DB close/exit, exact owned cleanup, and unchanged protected base/WAL/SHM identity. | Committed honest local partial proof; hosted route/browser cookie behavior, deployed replicas/provider, persistence, and restore remain open |
 | V10 Preview/consent | Preview environment `30/30`, canonical envelope `9/9`, analyzer `10/10`, one-shot store `10/10`, runtime enforcement `2/2`, fee policy, the full release-operations runner, TypeScript, targeted syntax checks, and diff hygiene passed on the verified isolated Node `24.5.0` / npm `11.5.1` runtime. No actual Preview was generated because the tree is dirty and exact public runtime configuration was not confirmed; `authorizationReady` and all live actions remain false. | Local implementation pass only; no live authorization or campaign evidence |
 | P1.17 mechanism | Self-tests pass on the current working tree: collector `158/158` (schema `4`, maximum duration `7200000`) and verifier `119/119` (schema `4`). The headed path controls the measured top-level window through page-scoped CDP, rejects unknown/minimized initial state before mutation, arms restore before the mutating command, verifies `minimized` and exact original-state readback, and restores before detach even after action/readback failure. Every routed API request is registered before fulfillment, but its epoch start is accepted only from the later BrowserContext `response` event; pre-response `0`, failure, unresolved terminal state, overflow, or drain timeout fails closed. The bounded raw cohort includes visible-control and hidden candidates. Strict verification independently recomputes the exact half-open hidden subset, path totals, rate, and cap/count parity, and validates the declared response lifecycle, terminal outcomes, and zero-pending drain. It cannot independently detect a coherent rewrite of an unsigned producer artifact, so claims are limited to internal consistency plus exact clean-SHA provenance. Raw state polling is bounded to three seconds. Actuation fields are diagnostic telemetry, while the existing strict raw `setInterval(100)` chain, trusted transition, witness, Long Task, polling, cadence, and internal-consistency checks remain authoritative. No synthetic visibility event can satisfy the native gate. | Local harness correction only; final clean-SHA native-hidden/timer evidence and the two-hour strict run remain open |
 | P1.17 native witness | The latest 60-second loopback diagnostic accepted CDP `minimized`, waited `3019ms` without raw hidden, restored the exact original `normal` state, and re-observed raw visible after `5ms`. Its full raw request cohort was `8/8`, with positive response-captured epoch starts, eight `requestfinished` terminals, zero pending drain, and no missing/failed/unresolved/truncated entry. Native hidden remained `false`, so request accounting and timer status correctly stayed `not-measured`; report/runtime remained `partial`/`measured-partial`, and no hidden polling count is claimed. The separate temporary witness stayed a control rather than the actuator. The two-hour run was not started. | Current host/session cannot provide qualifying native-hidden evidence; repeat only on an interactive browser session that produces raw trusted transitions |
@@ -331,10 +333,10 @@ replacement needs another separately reviewed plan and exact approval.
   campaign as final evidence.
 - Direct engine execution covers all three production Lua programs on pinned
   Valkey `8.1.9` / Linux AMD64. A separate local harness now covers the real
-  rate-limit and keeper daily-budget application requests through authenticated
-  HTTPS REST and two independent Node processes at exact clean SHA `b53489ed`.
-  This is not a deployed-provider or deployed-replica claim: session HTTPS,
-  persistent external DB/restore,
+  rate-limit, keeper daily-budget, and atomic admin-session rotation application
+  requests through authenticated HTTPS REST and two independent Windows Node
+  `24.5.0` processes at exact clean SHA `9ce4e5ca9`. This is not a hosted route,
+  browser cookie, deployed-provider, or deployed-replica claim. Persistent external DB/restore,
   transactional cross-host consent, hosted HTTPS/Privy, physical mobile
   wallets, signed canary, and 24–48 hour topology evidence remain open.
 

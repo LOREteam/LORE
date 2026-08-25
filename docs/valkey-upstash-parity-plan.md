@@ -1,11 +1,11 @@
 # Valkey and Upstash REST parity plan
 
 Status: direct engine execution covers all three production Lua scripts, and a
-hermetic HTTPS/REST check covers the real rate-limit and keeper daily-budget
-application paths from two Node processes at exact local SHA
-`b53489ededdcfdda694ccb6f5a64655d7d9a5ca2`. Session HTTPS, a deployed
-provider/shared runtime, persistence, restore, and non-web processes remain
-open. No endpoint or durable credential is recorded.
+hermetic HTTPS/REST check covers the real rate-limit, keeper daily-budget, and
+admin-session rotation application paths from two Node processes at exact local
+SHA `9ce4e5ca9809cda7b856603e2f51e1200b0f7735`. Hosted route/browser cookie
+behavior, a deployed provider/shared runtime, persistence, restore, and non-web
+processes remain open. No endpoint or durable credential is recorded.
 
 ## Selected candidate
 
@@ -89,10 +89,10 @@ independent application replicas, a persistent external database, or restore
 evidence. It does not authorize deployment, an external request, or wallet
 activity.
 
-## Local HTTPS rate-limit and keeper application check (2026-08-25)
+## Local HTTPS rate-limit, keeper, and session application check (2026-08-25)
 
 The latest retained clean-HEAD run of `scripts/test-valkey-rest-rate-limit.mjs`
-passed at exact local SHA `b53489ededdcfdda694ccb6f5a64655d7d9a5ca2`;
+passed at exact local SHA `9ce4e5ca9809cda7b856603e2f51e1200b0f7735` on Windows Node `24.5.0`;
 `npm run test:valkey:rest-parity` is its explicit combined package entry. The harness starts
 the three exact Linux AMD64 manifests above on two isolated Docker networks:
 Valkey and SRH publish no host port; only Caddy receives a Docker-assigned
@@ -102,7 +102,8 @@ the default system CA, and then trusts only the ephemeral Caddy root with normal
 certificate verification enabled.
 
 Two independent long-lived Node processes import the real
-`consumeExternalRateLimit` and `reserveExternalKeeperDailyBudget`. They share
+`consumeExternalRateLimit`, `reserveExternalKeeperDailyBudget`,
+`issueAdminSession`, `readAdminSession`, and `rotateAdminSession` seams. They share
 one Valkey keyspace and pass
 `allowed, allowed, blocked`, positive non-resetting TTL, and exact Lua-script
 hash checks. Wrong Bearer fails both raw REST and the production caller;
@@ -111,10 +112,19 @@ totals, cross-process replay, conflict without mutation, atomic cost/signature
 caps, tightened-policy refusal, server `TIME` plus absolute `PEXPIRETIME` at
 the next UTC midnight, replay/error deadline preservation, prior-day reset,
 malformed-state refusal without mutation, and wrong-Bearer refusal without
-created state. Startup, pre-replica, and
-post-execution HEAD/blob/content captures match, every replica reports the
-captured production-source digest, and the clean post-commit artifact reports
-`allRelevantFilesBoundToRevision=true` and `trackedWorktreeClean=true`.
+created state. The session path issues version 1 through replica A, validates it
+through A and B, races the same validated state through both replicas with one
+exact CAS winner, validates version 2 from both replicas, rejects the old cookie
+for authenticated reads, and proves stale rotation plus wrong-Bearer rotation
+leave the active record and absolute deadline unchanged. This is rotation-CAS
+evidence, not a broad claim about every use of an old signed cookie.
+
+Startup, pre-replica, post-execution, and post-cleanup HEAD/blob/content captures
+match across seven executed source paths. Every replica reports the captured
+production-source digests, acknowledges SQLite close, and exits normally. The
+clean post-commit artifact reports `allRelevantFilesBoundToRevision=true`,
+`trackedWorktreeClean=true`, and `stableThroughCleanup=true`; Linux AMD64
+container identity is kept distinct from the Windows Node host identity.
 
 Secrets exist only in process memory or exclusive temporary files. Every
 attempted container/network carries a unique run label; full IDs and labels are
@@ -124,14 +134,15 @@ Redacted evidence is in
 `artifacts/valkey-runtime/valkey-rest-rate-limit.json`.
 
 This remains **partial local parity**. It does not prove the managed provider,
-deployed web replicas, session application path, indexer/bot/monitor,
-persistent external storage, backup/restore, or cross-host behavior.
+deployed web replicas, hosted `/api/admin/auth`, browser `Set-Cookie` enforcement,
+indexer/bot/monitor, persistent external storage, backup/restore, or cross-host
+behavior.
 
 ## Runtime evidence required
 
-After a reviewed daemon/host and secret configuration are available, execute
-the real application requests against the shared endpoint with two independent
-client identities:
+After a reviewed provider/host and secret configuration are available, repeat
+the real application requests against the deployed shared endpoint with two
+independent deployed client identities:
 
 1. `RATE_LIMIT_SCRIPT`: same bucket/key increments once globally, expiry is
    set only on first increment, and the rejected request reports bounded retry.
@@ -139,8 +150,9 @@ client identities:
    retry returns `already_reserved`; changed binding conflicts; count/cost caps
    and malformed stored state fail closed; server `TIME` rollover resets only
    the old UTC-day record.
-3. `ROTATE_SESSION_SCRIPT`: rotation is atomic, stale/replayed session state is
-   rejected, and both replicas observe the same resulting session identity.
+3. `ROTATE_SESSION_SCRIPT`: rotation is atomic, stale rotation state is rejected
+   without extending the active deadline, and both replicas observe the same
+   resulting session identity.
 
 Capture only redacted command/result summaries, image digest, resolved
 platform digest, façade revision, engine `INFO`/version summary, two-replica
@@ -149,10 +161,12 @@ or response bodies containing secrets.
 
 ## Acceptance and stop conditions
 
-This runtime is not a valid gate until all three scripts run on the real
-Valkey Lua engine through the same HTTPS REST contract used by the app, with
-the shared store seen by both web replicas, indexer, bot, and monitor where
-applicable. JavaScript simulations, direct TCP-only tests, a successful image
-pull, or a single local container are insufficient. If the HTTP façade changes
+The deployed runtime is not a valid production gate until all three scripts run
+through its real Valkey Lua engine and the same HTTPS REST contract used by the
+app, with the shared store seen by both web replicas, indexer, bot, and monitor
+where applicable. The local proof above does not substitute for that deployed
+identity, persistence, restart, or restore evidence. JavaScript simulations,
+direct TCP-only tests, a successful image pull, or a single local container are
+insufficient. If the HTTP façade changes
 script, key, authentication, error, timeout, or response semantics, treat
 parity as failed and stop before any production or wallet action.

@@ -375,9 +375,16 @@ under [`docs/archive/`](archive/).
       server `TIME`/absolute-midnight `PEXPIRETIME`, prior-day reset,
       malformed-state and wrong-Bearer fail-closed, exact cleanup, protected-DB
       invariants, and source/SHA binding. This remains hermetic local evidence.
-- [ ] Provision the reviewed deployed shared runtime, repeat the rate-limit and
-      keeper paths against that provider, and execute `ROTATE_SESSION_SCRIPT`
-      through the same managed HTTPS REST contract.
+- [x] Execute `ROTATE_SESSION_SCRIPT` through the public admin-session
+      application seam on the same local HTTPS REST topology. Exact commit
+      `9ce4e5ca9` has a retained clean-HEAD Node `24.5.0` run covering one-winner
+      two-replica CAS, cross-replica old/new cookie reads, stale-rotation and
+      wrong-Bearer state/deadline preservation, exact script/key/TTL transport,
+      seven-path source binding, post-cleanup provenance, graceful SQLite close,
+      exact cleanup, and protected-DB identity. This is not hosted route/browser,
+      provider, persistence, restore, or broad session-replay evidence.
+- [ ] Provision the reviewed deployed shared runtime and repeat all three
+      application paths against that provider-managed HTTPS REST contract.
 - [ ] Exercise deployed web replicas, indexer/bot/monitor, shared limiter/lock,
       cross-host consent ledger, external persistent DB, and backup/restore.
 
