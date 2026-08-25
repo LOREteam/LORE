@@ -217,10 +217,22 @@ const getClassName = (openingTag: string) => openingTag.match(/class="([^"]*)"/)
 const mobileActionMarkup = renderSidePanel();
 const mobileManualActionTag = getOpeningTag(mobileActionMarkup, 'data-testid="mobile-manual-bet-action"');
 const mobileAutoActionTag = getOpeningTag(mobileActionMarkup, 'data-testid="mobile-auto-miner-action"');
+const dockedManualActionTag = getOpeningTag(mobileActionMarkup, 'data-testid="manual-bet-action"');
+const dockedAutoActionTag = getOpeningTag(mobileActionMarkup, 'data-testid="auto-miner-action"');
 assert.notEqual(mobileManualActionTag, "", "the rendered mobile manual action must exist");
 assert.notEqual(mobileAutoActionTag, "", "the rendered mobile Auto-Miner action must exist");
 assert.match(getClassName(mobileManualActionTag), /(?:^|\s)h-11(?:\s|$)/, "the mobile manual action must render a 44px touch target");
 assert.match(getClassName(mobileAutoActionTag), /(?:^|\s)h-11(?:\s|$)/, "the mobile Auto-Miner action must render a 44px touch target");
+assert.match(
+  getClassName(dockedManualActionTag),
+  /(?:^|\s)max-\[899px\]:hidden(?:\s|$)/,
+  "the rendered in-panel manual action must be hidden while the mobile dock owns the primary CTA",
+);
+assert.match(
+  getClassName(dockedAutoActionTag),
+  /(?:^|\s)max-\[899px\]:hidden(?:\s|$)/,
+  "the rendered in-panel Auto-Miner action must be hidden while the mobile dock owns the primary CTA",
+);
 
 const manualErrorMarkup = renderSidePanel({
   manualBetForm: {
@@ -283,12 +295,6 @@ assert.match(betPanelSource, /walletCta === "login"[\s\S]*requestWalletLogin\(\)
 assert.match(sidePanelSource, /handleWalletSetup[\s\S]*actionInFlightRef\.current[\s\S]*onCreateEmbeddedWallet\(\)/, "manual and Auto-Miner wallet setup must delegate to the shared duplicate-action guard");
 assert.match(walletRuntimeSource, /walletSetupIdentityRef[\s\S]*!wallet\.authenticated \|\| identityChanged/, "wallet setup must invalidate its guard on logout or wallet identity change");
 assert.match(sidePanelSource, /onCreateEmbeddedWallet: \(\) => Promise<void>/, "wallet setup must retain the async creation contract");
-assert.equal(
-  (sidePanelSource.match(/mobileActionDocked/g) ?? []).length,
-  2,
-  "the mobile dock must replace both in-panel primary buttons instead of exposing duplicate mobile sends",
-);
-assert.match(betPanelSource, /mobileActionDocked && "max-\[899px\]:hidden"/);
 assert.match(sidePanelSource, /window\.visualViewport/);
 assert.match(sidePanelSource, /env\(safe-area-inset-bottom\)/);
 assert.match(

@@ -8,7 +8,12 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
-- Current `HEAD` is `3c8886acc1fa33045aa7bcc1d03bab9fa84fd09b`. It closes the
+- Current `HEAD` is `a5ff9f595900fead82c3825854b2e290c55f8fd8`. It commits the
+  exact seven-path P1.17 lifecycle/verifier packet after collector `158/158`,
+  verifier `119/119`, syntax, diff, protected-DB, and independent reviews. The
+  current tracked change is only the Package A mobile dock SSR test; the 32
+  generated artifact paths in three retained directories remain excluded.
+- Earlier security-reviewed baseline `3c8886acc1fa33045aa7bcc1d03bab9fa84fd09b` closes the
   final deposits-recovery transport bound found by targeted security review:
   recovery head/log reads use one `http(RPC_URL, { timeout: 20_000,
   retryCount: 1 })` client, so `41 * 2 * 20s = 1,640,000ms` remains below the
@@ -617,6 +622,14 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
     failed, or truncated entry. Because no hidden window existed, accounting
     correctly stayed `not-measured` and no qualifying polling count is claimed. Thus
     no native-hidden, throttling, two-hour, or final-SHA claim is made.
+79. Mobile-mining Package A replaces two source-derived dock assertions with
+    executable React SSR checks against both actual in-panel action tags. The
+    rendered manual and Auto-Miner buttons must each carry
+    `max-[899px]:hidden` while the separate mobile dock owns the primary CTA.
+    Standalone classification moves `68/20/48 -> 68/18/50`; focused x2, audit
+    x2 (`5820/6346`, `526` source), self-test `17/17`, targeted ESLint, diff,
+    protected-DB identity, and independent review pass. Only the test runner
+    changed; there was no production, wallet, RPC, network, or DB mutation.
 
 ## Pre-document verification snapshot
 
@@ -721,7 +734,8 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   scan, and hosted CI cycle is open; the dirty working tree invalidates older
   final-SHA/sealed claims.
 - The user has granted local-commit authority. Stage only the exact current
-  7-path manifest after its zero-omission audit; historical 74/318/320 scopes
+  5-path Package A manifest after its zero-omission audit; historical
+  7/74/318/320 scopes
   do not widen that staging boundary or authorize external actions.
 - P1.17 needs a final canonical/profile sealed pair and a real physical
   native-hidden two-hour loopback run.

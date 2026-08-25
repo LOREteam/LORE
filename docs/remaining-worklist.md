@@ -96,7 +96,7 @@ under [`docs/archive/`](archive/).
 - [x] Committed audited baseline at `d3916c37d`: `5387/6166` behavioral assertions
       (`87.37%`) across `106` modules; the coordinator has `95` direct runner
       imports, `2` side-effect imports, and `95` direct runner calls.
-- [x] Current uncommitted schema-v2 packet reports `5819/6345` behavioral
+- [x] Current uncommitted schema-v2 packet reports `5820/6346` behavioral
       assertions (`91.71%`) with `526` source operands across `113` modules;
       the audit self-test passes `17/17`. The v2 denominator includes all
       Node 24 assert methods and the source count includes confirmed transparent
@@ -121,6 +121,16 @@ under [`docs/archive/`](archive/).
       earlier rejected creation attempt without changing the new retry state.
       The standalone module is `68/20/48`; focused x2, audit x2, and self-test
       `17/17` pass. It remains outside the official coordinator audit.
+- [x] Complete mobile-mining Package A by replacing two static dock-wiring
+      assertions with executable React SSR checks against both rendered
+      in-panel action tags. Each must carry `max-[899px]:hidden` while the
+      separate mobile dock owns the primary CTA. Standalone classification is
+      `68/18/50`; focused x2, audit x2 (`5820/6346`, `526` source), self-test
+      `17/17`, targeted ESLint, diff, protected-DB identity, and independent
+      review pass. This standalone delta does not change coordinator totals.
+- [ ] Complete one separately reviewed mobile-mining Package B only where an
+      equally honest executable public-behavior seam exists; retain structural
+      source guards when runtime observation would not prove the same contract.
 - [x] Move the awaited Preview runner under the existing release-evidence
       wrapper while preserving order and inert import; that step reduced direct
       coordinator fan-out to `93/2/93`.
