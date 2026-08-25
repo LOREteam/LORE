@@ -42,6 +42,16 @@ under [`docs/archive/`](archive/).
       passed in `382920ms`; focused timeout/prelaunch tests x2, syntax, ESLint,
       audit x2, self-test, manifest exactness, and protected DB identity pass.
       A new detached final-SHA full prelaunch run is still required.
+- [x] Diagnose the next final-SHA prelaunch failure. Exact SHA `964284caa`
+      killed P1 hardening at `300000ms`; the same runner passed standalone
+      `42/42` in `296463ms`, demonstrating that a 3.5-second jitter margin is
+      insufficient. Commit `20ae744f2` gives only this P1 row a `450000ms`
+      minimum and preserves larger explicit prelaunch budgets. The timed-out
+      report's later business row also failed transiently, while the same
+      checkout passed standalone in `424388ms` after all report children exited.
+      Focused policy x2, syntax, ESLint, audit x2, self-test, manifest exactness,
+      and protected DB identity pass. A new clean-SHA full prelaunch rerun must
+      prove both required rows together.
 - [x] Diagnose the first final-SHA composite local-check failure: direct mode
       bypassed `business-logic-isolated-runner.mjs`. The current candidate uses
       the mandatory isolated runner; focused policy tests pass twice. It still

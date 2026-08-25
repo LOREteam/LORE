@@ -10,7 +10,19 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Current tested code baseline `c4f921db3` fixes the required prelaunch
+- Current tested code baseline `20ae744f2` extends the bounded prelaunch policy
+  after exact SHA `964284caa` exposed a second real watchdog defect. Its full
+  report killed `test:p1-hardening:all:summary` at exactly `300000ms`; the same
+  runner then passed standalone `42/42` in `296463ms`, proving that the generic
+  budget had only `3537ms` of jitter headroom. P1 hardening now receives a
+  `450000ms` minimum while larger explicit prelaunch budgets remain honored.
+  Focused policy tests x2, syntax, focused ESLint, audit x2, self-test `17/17`,
+  exact manifest/digests, and protected DB identity pass. The timed-out report's
+  later business row failed transiently in `253489ms`; after all report children
+  exited, the same checkout passed standalone business summary in `424388ms`
+  with every proof group true and zero failures. A new clean-SHA full prelaunch
+  rerun is required before either row is sealed.
+- Parent code baseline `c4f921db3` fixes the required prelaunch
   `test:logic:summary` false failure. Exact clean SHA `7918fba2a` first proved
   the suite needs `387897ms`, beyond both the former `180000ms` summary default
   and `300000ms` prelaunch watchdog. The runner now defaults to `600000ms`; the

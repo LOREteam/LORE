@@ -9,7 +9,19 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Continuation point
 
 - The current tested code baseline and parent of this documentation-only packet
-  is `c4f921db3`. Exact clean SHA `7918fba2a` reproduced the required
+  is `20ae744f2`. Exact SHA `964284caa` passed fresh `npm ci`, dependency policy,
+  full `check-local`, V9, V10 offline identity, and L1--L17, but its full
+  prelaunch report exposed a second watchdog defect: P1 hardening was killed at
+  exactly `300000ms`. The same runner passed standalone `42/42` in `296463ms`,
+  leaving only `3537ms` of jitter headroom. The P1 row now receives a bounded
+  `450000ms` minimum without widening other generic checks. Focused policy tests
+  x2, syntax, ESLint, audit x2, self-test `17/17`, manifest exactness, and
+  protected DB identity pass. The failed report's later business row returned
+  false proof fields in `253489ms`; after the timed-out process tree had exited,
+  the same checkout passed standalone in `424388ms` with all proof groups true.
+  Therefore neither row is sealed until a new clean-SHA prelaunch rerun passes.
+- Parent code baseline `c4f921db3` first fixed the business timeout race. Exact
+  clean SHA `7918fba2a` reproduced the required
   `test:logic:summary` failure under its former `300000ms` prelaunch watchdog,
   while the identical suite passed with a diagnostic `600000ms` child limit in
   `387897ms`. The correction makes the standalone default `600000ms` and gives

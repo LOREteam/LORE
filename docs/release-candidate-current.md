@@ -1,7 +1,7 @@
 # Current release-candidate permission manifest
 
 Snapshot date: 2026-08-26. Base `HEAD`:
-`964284caaac9d2434af905cb677749e85cb81e3d` on `codex/repo-cleanup`.
+`20ae744f2a08b4507b0a513feff687337b58a8e4` on `codex/repo-cleanup`.
 
 Status: the user has granted authority for local commits. This manifest remains
 the exact staging boundary for the current packet; that authority does not
@@ -11,28 +11,30 @@ generation, approval, or a chain transaction.
 ## Exact current scope
 
 The path set below is the exact proposed index relative to
-`964284caaac9d2434af905cb677749e85cb81e3d`. It records the P1-hardening
-prelaunch watchdog correction and its executable policy self-test, plus this
+`20ae744f2a08b4507b0a513feff687337b58a8e4`. It records the documentation-only
+evidence update for the P1-hardening prelaunch watchdog correction, plus this
 self-excluded manifest.
 It does not authorize a push, deployment, hosting change, wallet/RPC action,
 Preview, signing, or chain transaction.
 
-- Proposed child: `1` other tracked path plus this manifest.
+- Proposed child: `3` other tracked paths plus this manifest.
 - Excluded and retained generated evidence: `393` files in `7` top-level
   directories under `artifacts/`.
-- Authorized/expected staging paths: `2` (the `1` candidate plus this
+- Authorized/expected staging paths: `4` (the `3` candidates plus this
   self-excluded manifest).
 - Exactness: `missing=0`, `extra=0`, `duplicates=0` under the exclusion above.
 - Canonical path-set SHA-256 (UTF-8, sorted paths, LF after every path):
-  `59e3f3f8ce695ccca98ba0a534b89dae87fa6911df9d92ba8cd81e926951d83d`.
-- Canonical current content-set SHA-256 for the other `1` candidate file (this
+  `768f8c58400ab2977379de8611c7e91d064a5f561d5edbd4e274870f4c5376ad`.
+- Canonical current content-set SHA-256 for the other `3` candidate files (this
   self-referential manifest excluded; sorted
   `path + NUL + file SHA-256 + LF`):
-  `5b1bb1e99c3c45e828ea7f06183bac9b9cb49b52cfe706639e2e876f0dec4036`.
+  `95f1a8ed9b83e59cbc64b1289e35474a0621a7f0770c5882b027a49bf13bbfd7`.
 
 ```text
+docs/agent-progress.md
+docs/current_state.md
 docs/release-candidate-current.md
-scripts/report-prelaunch-status.mjs
+docs/remaining-worklist.md
 ```
 
 The 393 historical/test artifact files stay on disk and must not be staged by a
