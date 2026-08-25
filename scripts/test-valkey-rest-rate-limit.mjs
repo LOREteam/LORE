@@ -19,10 +19,17 @@ const RESPONSE_LIMIT_BYTES = 65_536;
 const COMMAND_OUTPUT_LIMIT_BYTES = 65_536;
 const COMMAND_TIMEOUT_MS = 15_000;
 const OWNERSHIP_LABEL = "lore.parity.run";
+const ADMIN_SESSION_COOKIE = "lore_admin_session";
+const ADMIN_SESSION_IDLE_TTL_MS = 15 * 60 * 1_000;
+const ADMIN_SESSION_ABSOLUTE_TTL_MS = 8 * 60 * 60 * 1_000;
 const SOURCE_BINDING_PATHS = Object.freeze([
+  "app/api/_lib/adminSession.ts",
   "app/api/_lib/externalRateLimit.ts",
+  "app/lib/adminAuth.ts",
   "package.json",
   "scripts/test-valkey-rest-rate-limit.mjs",
+  "server/db.ts",
+  "server/storage.ts",
 ]);
 
 const IMAGES = Object.freeze({
@@ -228,15 +235,24 @@ function createPinnedHttpsFetch({ ca, endpoint, expectedToken = null, observatio
     const body = init.body === undefined ? null : Buffer.from(String(init.body));
     const headers = normalizeHeaders(init.headers);
     const command = body === null ? null : JSON.parse(body.toString("utf8"));
+    const commandName = Array.isArray(command) ? command[0] : null;
     observation.lastRequest = {
-      argumentCount: Array.isArray(command) && command[0] === "EVAL" ? Math.max(0, command.length - 4) : null,
+      argumentCount: Array.isArray(command) && commandName === "EVAL" ? Math.max(0, command.length - 4) : null,
       bearerMatches: expectedToken === null ? null : headers.authorization === `Bearer ${expectedToken}`,
-      commandName: Array.isArray(command) ? command[0] : null,
+      commandName,
       contentType: headers["content-type"] ?? null,
-      keyCount: Array.isArray(command) ? command[2] : null,
+      keyCount: Array.isArray(command) && commandName === "EVAL" ? command[2] : null,
       method: init.method ?? "GET",
-      redisKey: Array.isArray(command) ? command[3] : null,
-      scriptSha256: Array.isArray(command) && typeof command[1] === "string" ? sha256(command[1]) : null,
+      redisKey: Array.isArray(command) && commandName === "EVAL" ? command[3] : command?.[1] ?? null,
+      scriptSha256: Array.isArray(command) && commandName === "EVAL" && typeof command[1] === "string"
+        ? sha256(command[1])
+        : null,
+      ttlMsArgument: Array.isArray(command) && (
+        (commandName === "SET" && command.length === 6) ||
+        (commandName === "EVAL" && command.length === 7)
+      ) && /^\d+$/.test(String(command.at(-1)))
+        ? String(command.at(-1))
+        : null,
     };
     headers.host = PARITY_HOST;
     if (body !== null) headers["content-length"] = String(body.byteLength);
@@ -378,7 +394,7 @@ async function readServerClock(fetchImpl, endpoint, token) {
   };
 }
 
-async function inspectKeeperExpiry(fetchImpl, endpoint, token, redisKey) {
+async function inspectRedisExpiry(fetchImpl, endpoint, token, redisKey) {
   const response = await executeRestCommand(fetchImpl, endpoint, token, [
     "EVAL",
     [
@@ -390,7 +406,7 @@ async function inspectKeeperExpiry(fetchImpl, endpoint, token, redisKey) {
     "1",
     redisKey,
   ]);
-  assert.equal(response.ok, true, "keeper expiry observation must succeed");
+  assert.equal(response.ok, true, "Redis expiry observation must succeed");
   assert.ok(Array.isArray(response.json?.result) && response.json.result.length === 4);
   const values = response.json.result.map((value) => {
     assert.match(String(value), /^\d+$/);
@@ -403,16 +419,121 @@ async function inspectKeeperExpiry(fetchImpl, endpoint, token, redisKey) {
   assert.ok(ttlMs > 0);
   const nowMs = (seconds * 1_000) + Math.floor(microseconds / 1_000);
   const utcDay = Math.floor(seconds / 86_400);
-  const expectedMidnightMs = (utcDay + 1) * 86_400_000;
-  assert.ok(
-    expiresAtMs >= expectedMidnightMs - 5 && expiresAtMs <= expectedMidnightMs + 1_005,
-    "keeper absolute expiry must match the next server UTC midnight within the script's one-second precision",
-  );
   assert.ok(
     Math.abs((nowMs + ttlMs) - expiresAtMs) <= 5,
-    "keeper PTTL and absolute expiry must describe the same server deadline",
+    "Redis PTTL and absolute expiry must describe the same server deadline",
   );
-  return { expiresAtMs, expectedMidnightMs, nowMs, ttlMs, utcDay };
+  return { expiresAtMs, nowMs, ttlMs, utcDay };
+}
+
+async function inspectKeeperExpiry(fetchImpl, endpoint, token, redisKey) {
+  const expiry = await inspectRedisExpiry(fetchImpl, endpoint, token, redisKey);
+  const expectedMidnightMs = (expiry.utcDay + 1) * 86_400_000;
+  assert.ok(
+    expiry.expiresAtMs >= expectedMidnightMs - 5 && expiry.expiresAtMs <= expectedMidnightMs + 1_005,
+    "keeper absolute expiry must match the next server UTC midnight within the script's one-second precision",
+  );
+  return { ...expiry, expectedMidnightMs };
+}
+
+function decodeSessionCookie(value) {
+  assert.equal(typeof value, "string");
+  const parts = value.split(".");
+  assert.equal(parts.length, 2);
+  assert.match(parts[0], /^[A-Za-z0-9_-]+$/);
+  assert.match(parts[1], /^[A-Za-z0-9_-]+$/);
+  return JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
+}
+
+function sessionRedisKey(sessionId) {
+  return `lore:admin-session:v2:${sha256(sessionId)}`;
+}
+
+function serializeSessionRecord(payload) {
+  return `${sha256(payload.address)}:${payload.absoluteExpiresAt}:${payload.sessionVersion}`;
+}
+
+function assertSessionCookie(cookie, expectedExpiresAt) {
+  assert.ok(cookie);
+  assert.equal(cookie.name, ADMIN_SESSION_COOKIE);
+  assert.equal(cookie.httpOnly, true);
+  assert.equal(cookie.sameSite, "strict");
+  assert.equal(cookie.secure, true);
+  assert.equal(cookie.path, "/");
+  assert.equal(cookie.expiresAt, expectedExpiresAt);
+  assert.equal(typeof cookie.value, "string");
+}
+
+function assertSessionPayload(actual, expected) {
+  assert.ok(actual && typeof actual === "object", "session payload must be present");
+  assert.equal(actual.aud, "lore-admin");
+  assert.equal(actual.type, "admin-session");
+  assert.equal(actual.address, expected.address);
+  assert.equal(actual.sessionVersion, expected.sessionVersion);
+  assert.equal(actual.startedAt, expected.startedAt);
+  assert.equal(actual.issuedAt, expected.issuedAt);
+  assert.equal(actual.expiresAt, expected.expiresAt);
+  assert.equal(actual.absoluteExpiresAt, expected.absoluteExpiresAt);
+  assert.match(actual.sessionId, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(
+    sha256(actual.sessionId),
+    sha256(expected.sessionId),
+    "session payload must preserve the same opaque session identity",
+  );
+}
+
+function assertSessionCommandTransport(
+  response,
+  { argumentCount = null, commandName, redisKey, scriptSha256 = null, ttlMsArgument = null },
+) {
+  assert.equal(response.transport.tlsAuthorized, true);
+  assert.match(response.transport.tlsProtocol, /^TLSv1\.[23]$/);
+  assert.equal(response.transport.request.bearerMatches, true);
+  assert.equal(response.transport.request.commandName, commandName);
+  assert.equal(response.transport.request.contentType, "application/json");
+  assert.equal(response.transport.request.keyCount, commandName === "EVAL" ? "1" : null);
+  assert.equal(response.transport.request.method, "POST");
+  assert.equal(response.transport.request.redisKey, redisKey);
+  assert.equal(response.transport.request.argumentCount, argumentCount);
+  assert.equal(response.transport.request.scriptSha256, scriptSha256);
+  assert.equal(response.transport.request.ttlMsArgument, ttlMsArgument);
+}
+
+function createSessionResponseCapture() {
+  let cookie = null;
+  return {
+    response: {
+      cookies: {
+        set(name, value, options) {
+          assert.ok(options?.expires instanceof Date);
+          cookie = {
+            expiresAt: options.expires.getTime(),
+            httpOnly: options.httpOnly,
+            name,
+            path: options.path,
+            sameSite: options.sameSite,
+            secure: options.secure,
+            value,
+          };
+        },
+      },
+    },
+    takeCookie() {
+      return cookie;
+    },
+  };
+}
+
+function createSessionRequest(cookieValue) {
+  return {
+    cookies: {
+      get(name) {
+        return name === ADMIN_SESSION_COOKIE && typeof cookieValue === "string"
+          ? { value: cookieValue }
+          : undefined;
+      },
+    },
+  };
 }
 
 function validateOwnedName(name) {
@@ -584,17 +705,35 @@ async function forceStopChild(child) {
   }
 }
 
-async function createReplica({ caPath, dbPath, endpoint, expectedExternalRateLimitSha256, registry, replicaId, token }) {
+async function createReplica({
+  adminSessionSecret,
+  adminWalletAddress,
+  caPath,
+  chatAuthSecret,
+  dbPath,
+  endpoint,
+  expectedSourceSha256,
+  registry,
+  replicaId,
+  token,
+}) {
   const child = fork(SCRIPT_PATH, ["--replica"], {
     cwd: REPO_ROOT,
     env: minimalChildEnvironment({
+      ADMIN_AUTH_SECRET: adminSessionSecret,
+      CHAT_AUTH_SECRET: chatAuthSecret,
       LORE_VALKEY_PARITY_CA_PATH: caPath,
       LORE_VALKEY_PARITY_ENDPOINT: endpoint,
       LORE_VALKEY_PARITY_REPLICA_ID: replicaId,
       LORE_DB_PATH: dbPath,
+      NEXT_PUBLIC_ADMIN_WALLET_ADDRESS: adminWalletAddress,
+      NODE_ENV: "production",
+      TSX_DISABLE_CACHE: "1",
       UPSTASH_REDIS_REST_TOKEN: token,
       UPSTASH_REDIS_REST_URL: endpoint,
+      WEB_REPLICA_COUNT: "2",
     }),
+    execArgv: ["--import", "tsx"],
     silent: true,
     windowsHide: true,
   });
@@ -668,26 +807,33 @@ async function createReplica({ caPath, dbPath, endpoint, expectedExternalRateLim
     async reserveKeeper(input) {
       return sendRequest("reserve-keeper", input);
     },
+    async issueSession(input) {
+      return sendRequest("session-issue", input);
+    },
+    async readSession(input) {
+      return sendRequest("session-read", input);
+    },
+    async rotateSession(input) {
+      return sendRequest("session-rotate", input);
+    },
     async stop() {
-      if (child.exitCode !== null || child.signalCode !== null) return;
+      if (child.exitCode !== null || child.signalCode !== null) {
+        throw new Error(`replica ${replicaId} exited before graceful shutdown acknowledgement`);
+      }
       if (!readyVerified) {
         await forceStopChild(child);
-        return;
+        throw new Error(`replica ${replicaId} was not ready for graceful shutdown`);
       }
-      if (child.connected) {
-        try {
-          child.send({ type: "shutdown" }, () => undefined);
-        } catch {
-          await forceStopChild(child);
-          return;
-        }
-      }
+      const shutdownResponse = await sendRequest("shutdown", {});
+      assert.equal(shutdownResponse.result?.dbClosed, true, `replica ${replicaId} must acknowledge DB close`);
       try {
         await waitForExit(child);
-      } catch {
+      } catch (error) {
         await forceStopChild(child);
+        throw error;
       }
-      assert.ok(child.exitCode !== null || child.signalCode !== null, `replica ${replicaId} must exit during cleanup`);
+      assert.equal(child.signalCode, null, `replica ${replicaId} must not require forced termination`);
+      assert.equal(child.exitCode, 0, `replica ${replicaId} must exit cleanly after DB close`);
     },
   };
   registry.push(replica);
@@ -696,9 +842,20 @@ async function createReplica({ caPath, dbPath, endpoint, expectedExternalRateLim
   assert.ok(Number.isInteger(readyMessage.pid) && readyMessage.pid > 0);
   assert.equal(
     readyMessage.externalRateLimitSourceSha256,
-    expectedExternalRateLimitSha256,
+    expectedSourceSha256.externalRateLimit,
     `replica ${replicaId} must import the captured external rate-limit source`,
   );
+  assert.equal(
+    readyMessage.adminSessionSourceSha256,
+    expectedSourceSha256.adminSession,
+    `replica ${replicaId} must import the captured admin-session source`,
+  );
+  assert.equal(
+    readyMessage.adminAuthSourceSha256,
+    expectedSourceSha256.adminAuth,
+    `replica ${replicaId} must import the captured admin-auth source`,
+  );
+  assert.equal(readyMessage.adminSessionIdleTtlMs, ADMIN_SESSION_IDLE_TTL_MS);
   verifiedPid = readyMessage.pid;
   readyVerified = true;
   return replica;
@@ -709,23 +866,54 @@ async function replicaMain() {
   const endpoint = process.env.LORE_VALKEY_PARITY_ENDPOINT;
   const replicaId = process.env.LORE_VALKEY_PARITY_REPLICA_ID;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!caPath || !endpoint || !replicaId || !token) throw new Error("replica parity configuration is incomplete");
+  const adminSessionSecret = process.env.ADMIN_AUTH_SECRET;
+  const adminWalletAddress = process.env.NEXT_PUBLIC_ADMIN_WALLET_ADDRESS;
+  const chatAuthSecret = process.env.CHAT_AUTH_SECRET;
+  if (
+    !caPath || !endpoint || !replicaId || !token || !adminSessionSecret ||
+    !adminWalletAddress || !chatAuthSecret
+  ) throw new Error("replica parity configuration is incomplete");
   secrets.add(token);
+  secrets.add(adminSessionSecret);
+  secrets.add(chatAuthSecret);
   const ca = await readFile(caPath, "utf8");
   const observation = { lastRequest: null, requestCount: 0, tlsAuthorized: false, tlsProtocol: null };
   const fetchImpl = createPinnedHttpsFetch({ ca, endpoint, expectedToken: token, observation });
+  globalThis.fetch = fetchImpl;
   const externalRateLimitSourcePath = resolve(REPO_ROOT, "app", "api", "_lib", "externalRateLimit.ts");
-  const externalRateLimitSourceBefore = await readFile(externalRateLimitSourcePath, "utf8");
-  const externalRateLimitModule = await import("../app/api/_lib/externalRateLimit.ts");
-  const externalRateLimitSourceAfter = await readFile(externalRateLimitSourcePath, "utf8");
+  const adminSessionSourcePath = resolve(REPO_ROOT, "app", "api", "_lib", "adminSession.ts");
+  const adminAuthSourcePath = resolve(REPO_ROOT, "app", "lib", "adminAuth.ts");
+  const [externalRateLimitSourceBefore, adminSessionSourceBefore, adminAuthSourceBefore] = await Promise.all([
+    readFile(externalRateLimitSourcePath, "utf8"),
+    readFile(adminSessionSourcePath, "utf8"),
+    readFile(adminAuthSourcePath, "utf8"),
+  ]);
+  const [externalRateLimitModule, adminSessionModule, adminAuthModule, dbModule] = await Promise.all([
+    import("../app/api/_lib/externalRateLimit.ts"),
+    import("../app/api/_lib/adminSession.ts"),
+    import("../app/lib/adminAuth.ts"),
+    import("../server/db.ts"),
+  ]);
+  const [externalRateLimitSourceAfter, adminSessionSourceAfter, adminAuthSourceAfter] = await Promise.all([
+    readFile(externalRateLimitSourcePath, "utf8"),
+    readFile(adminSessionSourcePath, "utf8"),
+    readFile(adminAuthSourcePath, "utf8"),
+  ]);
   assert.equal(
     externalRateLimitSourceAfter,
     externalRateLimitSourceBefore,
     "external rate-limit source must remain stable across replica import",
   );
+  assert.equal(adminSessionSourceAfter, adminSessionSourceBefore, "admin-session source must remain stable across import");
+  assert.equal(adminAuthSourceAfter, adminAuthSourceBefore, "admin-auth source must remain stable across import");
   const externalRateLimit = externalRateLimitModule.default ?? externalRateLimitModule;
+  const adminSession = adminSessionModule.default ?? adminSessionModule;
+  const adminAuth = adminAuthModule.default ?? adminAuthModule;
   process.send?.({
     type: "ready",
+    adminAuthSourceSha256: sha256(adminAuthSourceBefore),
+    adminSessionIdleTtlMs: adminAuth.ADMIN_AUTH_SESSION_IDLE_TTL_MS,
+    adminSessionSourceSha256: sha256(adminSessionSourceBefore),
     externalRateLimitSourceSha256: sha256(externalRateLimitSourceBefore),
     pid: process.pid,
     replicaId,
@@ -741,7 +929,15 @@ async function replicaMain() {
     queue = queue.then(async () => {
       if (!message || typeof message !== "object") return;
       if (message.type === "shutdown") {
-        process.disconnect();
+        let response;
+        try {
+          dbModule.db.close();
+          response = { id: message.id, type: "response", result: { dbClosed: true } };
+        } catch (error) {
+          process.exitCode = 1;
+          response = { id: message.id, type: "response", error: redact(error?.message ?? error) };
+        }
+        process.send?.(response, () => process.disconnect());
         return;
       }
       try {
@@ -780,6 +976,49 @@ async function replicaMain() {
             },
             transport: transportEvidence(),
           });
+          return;
+        }
+        if (message.type === "session-issue") {
+          const capture = createSessionResponseCapture();
+          const expiresAt = await adminSession.issueAdminSession(
+            capture.response,
+            message.input.address,
+            message.input.now,
+          );
+          const cookie = capture.takeCookie();
+          if (cookie?.value) secrets.add(cookie.value);
+          process.send?.({
+            id: message.id,
+            type: "response",
+            result: { cookie, expiresAt },
+            transport: transportEvidence(),
+          });
+          return;
+        }
+        if (message.type === "session-read") {
+          const result = await adminSession.readAdminSession(
+            createSessionRequest(message.input.cookieValue),
+            message.input.now,
+          );
+          process.send?.({ id: message.id, type: "response", result, transport: transportEvidence() });
+          return;
+        }
+        if (message.type === "session-rotate") {
+          const capture = createSessionResponseCapture();
+          const expiresAt = await adminSession.rotateAdminSession(
+            capture.response,
+            message.input.previous,
+            message.input.now,
+          );
+          const cookie = capture.takeCookie();
+          if (cookie?.value) secrets.add(cookie.value);
+          process.send?.({
+            id: message.id,
+            type: "response",
+            result: { cookie, expiresAt },
+            transport: transportEvidence(),
+          });
+          return;
         }
       } catch (error) {
         process.send?.({ id: message.id, type: "response", error: redact(error?.message ?? error) });
@@ -897,9 +1136,14 @@ async function main(sourceProvenanceAtStartup) {
   const valkeyPassword = randomBytes(32).toString("hex");
   const restToken = randomBytes(32).toString("hex");
   const wrongToken = randomBytes(32).toString("hex");
+  const adminSessionSecret = randomBytes(48).toString("base64url");
+  const chatAuthSecret = randomBytes(48).toString("base64url");
+  const adminWalletAddress = `0x${randomBytes(20).toString("hex")}`;
   secrets.add(valkeyPassword);
   secrets.add(restToken);
   secrets.add(wrongToken);
+  secrets.add(adminSessionSecret);
+  secrets.add(chatAuthSecret);
   const valkeyConfigPath = join(tempRoot, "valkey.conf");
   const srhTokensPath = join(tempRoot, "tokens.json");
   const caddyfilePath = join(tempRoot, "Caddyfile");
@@ -911,6 +1155,7 @@ async function main(sourceProvenanceAtStartup) {
   const replicas = [];
   let evidence = null;
   let cleanupVerified = false;
+  let sourceProvenanceBefore = null;
   try {
     await Promise.all([
       writeFile(valkeyConfigPath, [
@@ -1032,35 +1277,49 @@ async function main(sourceProvenanceAtStartup) {
     });
 
     assert.equal(ready.systemCaRejected, true, "the ephemeral Caddy CA must not be trusted implicitly");
-    const sourceProvenanceBefore = await captureSourceProvenance();
+    sourceProvenanceBefore = await captureSourceProvenance();
     assert.deepEqual(
       sourceProvenanceBefore,
       sourceProvenanceAtStartup,
       "HEAD, harness, package entry, and production source must remain stable from process startup through setup",
     );
-    const expectedExternalRateLimitSha256 = sourceProvenanceBefore.sourceSha256["app/api/_lib/externalRateLimit.ts"];
+    const expectedSourceSha256 = {
+      adminAuth: sourceProvenanceBefore.sourceSha256["app/lib/adminAuth.ts"],
+      adminSession: sourceProvenanceBefore.sourceSha256["app/api/_lib/adminSession.ts"],
+      externalRateLimit: sourceProvenanceBefore.sourceSha256["app/api/_lib/externalRateLimit.ts"],
+    };
     const externalRateLimitSource = sourceProvenanceBefore.files["app/api/_lib/externalRateLimit.ts"];
+    const adminSessionSource = sourceProvenanceBefore.files["app/api/_lib/adminSession.ts"];
     const rateLimitScript = externalRateLimitSource.match(/const RATE_LIMIT_SCRIPT = `([\s\S]*?)`;/)?.[1];
     const keeperDailyBudgetScript = externalRateLimitSource.match(/const KEEPER_DAILY_BUDGET_SCRIPT = `([\s\S]*?)`;/)?.[1];
+    const rotateSessionScript = adminSessionSource.match(/const ROTATE_SESSION_SCRIPT = `([\s\S]*?)`;/)?.[1];
     assert.ok(rateLimitScript, "RATE_LIMIT_SCRIPT must remain extractable for provenance");
     assert.ok(keeperDailyBudgetScript, "KEEPER_DAILY_BUDGET_SCRIPT must remain extractable for provenance");
+    assert.ok(rotateSessionScript, "ROTATE_SESSION_SCRIPT must remain extractable for provenance");
     const rateLimitScriptSha256 = sha256(rateLimitScript);
     const keeperDailyBudgetScriptSha256 = sha256(keeperDailyBudgetScript);
+    const rotateSessionScriptSha256 = sha256(rotateSessionScript);
 
     const replicaA = await createReplica({
+      adminSessionSecret,
+      adminWalletAddress,
       caPath,
+      chatAuthSecret,
       dbPath: join(tempRoot, "replica-a.sqlite"),
       endpoint,
-      expectedExternalRateLimitSha256,
+      expectedSourceSha256,
       registry: replicas,
       replicaId: "replica-a",
       token: restToken,
     });
     const replicaB = await createReplica({
+      adminSessionSecret,
+      adminWalletAddress,
       caPath,
+      chatAuthSecret,
       dbPath: join(tempRoot, "replica-b.sqlite"),
       endpoint,
-      expectedExternalRateLimitSha256,
+      expectedSourceSha256,
       registry: replicas,
       replicaId: "replica-b",
       token: restToken,
@@ -1068,10 +1327,13 @@ async function main(sourceProvenanceAtStartup) {
     assert.notEqual(replicaA.pid, replicaB.pid, "replicas must be distinct OS processes");
 
     const wrongBearerReplica = await createReplica({
+      adminSessionSecret,
+      adminWalletAddress,
       caPath,
+      chatAuthSecret,
       dbPath: join(tempRoot, "replica-wrong-bearer.sqlite"),
       endpoint,
-      expectedExternalRateLimitSha256,
+      expectedSourceSha256,
       registry: replicas,
       replicaId: "replica-wrong-bearer",
       token: wrongToken,
@@ -1453,6 +1715,183 @@ async function main(sourceProvenanceAtStartup) {
       scriptSha256: keeperDailyBudgetScriptSha256,
     });
 
+    const sessionNow = Date.now();
+    const issuedSession = await replicaA.issueSession({ address: adminWalletAddress, now: sessionNow });
+    const issuedCookie = issuedSession.result.cookie;
+    if (issuedCookie?.value) secrets.add(issuedCookie.value);
+    assert.equal(issuedSession.result.expiresAt, sessionNow + ADMIN_SESSION_IDLE_TTL_MS);
+    assertSessionCookie(issuedCookie, issuedSession.result.expiresAt);
+    const sessionV1 = decodeSessionCookie(issuedCookie.value);
+    if (typeof sessionV1?.sessionId === "string") secrets.add(sessionV1.sessionId);
+    const expectedSessionV1 = {
+      address: adminWalletAddress.toLowerCase(),
+      absoluteExpiresAt: sessionNow + ADMIN_SESSION_ABSOLUTE_TTL_MS,
+      expiresAt: sessionNow + ADMIN_SESSION_IDLE_TTL_MS,
+      issuedAt: sessionNow,
+      sessionId: sessionV1.sessionId,
+      sessionVersion: 1,
+      startedAt: sessionNow,
+    };
+    assertSessionPayload(sessionV1, expectedSessionV1);
+    const sessionKey = sessionRedisKey(sessionV1.sessionId);
+    assertSessionCommandTransport(issuedSession, {
+      commandName: "SET",
+      redisKey: sessionKey,
+      ttlMsArgument: String(ADMIN_SESSION_IDLE_TTL_MS),
+    });
+    const sessionRecordV1 = serializeSessionRecord(sessionV1);
+    const storedSessionV1 = await executeRestCommand(ready.fetchImpl, endpoint, restToken, ["GET", sessionKey]);
+    assert.equal(storedSessionV1.ok, true);
+    assert.equal(storedSessionV1.json?.result, sessionRecordV1);
+    const issuedSessionExpiry = await inspectRedisExpiry(ready.fetchImpl, endpoint, restToken, sessionKey);
+    assert.ok(issuedSessionExpiry.ttlMs > 0 && issuedSessionExpiry.ttlMs <= ADMIN_SESSION_IDLE_TTL_MS);
+    assert.ok(
+      Math.abs(issuedSessionExpiry.expiresAtMs - issuedSession.result.expiresAt) <= 5_000,
+      "issued session store deadline must remain near the returned cookie deadline",
+    );
+
+    const [sessionReadA, sessionReadB] = await Promise.all([
+      replicaA.readSession({ cookieValue: issuedCookie.value, now: sessionNow }),
+      replicaB.readSession({ cookieValue: issuedCookie.value, now: sessionNow }),
+    ]);
+    assertSessionPayload(sessionReadA.result, sessionV1);
+    assertSessionPayload(sessionReadB.result, sessionV1);
+    for (const response of [sessionReadA, sessionReadB]) {
+      assertSessionCommandTransport(response, { commandName: "GET", redisKey: sessionKey });
+    }
+
+    const sessionStateBeforeWrongBearer = await executeRestCommand(
+      ready.fetchImpl,
+      endpoint,
+      restToken,
+      ["GET", sessionKey],
+    );
+    const sessionExpiryBeforeWrongBearer = await inspectRedisExpiry(
+      ready.fetchImpl,
+      endpoint,
+      restToken,
+      sessionKey,
+    );
+    await assert.rejects(
+      () => wrongBearerReplica.rotateSession({ previous: sessionReadA.result, now: sessionNow + 500 }),
+      /shared admin session store rejected the request/,
+      "admin session rotation must fail closed on the wrong bearer",
+    );
+    const sessionStateAfterWrongBearer = await executeRestCommand(
+      ready.fetchImpl,
+      endpoint,
+      restToken,
+      ["GET", sessionKey],
+    );
+    const sessionExpiryAfterWrongBearer = await inspectRedisExpiry(
+      ready.fetchImpl,
+      endpoint,
+      restToken,
+      sessionKey,
+    );
+    assert.equal(sessionStateAfterWrongBearer.json?.result, sessionStateBeforeWrongBearer.json?.result);
+    assert.equal(
+      sessionExpiryAfterWrongBearer.expiresAtMs,
+      sessionExpiryBeforeWrongBearer.expiresAtMs,
+      "wrong-Bearer rotation must preserve the exact session deadline",
+    );
+
+    const rotationNow = sessionNow + 1_000;
+    const sessionRace = await Promise.all([
+      replicaA.rotateSession({ previous: sessionReadA.result, now: rotationNow }),
+      replicaB.rotateSession({ previous: sessionReadB.result, now: rotationNow }),
+    ]);
+    for (const response of sessionRace) {
+      if (response.result.cookie?.value) secrets.add(response.result.cookie.value);
+      assertSessionCommandTransport(response, {
+        argumentCount: 3,
+        commandName: "EVAL",
+        redisKey: sessionKey,
+        scriptSha256: rotateSessionScriptSha256,
+        ttlMsArgument: String(ADMIN_SESSION_IDLE_TTL_MS),
+      });
+    }
+    const sessionWinnerIndex = sessionRace.findIndex((response) => response.result.expiresAt !== null);
+    assert.ok(sessionWinnerIndex === 0 || sessionWinnerIndex === 1, "exactly one replica must win rotation");
+    assert.equal(
+      sessionRace.filter((response) => response.result.expiresAt !== null).length,
+      1,
+      "concurrent rotation must have exactly one winner",
+    );
+    const sessionWinner = sessionRace[sessionWinnerIndex];
+    const sessionLoser = sessionRace[sessionWinnerIndex === 0 ? 1 : 0];
+    assert.equal(sessionWinner.result.expiresAt, rotationNow + ADMIN_SESSION_IDLE_TTL_MS);
+    assertSessionCookie(sessionWinner.result.cookie, sessionWinner.result.expiresAt);
+    assert.equal(sessionLoser.result.expiresAt, null);
+    assert.equal(sessionLoser.result.cookie, null);
+    const sessionV2 = decodeSessionCookie(sessionWinner.result.cookie.value);
+    if (typeof sessionV2?.sessionId === "string") secrets.add(sessionV2.sessionId);
+    assertSessionPayload(sessionV2, {
+      ...sessionV1,
+      expiresAt: rotationNow + ADMIN_SESSION_IDLE_TTL_MS,
+      issuedAt: rotationNow,
+      sessionVersion: 2,
+    });
+    const sessionRecordV2 = serializeSessionRecord(sessionV2);
+    const storedSessionV2 = await executeRestCommand(ready.fetchImpl, endpoint, restToken, ["GET", sessionKey]);
+    assert.equal(storedSessionV2.ok, true);
+    assert.equal(storedSessionV2.json?.result, sessionRecordV2);
+    const rotatedSessionExpiry = await inspectRedisExpiry(ready.fetchImpl, endpoint, restToken, sessionKey);
+    assert.ok(rotatedSessionExpiry.ttlMs > 0 && rotatedSessionExpiry.ttlMs <= ADMIN_SESSION_IDLE_TTL_MS);
+    assert.ok(
+      rotatedSessionExpiry.expiresAtMs > issuedSessionExpiry.expiresAtMs,
+      "successful rotation must move the idle deadline forward",
+    );
+    assert.ok(
+      Math.abs(rotatedSessionExpiry.expiresAtMs - sessionWinner.result.expiresAt) <= 5_000,
+      "rotated session store deadline must remain near the returned cookie deadline",
+    );
+
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 75));
+    const replayReplica = sessionWinnerIndex === 0 ? replicaB : replicaA;
+    const replayBeforeExpiry = await inspectRedisExpiry(ready.fetchImpl, endpoint, restToken, sessionKey);
+    const staleRotationReplay = await replayReplica.rotateSession({
+      previous: sessionV1,
+      now: rotationNow + 1_000,
+    });
+    assert.equal(staleRotationReplay.result.expiresAt, null);
+    assert.equal(staleRotationReplay.result.cookie, null);
+    assertSessionCommandTransport(staleRotationReplay, {
+      argumentCount: 3,
+      commandName: "EVAL",
+      redisKey: sessionKey,
+      scriptSha256: rotateSessionScriptSha256,
+      ttlMsArgument: String(ADMIN_SESSION_IDLE_TTL_MS),
+    });
+    const replayedSessionState = await executeRestCommand(
+      ready.fetchImpl,
+      endpoint,
+      restToken,
+      ["GET", sessionKey],
+    );
+    const replayAfterExpiry = await inspectRedisExpiry(ready.fetchImpl, endpoint, restToken, sessionKey);
+    assert.equal(replayedSessionState.json?.result, sessionRecordV2);
+    assert.equal(
+      replayAfterExpiry.expiresAtMs,
+      replayBeforeExpiry.expiresAtMs,
+      "stale rotation must preserve the exact active session deadline",
+    );
+    assert.ok(replayAfterExpiry.ttlMs < replayBeforeExpiry.ttlMs, "stale rotation must not extend session TTL");
+
+    const [oldCookieReadA, oldCookieReadB, newCookieReadA, newCookieReadB] = await Promise.all([
+      replicaA.readSession({ cookieValue: issuedCookie.value, now: rotationNow + 1_000 }),
+      replicaB.readSession({ cookieValue: issuedCookie.value, now: rotationNow + 1_000 }),
+      replicaA.readSession({ cookieValue: sessionWinner.result.cookie.value, now: rotationNow + 1_000 }),
+      replicaB.readSession({ cookieValue: sessionWinner.result.cookie.value, now: rotationNow + 1_000 }),
+    ]);
+    assert.equal(oldCookieReadA.result, null);
+    assert.equal(oldCookieReadB.result, null);
+    assertSessionPayload(newCookieReadA.result, sessionV2);
+    assertSessionPayload(newCookieReadB.result, sessionV2);
+    for (const response of [oldCookieReadA, oldCookieReadB, newCookieReadA, newCookieReadB]) {
+      assertSessionCommandTransport(response, { commandName: "GET", redisKey: sessionKey });
+    }
+
     const unauthorized = await executeRestCommand(ready.fetchImpl, endpoint, wrongToken, ["PING"]);
     assert.equal(unauthorized.ok, false);
     assert.ok(unauthorized.status === 401 || unauthorized.status === 403);
@@ -1487,7 +1926,7 @@ async function main(sourceProvenanceAtStartup) {
     const harnessSource = sourceProvenanceBefore.files["scripts/test-valkey-rest-rate-limit.mjs"];
     evidence = {
       status: "partial",
-      scope: "https-rest-rate-limit-keeper-two-replica",
+      scope: "https-rest-rate-limit-keeper-session-two-replica",
       sourceRevisionSha: sourceProvenanceBefore.sourceRevisionSha,
       sourceBinding: {
         allRelevantFilesBoundToRevision,
@@ -1496,7 +1935,12 @@ async function main(sourceProvenanceAtStartup) {
         stableFromProcessStartup: true,
         trackedWorktreeClean: sourceProvenanceBefore.trackedWorktreeStatus === "",
       },
-      platform: PLATFORM,
+      containerPlatform: PLATFORM,
+      hostNode: {
+        architecture: process.arch,
+        platform: process.platform,
+        version: process.version,
+      },
       images: Object.fromEntries(Object.entries(IMAGES).map(([name, image]) => [name, {
         executedPlatformManifestDigest: image.platformDigest,
         observedLocalIndexDigest: image.indexDigest,
@@ -1508,12 +1952,20 @@ async function main(sourceProvenanceAtStartup) {
         valkeyVersion,
       },
       sourceSha256: {
+        adminAuth: sha256(sourceProvenanceBefore.files["app/lib/adminAuth.ts"]),
+        adminSession: sha256(adminSessionSource),
         externalRateLimit: sha256(externalRateLimitSource),
         keeperDailyBudgetScript: keeperDailyBudgetScriptSha256,
         rateLimitScript: rateLimitScriptSha256,
+        rotateSessionScript: rotateSessionScriptSha256,
         testHarness: sha256(harnessSource),
       },
       checks: {
+        adminSessionAtomicRotationThroughHttpsRest: true,
+        adminSessionOldCookieRejectedForRead: true,
+        adminSessionSharedAcrossReplicas: true,
+        adminSessionStaleRotationPreservedStateAndDeadline: true,
+        adminSessionWrongBearerPreservedStateAndDeadline: true,
         authenticatedTlsTransport: true,
         applicationWrongBearerFailClosed: true,
         backendInternalWithNoDataStoreHostPorts: true,
@@ -1536,8 +1988,8 @@ async function main(sourceProvenanceAtStartup) {
       },
       missing: [
         "REST facade self-reported runtime version (immutable manifest is verified)",
-        "admin session rotation through HTTPS REST",
         "deployed web replicas and provider-managed HTTPS endpoint",
+        "hosted /api/admin/auth route, browser Set-Cookie, and public-HTTPS enforcement",
         "persistent external database and backup/restore evidence",
       ],
     };
@@ -1596,8 +2048,17 @@ async function main(sourceProvenanceAtStartup) {
 
   assert.ok(evidence, "parity evidence must exist after a successful run");
   assert.equal(cleanupVerified, true, "exact cleanup must be verified before artifact publication");
+  assert.ok(sourceProvenanceBefore, "pre-execution source provenance must exist");
+  const sourceProvenanceAfterCleanup = await captureSourceProvenance();
+  assert.deepEqual(
+    sourceProvenanceAfterCleanup,
+    sourceProvenanceBefore,
+    "HEAD, relevant source blobs, and working-tree content must remain stable through cleanup",
+  );
   evidence.checks.exactOwnedCleanup = true;
   evidence.checks.protectedDbUnchanged = true;
+  evidence.checks.replicaGracefulDbCloseAndExit = true;
+  evidence.sourceBinding.stableThroughCleanup = true;
   const serializedEvidence = JSON.stringify(evidence);
   for (const secret of secrets) assert.equal(serializedEvidence.includes(secret), false, "evidence must not contain test secrets");
   await mkdir(dirname(ARTIFACT_PATH), { recursive: true });
