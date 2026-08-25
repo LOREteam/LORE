@@ -1,7 +1,8 @@
 # Valkey and Upstash REST parity plan
 
-Status: selected parity-runtime candidate; not pulled, deployed, or executed.
-No credential, network endpoint, or live Redis/Valkey result is recorded here.
+Status: a direct, isolated Lua-engine check passed; HTTPS REST parity and
+shared-runtime evidence remain open. No endpoint or durable credential is
+recorded here.
 
 ## Selected candidate
 
@@ -50,6 +51,29 @@ it, provide an internal HTTPS façade that preserves this request ordering,
 authentication, response shape, bounded errors, and scripting semantics. It
 must not expose a Standard token to browsers, log credentials, silently proxy
 unknown commands, or fall back to a local in-memory store.
+
+## Direct Lua-engine check (2026-08-25)
+
+`npm run test:valkey:lua-engine` directly executes the three exact Lua strings
+currently extracted from the application on Valkey `8.1.9`. The test pins the
+OCI index digest and requests `linux/amd64`; it starts a unique container with
+no network, no published ports, read-only root, no persistence, temporary
+`/tmp` and `/data`, a random process-only password, and only the entrypoint
+capabilities (`CHOWN`, `SETUID`, `SETGID`) needed by the official image.
+
+The 2026-08-25 run passed these engine-level behaviors: global rate-limit
+increment/TTL, keeper reservation/replay/conflict/cap/malformed-state handling,
+and atomic session rotation/replay rejection. Its redacted artifact is
+`artifacts/valkey-runtime/valkey-lua-engine.json`; it records Valkey `8.1.9`,
+the image/platform digest, source-script hashes, and no secret or endpoint.
+The container is stopped and forcibly removed in `finally`, including on a test
+failure.
+
+This is intentionally **partial** evidence. It is direct TCP CLI testing of a
+single ephemeral container, not an Upstash-compatible HTTPS façade, two
+independent application replicas, a persistent external database, or restore
+evidence. It does not authorize deployment, an external request, or wallet
+activity.
 
 ## Runtime evidence required
 
