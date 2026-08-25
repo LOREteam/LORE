@@ -10,10 +10,12 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Current `HEAD` is `a5ff9f595900fead82c3825854b2e290c55f8fd8`. It commits the
-  seven-path P1.17 request-lifecycle and strict-verifier packet; collector
-  `158/158` and verifier `119/119` passed before that local commit. It is an
-  immutable local baseline, not the final clean-SHA release seal.
+- Current `HEAD` is `aaf515d20a0a0e487b5ded9128cf843659697f89`. It commits
+  mobile-mining Package A after the exact five-path manifest, SSR focused x2,
+  audit x2, TypeScript, protected-DB, and independent review. Its `a5ff9f595`
+  parent commits the seven-path P1.17 request-lifecycle and strict-verifier
+  packet. These are immutable local baselines, not the final clean-SHA release
+  seal.
 - Latest fully detached broad local-gate baseline: `333d7a81bb8780c5fc631646492ece53bbfa3926`
   (`test: cover bounded deposits recovery transport`). Its `3c8886acc` parent
   provides bounded shared admission/lease hardening and one 20-second,
@@ -37,8 +39,9 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   It is not the current permission scope. The current HEAD-bound permission
   manifest is [`docs/release-candidate-current.md`](release-candidate-current.md).
   The prior authorized 74-path packet and its later corrective packets are
-  committed, including the seven-path P1.17 packet at `a5ff9f595`. The current
-  five-path expected staging packet contains the docked mobile-action test,
+  committed, including the seven-path P1.17 packet at `a5ff9f595` and
+  mobile-mining Package A at `aaf515d20`. The current five-path expected
+  staging packet contains the full-Hub SSR Package B test,
   three current-state documents, and the self-excluded manifest. It is not yet
   staged; the user has granted local commit authority, while the refreshed
   exact manifest remains the staging boundary.
@@ -268,7 +271,8 @@ replacement needs another separately reviewed plan and exact approval.
 | Latest P1.10 fee-policy review | The remaining source assertions bind pre-wallet/signer fee validation, guarded submission sinks, or live-write helpers. No equivalent safe public behavior seam exists without simulating risky signing paths, so they remain fail-closed structural coverage. Focused x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Reviewed; no removal justified |
 | Latest P1.10 fee-policy review | The remaining source assertions bind pre-wallet/signer fee validation, guarded submission sinks, or live-write helpers. No equivalent safe public behavior seam exists without simulating risky signing paths, so they remain fail-closed structural coverage. Focused x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Reviewed; no removal justified |
 | Latest P1.10 mobile-mining seam | The standalone mobile-mining runner removes one redundant `walletSetup` source assertion only after its stale-settlement behavior scenario proves reset invalidates the old rejected attempt without unlocking or overwriting the new retry. Module `69/21/48 -> 68/20/48`; focused x2, audit x2, and self-test `17/17` pass. It is outside the coordinator graph, so the current official totals are `5820/6346` with `526` source operands. | Local test-only progress; partial objective |
-| Latest P1.10 docked mobile-action seam | Package A replaces two static dock-wiring assertions with real React SSR checks against the rendered manual and Auto-Miner opening tags. Both in-panel actions must carry `max-[899px]:hidden` while the separate mobile dock owns the primary CTA. Standalone classification is `68/20/48 -> 68/18/50`; focused x2, audit x2 (`5820/6346`, `526` source), self-test `17/17`, targeted ESLint, diff hygiene, protected-DB identity, and independent review pass. The runner remains outside the coordinator graph, so this module delta is not an aggregate delta. | Local test-only progress; Package A complete and not yet committed |
+| Latest P1.10 docked mobile-action seam | Package A replaces two static dock-wiring assertions with real React SSR checks against the rendered manual and Auto-Miner opening tags. Both in-panel actions must carry `max-[899px]:hidden` while the separate mobile dock owns the primary CTA. Standalone classification is `68/20/48 -> 68/18/50`; focused x2, audit x2 (`5820/6346`, `526` source), self-test `17/17`, targeted ESLint, diff hygiene, protected-DB identity, and independent review pass. The runner remains outside the coordinator graph, so this module delta is not an aggregate delta. | Committed locally at `aaf515d20`; no production change |
+| Latest P1.10 full-Hub mobile seam | Package B renders the real `WagmiProvider -> HubContent -> HubSidePanel` path under a denied custom transport and records zero RPC calls. It replaces two gameplay-stage source assertions and one obsolete-component literal guard with final-markup checks: responsive desktop blur is scoped, unscoped mobile blur is absent, and exactly one `mobile-mine-action` dock renders. Standalone classification is `68/18/50 -> 68/15/53`; focused x2, audit x2, self-test `17/17`, exact-runtime TypeScript, targeted ESLint, diff hygiene, protected-DB identity, and independent review pass. The direct SSR Next Image warning is non-blocking because production `next.config.mjs` already configures qualities `75` and `85`. | Local test-only progress; Package B complete and not yet committed |
 | Latest P1.10 rebate-history seam | The request-boundary runner removes two static pagination assertions only after the existing isolated child executes the real route: `limit=65` returns `400` before any DB read, while `limit=64` reaches the page read with exact `{ beforeEpoch: null, limit: 64 }` and fails closed on its mocked multicall. Focused API and route-child runners passed x2; audit x2 and self-test `17/17` pass. | Local test-only progress; partial and uncommitted |
 | Latest P1.10 claim-candidates seam | The integer-query runner replaces two static pagination assertions with a fresh child that executes the real handler: `limit=401` returns `400` without opening its poisoned DB path, while `limit=400` reaches the page read with exact `{ beforeEpoch: null, limit: 400 }`. Focused x2, audit x2, and self-test `17/17` pass. | Local test-only progress; partial and uncommitted |
 | Latest P1.10 auth-content-type seam | The request-boundary runner removes two redundant admin/chat auth source assertions because the independent API matrix executes both real routes with `text/plain` and proves exact JSON `415`, `no-store`, and `Vary: Cookie` handling. Focused domain and matrix runners x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Local test-only progress; partial and uncommitted |

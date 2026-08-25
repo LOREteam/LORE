@@ -128,9 +128,18 @@ under [`docs/archive/`](archive/).
       `68/18/50`; focused x2, audit x2 (`5820/6346`, `526` source), self-test
       `17/17`, targeted ESLint, diff, protected-DB identity, and independent
       review pass. This standalone delta does not change coordinator totals.
-- [ ] Complete one separately reviewed mobile-mining Package B only where an
-      equally honest executable public-behavior seam exists; retain structural
-      source guards when runtime observation would not prove the same contract.
+- [x] Complete separately reviewed mobile-mining Package B with a denied-RPC
+      SSR of the real `HubContent` path. Final markup proves responsive desktop
+      blur is scoped, unscoped mobile blur is absent, and exactly one
+      `mobile-mine-action` dock renders. Standalone classification is
+      `68/15/53`; focused x2, audit x2, self-test `17/17`, exact-runtime
+      TypeScript, targeted ESLint, diff, protected-DB identity, and independent
+      review pass. The official aggregate remains `5820/6346` with `526` source
+      operands because this runner is outside the coordinator graph.
+- [x] Retain the remaining 15 mobile source guards: hook ownership, callback/ref
+      identity, click dispatch, runtime reset wiring, async prop shape, and
+      `visualViewport`/safe-area effects are not equivalently observable in the
+      current SSR/public seam.
 - [x] Move the awaited Preview runner under the existing release-evidence
       wrapper while preserving order and inert import; that step reduced direct
       coordinator fan-out to `93/2/93`.

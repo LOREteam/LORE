@@ -8,10 +8,11 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
-- Current `HEAD` is `a5ff9f595900fead82c3825854b2e290c55f8fd8`. It commits the
-  exact seven-path P1.17 lifecycle/verifier packet after collector `158/158`,
-  verifier `119/119`, syntax, diff, protected-DB, and independent reviews. The
-  current tracked change is only the Package A mobile dock SSR test; the 32
+- Current `HEAD` is `aaf515d20a0a0e487b5ded9128cf843659697f89`. It commits
+  the exact five-path mobile-mining Package A after focused SSR x2, audit x2,
+  exact staged-blob digest, protected-DB, and independent review. Its
+  `a5ff9f595` parent commits the seven-path P1.17 lifecycle/verifier packet. The
+  current tracked change is only the Package B full-Hub SSR test; the 32
   generated artifact paths in three retained directories remain excluded.
 - Earlier security-reviewed baseline `3c8886acc1fa33045aa7bcc1d03bab9fa84fd09b` closes the
   final deposits-recovery transport bound found by targeted security review:
@@ -630,6 +631,17 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
     x2 (`5820/6346`, `526` source), self-test `17/17`, targeted ESLint, diff,
     protected-DB identity, and independent review pass. Only the test runner
     changed; there was no production, wallet, RPC, network, or DB mutation.
+80. Mobile-mining Package B renders the real
+    `WagmiProvider -> HubContent -> HubSidePanel` path with a denied custom
+    transport and records zero RPC calls. It replaces two source-derived stage
+    class assertions and one obsolete-component literal guard with final-markup
+    checks for scoped responsive blur, no unscoped mobile blur, and exactly one
+    `mobile-mine-action` dock. Standalone classification moves
+    `68/18/50 -> 68/15/53`; focused x2, audit x2 (`5820/6346`, `526` source),
+    self-test `17/17`, exact-runtime TypeScript, targeted ESLint, diff,
+    protected-DB identity, and independent review pass. The remaining 15
+    structural source guards have no equivalent current SSR/public seam and
+    remain intentionally fail-closed.
 
 ## Pre-document verification snapshot
 

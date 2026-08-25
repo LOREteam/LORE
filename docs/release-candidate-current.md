@@ -1,7 +1,7 @@
 # Current release-candidate permission manifest
 
 Snapshot date: 2026-08-25. Base `HEAD`:
-`a5ff9f595900fead82c3825854b2e290c55f8fd8` on `codex/repo-cleanup`.
+`aaf515d20a0a0e487b5ded9128cf843659697f89` on `codex/repo-cleanup`.
 
 Status: the user has granted authority for local commits. This manifest remains
 the exact staging boundary for the current packet; that authority does not
@@ -27,7 +27,7 @@ wallet/RPC action, Preview, signing, or chain transaction.
 - Canonical staged content-set SHA-256 for the other `4` candidate files (this
   self-referential manifest excluded; sorted
   `path + NUL + staged blob SHA-256 + LF`):
-  `1792b7c94079fcb6bd5f8b0ddc2eb614a2e879e1566ee92df92e60a93b8fc5e1`.
+  `1159a0cc031f32a5bcce3d3431e68953e061369103deb9760012cdc90eaacfe6`.
 
 ```text
 docs/agent-progress.md

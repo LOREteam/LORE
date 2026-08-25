@@ -2,16 +2,20 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { custom } from "viem";
+import { createConfig, WagmiProvider } from "wagmi";
 import {
   deriveAutoMinerAction,
   deriveManualMiningAction,
   deriveWalletCta,
 } from "../app/components/BetPanel";
+import { HubContent } from "../app/components/HubContent";
 import {
   formatExactMobileBetTotal,
   HubSidePanel,
   summarizeMobileTileSelection,
 } from "../app/components/HubSidePanel";
+import { APP_CHAIN } from "../app/lib/constants";
 import { createWalletSetupGuard, runWalletSetupAttempt } from "../app/lib/walletSetup";
 
 assert.equal(
@@ -213,6 +217,9 @@ const getOpeningTag = (markup: string, attribute: string) => {
   return openingIndex >= 0 && closingIndex >= 0 ? markup.slice(openingIndex, closingIndex + 1) : "";
 };
 const getClassName = (openingTag: string) => openingTag.match(/class="([^"]*)"/)?.[1] ?? "";
+const countClassToken = (markup: string, token: string) => [...markup.matchAll(/class="([^"]*)"/g)]
+  .filter(([, className]) => className.split(/\s+/).includes(token))
+  .length;
 
 const mobileActionMarkup = renderSidePanel();
 const mobileManualActionTag = getOpeningTag(mobileActionMarkup, 'data-testid="mobile-manual-bet-action"');
@@ -268,11 +275,97 @@ assert.match(walletErrorMarkup, />Wallet setup failed<\/span>/, "the separate wa
 const chatOpenMarkup = renderSidePanel({ chatOpen: true });
 assert.doesNotMatch(chatOpenMarkup, /data-testid="mobile-mining-action-bar"/, "chat must replace, not overlap, the rendered sticky action bar");
 
+let hubSsrRpcCalls = 0;
+const hubSsrTransport = custom({
+  request: async () => {
+    hubSsrRpcCalls += 1;
+    throw new Error("SSR RPC forbidden");
+  },
+});
+const hubSsrConfig = createConfig({
+  chains: [APP_CHAIN],
+  transports: { [APP_CHAIN.id]: hubSsrTransport } as Record<number, typeof hubSsrTransport>,
+  ssr: true,
+});
+const hubMarkup = renderToStaticMarkup(
+  React.createElement(
+    WagmiProvider,
+    { config: hubSsrConfig },
+    React.createElement(HubContent, {
+      autoMinePhase: "idle",
+      autoMineProgress: null,
+      readOnlyReason: null,
+      chatOpen: false,
+      formattedBalance: "100",
+      walletAuthenticated: true,
+      walletConnected: true,
+      embeddedWalletSyncing: false,
+      walletSetupCreating: false,
+      walletSetupError: null,
+      onCreateEmbeddedWallet: async () => undefined,
+      onOpenWalletSettings: () => undefined,
+      formattedEthBalance: "1",
+      gridDisplayEpoch: "42",
+      gridSelectedTiles: [1, 2, 3],
+      handleAutoMineWithGuard: async () => undefined,
+      handleManualMineWithGuard: async () => undefined,
+      isAnalyzing: false,
+      isAutoMining: false,
+      isClaiming: false,
+      isDeepScanning: false,
+      isPending: false,
+      isRevealing: false,
+      isScanning: false,
+      rewardScanState: {
+        status: "verified",
+        walletAddress: "0x0000000000000000000000000000000000000001",
+        lastVerifiedAt: 1,
+        incomplete: false,
+        error: null,
+      },
+      coldBootDefaults: false,
+      liveStateReady: true,
+      isDailyJackpot: false,
+      isWeeklyJackpot: false,
+      lowEthBalance: false,
+      onClaim: () => undefined,
+      onClaimAll: () => undefined,
+      onQuickPickTiles: () => undefined,
+      onScan: () => undefined,
+      onTileClick: () => undefined,
+      reducedMotion: false,
+      runningParams: null,
+      selectedTilesCount: 3,
+      showSelectionOnGrid: true,
+      tileViewData: [],
+      unclaimedWins: [],
+      walletAddress: "0x0000000000000000000000000000000000000001",
+      winningTileId: null,
+      hasMyWinningBet: false,
+    }),
+  ),
+);
+if (hubSsrRpcCalls !== 0) throw new Error(`HubContent SSR attempted ${hubSsrRpcCalls} RPC call(s)`);
+const renderedGameplayStageClass = getClassName(getOpeningTag(hubMarkup, 'aria-label="Mining game stage"'));
+assert.match(
+  renderedGameplayStageClass,
+  /(?:^|\s)min-\[900px\]:backdrop-blur-md(?:\s|$)/,
+  "the rendered desktop stage may use backdrop blur without containing the fixed mobile action dock",
+);
+assert.doesNotMatch(
+  renderedGameplayStageClass,
+  /(?:^|\s)backdrop-blur-md(?:\s|$)/,
+  "the rendered mobile stage must not create a backdrop-filter containing block around the fixed action dock",
+);
+assert.equal(
+  countClassToken(hubMarkup, "mobile-mine-action"),
+  1,
+  "the rendered mining experience must expose exactly one mobile action dock",
+);
+
 const sidePanelSource = readFileSync("app/components/HubSidePanel.tsx", "utf8");
 const betPanelSource = readFileSync("app/components/BetPanel.tsx", "utf8");
-const hubSource = readFileSync("app/components/HubContent.tsx", "utf8");
 const walletRuntimeSource = readFileSync("app/hooks/useLineaOreClientRuntime.ts", "utf8");
-const gameplayStageClass = hubSource.match(/className="([^"]*gameplay-stage[^"]*)"/)?.[1] ?? "";
 
 assert.equal(
   (sidePanelSource.match(/const autoMinerForm = useAutoMinerForm\(/g) ?? []).length,
@@ -297,17 +390,6 @@ assert.match(walletRuntimeSource, /walletSetupIdentityRef[\s\S]*!wallet\.authent
 assert.match(sidePanelSource, /onCreateEmbeddedWallet: \(\) => Promise<void>/, "wallet setup must retain the async creation contract");
 assert.match(sidePanelSource, /window\.visualViewport/);
 assert.match(sidePanelSource, /env\(safe-area-inset-bottom\)/);
-assert.match(
-  gameplayStageClass,
-  /min-\[900px\]:backdrop-blur-md/,
-  "mobile gameplay must not create a backdrop-filter containing block around the fixed action dock",
-);
-assert.doesNotMatch(
-  gameplayStageClass,
-  /(?:^|\s)backdrop-blur-md(?:\s|$)/,
-  "an unscoped mobile backdrop filter would move and clip the fixed action dock",
-);
-assert.doesNotMatch(hubSource, /MobileManualActionBar/, "the obsolete second mobile action implementation must be removed");
 
 assert.deepEqual(
   deriveManualMiningAction({
@@ -378,6 +460,7 @@ void walletSetupBehaviorTest.then(
   exactDecimalTotal: true,
   sharedAutoMinerForm: true,
   sharedActionLock: true,
+  hubContentSsrRpcCalls: hubSsrRpcCalls,
   touchTargetsPx: 44,
   visualViewportAware: true,
   walletSetupCta: true,
