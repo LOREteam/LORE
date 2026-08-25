@@ -704,6 +704,18 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 - A new local campaign and supported security scan are blocked by disk and/or
   entitlement, not by a false green claim.
 
+- Exact SHA `333d7a81bb8780c5fc631646492ece53bbfa3926` now has a fresh detached
+  `npm ci` evidence packet: TypeScript, P1 hardening `41/41` in `302424ms`,
+  hermetic build, ESLint (six warnings and zero errors), full `check-local`
+  including browser smoke, and summary-only local launch proof L1--L17 all
+  passed. The final API-matrix fixture uses `depositsRecoveryPublicClient` for
+  recovery head/log mocks, matching production's bounded single-transport path.
+  Supported Standard scan `6ca5758f-a4a1-43db-b772-ba98486f1223` found zero
+  findings in five critical source surfaces and expressly retained partial
+  5-of-785 source coverage plus all live/hosted exclusions. This is local,
+  source-only evidence; Valkey topology, hosted CI, TLS, mobile Privy, and every
+  wallet/chain/Preview action remain open external gates.
+
 ## External boundary
 
 - V9 remains a compatibility baseline until independently evidenced V10

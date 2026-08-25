@@ -10,25 +10,24 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Current immutable baseline `HEAD`: `3c8886acc1fa33045aa7bcc1d03bab9fa84fd09b`
-  (`fix: bound deposits recovery RPC transport`). It retains the prior bounded
-  shared admission/lease hardening and uses one 20-second, one-retry RPC
-  transport for the optional deposits recovery, so a configured fallback chain
-  cannot outlive the cross-replica lease. A detached clean checkout completed
-  fresh `npm ci`, focused recovery safety, TypeScript, and focused ESLint. The
-  exact-SHA targeted Standard security scan `d7d531b4-3c25-4c98-a2a4-afc8c314bd92`
-  found no remaining issue in the corrected deposits/OG paths. The summary-only
-  local launch proof passed L1--L17. Its full `check-local` attempt was stopped
-  during an anomalously long ESLint stage and returned exit `4294967295`; it is
-  explicitly not final-SHA full-gate evidence. No push, deployment, wallet,
-  signing, RPC, Preview, or chain action occurred.
-- The P1 API route matrix fixture now mocks `depositsRecoveryPublicClient` for
-  the recovery head/log seams rather than the unrelated general public client.
-  This restores executable recovery coverage after the bounded single-transport
-  hardening: two focused matrices passed 9 routes, 85 black-box requests, five
-  fault mutants, and the two-process shared limiter. TypeScript and two
-  schema-v2 behavior audits passed (`5819/6345` behavioral, 526 source
-  operands; self-test `17/17`). No production route behavior changed.
+- Latest code-affecting immutable baseline: `333d7a81bb8780c5fc631646492ece53bbfa3926`
+  (`test: cover bounded deposits recovery transport`). Its `3c8886acc` parent
+  provides bounded shared admission/lease hardening and one 20-second,
+  one-retry recovery transport, so a configured fallback chain cannot outlive
+  the cross-replica lease. The final fixture mocks that dedicated recovery
+  client for head/log reads rather than the unrelated general public client;
+  production route behavior did not change. Two focused matrices passed 9
+  routes, 85 black-box requests, five fault mutants, and the two-process shared
+  limiter. Schema-v2 behavior audits passed at `5819/6345` behavioral assertions
+  with 526 source operands and a `17/17` self-test.
+- A fresh detached checkout of exact SHA `333d7a81...` completed `npm ci`,
+  TypeScript, P1 hardening (`41/41` in `302424ms`), hermetic build, ESLint
+  (six warnings, zero errors), and full `check-local` including browser smoke.
+  The exact local launch proof preflight passed L1--L17. Standard security scan
+  `6ca5758f-a4a1-43db-b772-ba98486f1223` found zero findings in its five
+  reviewed critical surfaces; its report explicitly records partial source
+  coverage (5 of 785 tracked files) and excludes all live/hosted activity.
+  No push, deployment, wallet, signing, RPC, Preview, or chain action occurred.
 - The goal's `318` paths describe a historical snapshot at `281c5fd02`; that
   candidate later grew to `320` paths and was committed in eight local commits.
   It is not the current permission scope. The current HEAD-bound permission
