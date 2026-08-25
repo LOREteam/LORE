@@ -368,9 +368,16 @@ under [`docs/archive/`](archive/).
       result/error envelopes, shared count/TTL, source/SHA binding, exact Docker
       cleanup, and post-incident protected base/WAL/SHM invariants. This is
       hermetic local evidence only.
-- [ ] Provision the reviewed deployed shared runtime, repeat the rate-limit path
-      against that provider, and execute `KEEPER_DAILY_BUDGET_SCRIPT` plus
-      `ROTATE_SESSION_SCRIPT` through the same managed HTTPS REST contract.
+- [x] Execute the real `KEEPER_DAILY_BUDGET_SCRIPT` application path through
+      the same verified local HTTPS REST topology from two independent Node
+      processes. Exact commit `b53489ed` has a retained clean-HEAD run covering
+      cross-replica reservation/replay/conflict, atomic cost/signature caps,
+      server `TIME`/absolute-midnight `PEXPIRETIME`, prior-day reset,
+      malformed-state and wrong-Bearer fail-closed, exact cleanup, protected-DB
+      invariants, and source/SHA binding. This remains hermetic local evidence.
+- [ ] Provision the reviewed deployed shared runtime, repeat the rate-limit and
+      keeper paths against that provider, and execute `ROTATE_SESSION_SCRIPT`
+      through the same managed HTTPS REST contract.
 - [ ] Exercise deployed web replicas, indexer/bot/monitor, shared limiter/lock,
       cross-host consent ledger, external persistent DB, and backup/restore.
 

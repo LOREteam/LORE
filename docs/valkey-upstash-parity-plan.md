@@ -1,10 +1,11 @@
 # Valkey and Upstash REST parity plan
 
 Status: direct engine execution covers all three production Lua scripts, and a
-hermetic HTTPS/REST check covers the real rate-limit application path from two
-Node processes at local SHA `cbf916739f6a55682da0af69e5463cec1fec3581`.
-Keeper/session HTTPS, a deployed provider/shared runtime, persistence, restore,
-and non-web processes remain open. No endpoint or durable credential is recorded.
+hermetic HTTPS/REST check covers the real rate-limit and keeper daily-budget
+application paths from two Node processes at exact local SHA
+`b53489ededdcfdda694ccb6f5a64655d7d9a5ca2`. Session HTTPS, a deployed
+provider/shared runtime, persistence, restore, and non-web processes remain
+open. No endpoint or durable credential is recorded.
 
 ## Selected candidate
 
@@ -88,11 +89,11 @@ independent application replicas, a persistent external database, or restore
 evidence. It does not authorize deployment, an external request, or wallet
 activity.
 
-## Local HTTPS rate-limit application check (2026-08-25)
+## Local HTTPS rate-limit and keeper application check (2026-08-25)
 
 The latest retained clean-HEAD run of `scripts/test-valkey-rest-rate-limit.mjs`
-passed at exact local SHA `cbf916739f6a55682da0af69e5463cec1fec3581`;
-`npm run test:valkey:rest-rate-limit` is its package entry. The harness starts
+passed at exact local SHA `b53489ededdcfdda694ccb6f5a64655d7d9a5ca2`;
+`npm run test:valkey:rest-parity` is its explicit combined package entry. The harness starts
 the three exact Linux AMD64 manifests above on two isolated Docker networks:
 Valkey and SRH publish no host port; only Caddy receives a Docker-assigned
 loopback HTTPS port. The
@@ -101,13 +102,19 @@ the default system CA, and then trusts only the ephemeral Caddy root with normal
 certificate verification enabled.
 
 Two independent long-lived Node processes import the real
-`consumeExternalRateLimit`. They share one Valkey keyspace and pass
+`consumeExternalRateLimit` and `reserveExternalKeeperDailyBudget`. They share
+one Valkey keyspace and pass
 `allowed, allowed, blocked`, positive non-resetting TTL, and exact Lua-script
 hash checks. Wrong Bearer fails both raw REST and the production caller;
-`{result}` and `{error}` envelopes are exercised. Startup, pre-replica, and
+`{result}` and `{error}` envelopes are exercised. The keeper path proves shared
+totals, cross-process replay, conflict without mutation, atomic cost/signature
+caps, tightened-policy refusal, server `TIME` plus absolute `PEXPIRETIME` at
+the next UTC midnight, replay/error deadline preservation, prior-day reset,
+malformed-state refusal without mutation, and wrong-Bearer refusal without
+created state. Startup, pre-replica, and
 post-execution HEAD/blob/content captures match, every replica reports the
 captured production-source digest, and the clean post-commit artifact reports
-`allRelevantFilesBoundToRevision=true`.
+`allRelevantFilesBoundToRevision=true` and `trackedWorktreeClean=true`.
 
 Secrets exist only in process memory or exclusive temporary files. Every
 attempted container/network carries a unique run label; full IDs and labels are
@@ -117,7 +124,7 @@ Redacted evidence is in
 `artifacts/valkey-runtime/valkey-rest-rate-limit.json`.
 
 This remains **partial local parity**. It does not prove the managed provider,
-deployed web replicas, keeper/session application paths, indexer/bot/monitor,
+deployed web replicas, session application path, indexer/bot/monitor,
 persistent external storage, backup/restore, or cross-host behavior.
 
 ## Runtime evidence required

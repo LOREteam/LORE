@@ -8,15 +8,13 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
-- The current baseline is documentation commit
-  `e448e4fefd1dbe77ae3579875f66e070472c79cb`; its parent
-  `cbf916739f6a55682da0af69e5463cec1fec3581` commits the local HTTPS/REST
-  Valkey rate-limit packet and its retained clean-HEAD evidence. The current
-  uncommitted exact-five-path candidate extends that same two-process harness
-  through the real keeper daily-budget production seam. Its focused dirty-tree
-  evidence is intentionally not called SHA-bound until the candidate is
-  committed and rerun clean. Retained generated artifact directories stay
-  excluded.
+- The current tested code baseline and parent of this documentation-only packet
+  is `b53489ededdcfdda694ccb6f5a64655d7d9a5ca2`. It commits the exact five-path
+  HTTPS/REST Valkey keeper parity extension; its clean-HEAD npm rerun binds all
+  relevant blobs to that SHA with stable startup-to-finish provenance, exact
+  owned cleanup, and unchanged post-incident protected base/WAL/SHM identity.
+  Parent `e448e4f` documents the earlier rate-limit-only commit. Retained
+  generated artifact directories stay excluded.
 - Earlier security-reviewed baseline `3c8886acc1fa33045aa7bcc1d03bab9fa84fd09b` closes the
   final deposits-recovery transport bound found by targeted security review:
   recovery head/log reads use one `http(RPC_URL, { timeout: 20_000,
@@ -648,7 +646,7 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
     protected-DB identity, and independent review pass. The remaining 15
     structural source guards have no equivalent current SSR/public seam and
     remain intentionally fail-closed.
-81. The current Valkey parity candidate executes the exported
+81. Commit `b53489ededdcfdda694ccb6f5a64655d7d9a5ca2` executes the exported
     `reserveExternalKeeperDailyBudget` through two distinct Node processes,
     verified Caddy TLS/SNI, the pinned SRH manifest, and real Valkey `8.1.9`.
     Real Lua behavior proves shared reservations, cross-replica replay,
@@ -660,9 +658,11 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
     x2, the exact npm entry, direct three-script Lua-engine regression, the TSX
     keeper test, syntax, targeted ESLint, diff hygiene, exact owned cleanup,
     and post-incident protected base/WAL/SHM identity all pass. The retained
-    artifact remains honest `partial` and dirty-tree/unbound until a clean-HEAD
-    rerun; session HTTPS, deployed/provider topology, persistence, and restore
-    remain open.
+    artifact remains honest `partial`, but the post-commit npm rerun now reports
+    `allRelevantFilesBoundToRevision=true`, `trackedWorktreeClean=true`, stable
+    startup-to-finish provenance, and exact source revision `b53489ed...`.
+    Session HTTPS, deployed/provider topology, persistence, and restore remain
+    open.
 
 ## Pre-document verification snapshot
 
@@ -756,14 +756,14 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   `consumeExternalRateLimit` and `reserveExternalKeeperDailyBudget` from two
   independent Node processes through
   verified Caddy TLS/SNI and a digest-pinned SRH image selected from tag
-  `0.0.10` into the same Valkey keyspace. The latest retained clean-HEAD run
-  remains the rate-limit-only `cbf916739` result. The expanded dirty-tree run
-  additionally passes keeper replay/conflict, atomic cost/signature caps,
+  `0.0.10` into the same Valkey keyspace. The latest retained clean-HEAD run at
+  `b53489ededdcfdda694ccb6f5a64655d7d9a5ca2` passes rate limiting plus keeper
+  replay/conflict, atomic cost/signature caps,
   server-time TTL/day-reset, malformed-state and wrong-Bearer refusal, exact
-  cleanup, and post-incident base/WAL/SHM pre/post identity; it remains
-  `allRelevantFilesBoundToRevision=false` until the candidate is committed and
-  rerun clean. Session HTTPS, deployed replicas/provider, persistent external
-  DB, and restore remain open.
+  cleanup, and post-incident base/WAL/SHM pre/post identity. It reports
+  `allRelevantFilesBoundToRevision=true`, `trackedWorktreeClean=true`, and exact
+  source-SHA binding. Session HTTPS, deployed replicas/provider, persistent
+  external DB, and restore remain open.
 - Header balance provenance now carries wagmi fetching/error/stale/updated-at metadata:
   a known balance remains visible on refresh, stale data, or RPC error, and the card
   exposes an explicit state plus any trusted last-updated timestamp. It does not infer
@@ -772,7 +772,7 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   scan, and hosted CI cycle is open; the dirty working tree invalidates older
   final-SHA/sealed claims.
 - The user has granted local-commit authority. Stage only the exact current
-  five-path keeper parity packet after its zero-omission audit; historical
+  five-path documentation packet after its zero-omission audit; historical
   7/74/318/320 scopes
   do not widen that staging boundary or authorize external actions.
 - P1.17 needs a final canonical/profile sealed pair and a real physical
