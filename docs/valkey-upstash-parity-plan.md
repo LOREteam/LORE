@@ -6,13 +6,17 @@ No credential, network endpoint, or live Redis/Valkey result is recorded here.
 ## Selected candidate
 
 - Engine: Valkey `8.1.9`.
-- Image: the official `valkey/valkey` multi-platform manifest observed on
-  2026-08-24, pinned as
-  `valkey/valkey@sha256:837f92eff9f89afee3b07cd8c43a91c2ff72d539d7e895c9696c67d014fa9eb2`.
-- Variant used for the parity harness: the corresponding `8.1.9-alpine` tag
-  only as a human-readable provenance label; deployments must use the digest
-  reference above, record their resolved platform manifest, and reject a
-  mismatch.
+- Image: the official `valkey/valkey:8.1.9` multi-platform OCI index observed
+  on 2026-08-25, pinned as
+  `valkey/valkey@sha256:f0ba225266310efba5fb33383e21c64fbd07907304224786c780606e7ebd7327`.
+- Required host platform for this harness: `linux/amd64`, resolved from that
+  index as
+  `sha256:3d9b17f2fa3d938c63c0e951a669f8752f57fdee2d771a757830f66b4c8cc0bf`.
+  Deployments must pin the index, record the resolved platform manifest, and
+  reject a platform or digest mismatch.
+
+The prior `sha256:837f...` reference resolves to `linux/arm/v7`; it was not
+used as runtime evidence and must not be selected on an AMD64 host.
 
 The official image is not safe to publish directly: its documentation states
 that protected mode is off by default for container networking. Keep Valkey on
@@ -21,10 +25,11 @@ place any HTTPS endpoint behind authenticated infrastructure. This is a
 candidate for an isolated staging/parity runtime, not a selection of a managed
 production provider or evidence that a daemon is currently available.
 
-Sources consulted on 2026-08-24:
+Sources consulted on 2026-08-25:
 
 - <https://hub.docker.com/r/valkey/valkey>
-- <https://hub.docker.com/layers/valkey/valkey/8.1-alpine/images/sha256-837f92eff9f89afee3b07cd8c43a91c2ff72d539d7e895c9696c67d014fa9eb2>
+- `docker buildx imagetools inspect valkey/valkey:8.1.9` (2026-08-25;
+  index and Linux AMD64 manifest above)
 - <https://upstash.com/docs/redis/features/restapi>
 - <https://upstash.com/docs/redis/sdks/ts/commands/scripts/eval>
 
