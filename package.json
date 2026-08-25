@@ -168,6 +168,7 @@
     "test:db-operations:summary": "node scripts/run-db-operations-summary.mjs",
     "test:monitoring": "node scripts/test-runtime-monitor-drill.mjs",
     "test:monitoring:summary": "node scripts/run-monitoring-drill-summary.mjs",
+    "test:runtime-role-topology": "node scripts/test-runtime-role-topology.mjs",
     "proof:restore:collect": "node scripts/collect-restore-evidence.mjs",
     "proof:restore:draft": "node scripts/create-restore-proof-draft.mjs",
     "proof:signoff": "node scripts/check-signoff-proof.mjs",

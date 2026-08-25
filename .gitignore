@@ -62,6 +62,7 @@ artifacts/jackpot-preview/
 artifacts/jackpot-pages/
 artifacts/manual-check/
 artifacts/performance/
+artifacts/runtime-topology/
 artifacts/smoke-browser/
 artifacts/solc/
 /.playwright-mcp/
