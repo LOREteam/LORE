@@ -8,14 +8,15 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
-- The current tested code baseline and parent of this documentation-only commit
-  is `cbf916739f6a55682da0af69e5463cec1fec3581`. It commits the exact five-path
-  local HTTPS/REST Valkey rate-limit parity packet after
-  the retained clean-HEAD run, direct Lua-engine regression, exact staged
-  digests, post-incident protected base/WAL/SHM invariants, and independent
-  `CLEAN` review. Its
-  `39f68888` parent commits mobile-mining Package B. This documentation-only
-  child records that result; retained generated artifact directories stay excluded.
+- The current baseline is documentation commit
+  `e448e4fefd1dbe77ae3579875f66e070472c79cb`; its parent
+  `cbf916739f6a55682da0af69e5463cec1fec3581` commits the local HTTPS/REST
+  Valkey rate-limit packet and its retained clean-HEAD evidence. The current
+  uncommitted exact-five-path candidate extends that same two-process harness
+  through the real keeper daily-budget production seam. Its focused dirty-tree
+  evidence is intentionally not called SHA-bound until the candidate is
+  committed and rerun clean. Retained generated artifact directories stay
+  excluded.
 - Earlier security-reviewed baseline `3c8886acc1fa33045aa7bcc1d03bab9fa84fd09b` closes the
   final deposits-recovery transport bound found by targeted security review:
   recovery head/log reads use one `http(RPC_URL, { timeout: 20_000,
@@ -550,9 +551,10 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
     Valkey `8.1.9` and records the observed immutable official image manifest
     plus the mandatory Upstash-style HTTPS REST façade. Direct local execution
     now covers all three real Lua programs, and commit `cbf916739` covers the
-    HTTPS rate-limit application path from two Node processes. A deployed
-    provider, deployed web replicas, keeper/session HTTPS, persistence, and
-    restore evidence remain open.
+    HTTPS rate-limit application path from two Node processes. The current
+    candidate adds keeper HTTPS behavior on the same local topology; it is not
+    yet clean-HEAD evidence. A deployed provider, deployed web replicas,
+    session HTTPS, persistence, and restore evidence remain open.
 69. The `24` source assertions in `test-business-release-operations.mjs` were
     reviewed rather than removed. They protect the Windows-only local-campaign
     fixture; Linux intentionally returns before that executable fixture, so
@@ -646,6 +648,21 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
     protected-DB identity, and independent review pass. The remaining 15
     structural source guards have no equivalent current SSR/public seam and
     remain intentionally fail-closed.
+81. The current Valkey parity candidate executes the exported
+    `reserveExternalKeeperDailyBudget` through two distinct Node processes,
+    verified Caddy TLS/SNI, the pinned SRH manifest, and real Valkey `8.1.9`.
+    Real Lua behavior proves shared reservations, cross-replica replay,
+    conflict without mutation, atomic cost and signature caps, tightened-policy
+    refusal, server `TIME` plus absolute `PEXPIRETIME` at the next UTC
+    midnight, replay/error deadline preservation, prior-day reset,
+    malformed-state refusal without mutation, and wrong-Bearer fail-closed
+    with no created state. Final focused
+    x2, the exact npm entry, direct three-script Lua-engine regression, the TSX
+    keeper test, syntax, targeted ESLint, diff hygiene, exact owned cleanup,
+    and post-incident protected base/WAL/SHM identity all pass. The retained
+    artifact remains honest `partial` and dirty-tree/unbound until a clean-HEAD
+    rerun; session HTTPS, deployed/provider topology, persistence, and restore
+    remain open.
 
 ## Pre-document verification snapshot
 
@@ -736,15 +753,17 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   its live campaign, external topology, and authorization evidence remain open.
 - Direct execution now covers all three exact production Lua programs on
   pinned Valkey `8.1.9`. The new local parity harness also executes the real
-  `consumeExternalRateLimit` from two independent Node processes through
+  `consumeExternalRateLimit` and `reserveExternalKeeperDailyBudget` from two
+  independent Node processes through
   verified Caddy TLS/SNI and a digest-pinned SRH image selected from tag
   `0.0.10` into the same Valkey keyspace. The latest retained clean-HEAD run
-  passes `allowed, allowed, blocked`, wrong Bearer, `{result}`/`{error}`, TTL
-  non-reset, exact cleanup, and post-incident base/WAL/SHM pre/post identity.
-  The post-commit rerun reports `allRelevantFilesBoundToRevision=true`, stable
-  startup-to-finish provenance, and exact source revision `cbf916739f6a5568`.
-  This is partial local `RATE_LIMIT_SCRIPT` evidence only; keeper/session HTTPS,
-  deployed replicas/provider, persistent external DB, and restore remain open.
+  remains the rate-limit-only `cbf916739` result. The expanded dirty-tree run
+  additionally passes keeper replay/conflict, atomic cost/signature caps,
+  server-time TTL/day-reset, malformed-state and wrong-Bearer refusal, exact
+  cleanup, and post-incident base/WAL/SHM pre/post identity; it remains
+  `allRelevantFilesBoundToRevision=false` until the candidate is committed and
+  rerun clean. Session HTTPS, deployed replicas/provider, persistent external
+  DB, and restore remain open.
 - Header balance provenance now carries wagmi fetching/error/stale/updated-at metadata:
   a known balance remains visible on refresh, stale data, or RPC error, and the card
   exposes an explicit state plus any trusted last-updated timestamp. It does not infer
@@ -753,7 +772,7 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   scan, and hosted CI cycle is open; the dirty working tree invalidates older
   final-SHA/sealed claims.
 - The user has granted local-commit authority. Stage only the exact current
-  five-path documentation packet after its zero-omission audit; historical
+  five-path keeper parity packet after its zero-omission audit; historical
   7/74/318/320 scopes
   do not widen that staging boundary or authorize external actions.
 - P1.17 needs a final canonical/profile sealed pair and a real physical

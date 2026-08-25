@@ -229,6 +229,7 @@ function createPinnedHttpsFetch({ ca, endpoint, expectedToken = null, observatio
     const headers = normalizeHeaders(init.headers);
     const command = body === null ? null : JSON.parse(body.toString("utf8"));
     observation.lastRequest = {
+      argumentCount: Array.isArray(command) && command[0] === "EVAL" ? Math.max(0, command.length - 4) : null,
       bearerMatches: expectedToken === null ? null : headers.authorization === `Bearer ${expectedToken}`,
       commandName: Array.isArray(command) ? command[0] : null,
       contentType: headers["content-type"] ?? null,
@@ -304,6 +305,114 @@ async function executeRestCommand(fetchImpl, endpoint, token, command) {
   });
   const payload = await readBoundedJson(response);
   return { ok: response.ok, status: response.status, ...payload };
+}
+
+function keeperBudgetRedisKey(chainId, contractAddress) {
+  return `lore:keeper-budget:v1:${sha256(`${chainId}:${contractAddress.toLowerCase()}`)}`;
+}
+
+function keeperReservationField(signerAddress, nonce) {
+  return `r:${sha256(`${signerAddress.toLowerCase()}:${nonce}`)}`;
+}
+
+function normalizeRedisHashResponse(response) {
+  assert.equal(response.ok, true);
+  assert.ok(Array.isArray(response.json?.result));
+  assert.equal(response.json.result.length % 2, 0);
+  const entries = [];
+  for (let index = 0; index < response.json.result.length; index += 2) {
+    entries.push([String(response.json.result[index]), String(response.json.result[index + 1])]);
+  }
+  return Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function createKeeperReservationInput({
+  chainId,
+  contractAddress,
+  signerAddress,
+  nonce,
+  reservedMaxCostWei,
+  maxSignatures = 10,
+  maxReservedCostWei = "100",
+  intentSeed = `nonce-${nonce}`,
+}) {
+  return {
+    chainId,
+    contractAddress,
+    signerAddress,
+    nonce,
+    epoch: String(10_000 + nonce),
+    signingIntentHash: `0x${sha256(`keeper-parity:${intentSeed}`)}`,
+    reservedMaxCostWei: String(reservedMaxCostWei),
+    policy: {
+      maxSignatures,
+      maxReservedCostWei: String(maxReservedCostWei),
+    },
+  };
+}
+
+function assertEvalTransport(response, { argumentCount, redisKey, scriptSha256 }) {
+  assert.equal(response.transport.tlsAuthorized, true);
+  assert.match(response.transport.tlsProtocol, /^TLSv1\.[23]$/);
+  assert.equal(response.transport.request.bearerMatches, true);
+  assert.equal(response.transport.request.commandName, "EVAL");
+  assert.equal(response.transport.request.contentType, "application/json");
+  assert.equal(response.transport.request.keyCount, "1");
+  assert.equal(response.transport.request.method, "POST");
+  assert.equal(response.transport.request.redisKey, redisKey);
+  assert.equal(response.transport.request.argumentCount, argumentCount);
+  assert.equal(response.transport.request.scriptSha256, scriptSha256);
+}
+
+async function readServerClock(fetchImpl, endpoint, token) {
+  const response = await executeRestCommand(fetchImpl, endpoint, token, ["TIME"]);
+  assert.equal(response.ok, true, "Valkey TIME must succeed through the HTTPS REST facade");
+  assert.ok(Array.isArray(response.json?.result) && response.json.result.length === 2);
+  assert.match(String(response.json.result[0]), /^\d+$/);
+  const seconds = Number(response.json.result[0]);
+  assert.ok(Number.isSafeInteger(seconds) && seconds >= 0);
+  return {
+    seconds,
+    secondsUntilNextUtcDay: 86_400 - (seconds % 86_400),
+    utcDay: Math.floor(seconds / 86_400),
+  };
+}
+
+async function inspectKeeperExpiry(fetchImpl, endpoint, token, redisKey) {
+  const response = await executeRestCommand(fetchImpl, endpoint, token, [
+    "EVAL",
+    [
+      'local server_time = redis.call("TIME")',
+      'local ttl = redis.call("PTTL", KEYS[1])',
+      'local expires_at = redis.call("PEXPIRETIME", KEYS[1])',
+      "return {server_time[1], server_time[2], ttl, expires_at}",
+    ].join("\n"),
+    "1",
+    redisKey,
+  ]);
+  assert.equal(response.ok, true, "keeper expiry observation must succeed");
+  assert.ok(Array.isArray(response.json?.result) && response.json.result.length === 4);
+  const values = response.json.result.map((value) => {
+    assert.match(String(value), /^\d+$/);
+    const parsed = Number(value);
+    assert.ok(Number.isSafeInteger(parsed) && parsed >= 0);
+    return parsed;
+  });
+  const [seconds, microseconds, ttlMs, expiresAtMs] = values;
+  assert.ok(microseconds < 1_000_000);
+  assert.ok(ttlMs > 0);
+  const nowMs = (seconds * 1_000) + Math.floor(microseconds / 1_000);
+  const utcDay = Math.floor(seconds / 86_400);
+  const expectedMidnightMs = (utcDay + 1) * 86_400_000;
+  assert.ok(
+    expiresAtMs >= expectedMidnightMs - 5 && expiresAtMs <= expectedMidnightMs + 1_005,
+    "keeper absolute expiry must match the next server UTC midnight within the script's one-second precision",
+  );
+  assert.ok(
+    Math.abs((nowMs + ttlMs) - expiresAtMs) <= 5,
+    "keeper PTTL and absolute expiry must describe the same server deadline",
+  );
+  return { expiresAtMs, expectedMidnightMs, nowMs, ttlMs, utcDay };
 }
 
 function validateOwnedName(name) {
@@ -528,30 +637,36 @@ async function createReplica({ caPath, dbPath, endpoint, expectedExternalRateLim
   let sequence = 0;
   let readyVerified = false;
   let verifiedPid = null;
+  const sendRequest = async (type, input) => {
+    sequence += 1;
+    const id = `${replicaId}-${sequence}`;
+    const response = new Promise((resolvePromise, reject) => {
+      pending.set(id, { resolve: resolvePromise, reject });
+    });
+    if (!child.connected) {
+      pending.delete(id);
+      throw new Error(`replica ${replicaId} IPC disconnected before request`);
+    }
+    try {
+      child.send({ id, type, input }, (error) => {
+        if (!error || !pending.has(id)) return;
+        pending.get(id).reject(error);
+      });
+      return await withTimeout(response, 5_000, `replica ${replicaId} request timed out`);
+    } finally {
+      pending.delete(id);
+    }
+  };
   const replica = {
     get pid() {
       return verifiedPid;
     },
     replicaId,
     async consume(input) {
-      sequence += 1;
-      const id = `${replicaId}-${sequence}`;
-      const response = new Promise((resolvePromise, reject) => {
-        pending.set(id, { resolve: resolvePromise, reject });
-      });
-      if (!child.connected) {
-        pending.delete(id);
-        throw new Error(`replica ${replicaId} IPC disconnected before request`);
-      }
-      try {
-        child.send({ id, type: "consume", input }, (error) => {
-          if (!error || !pending.has(id)) return;
-          pending.get(id).reject(error);
-        });
-        return await withTimeout(response, 5_000, `replica ${replicaId} request timed out`);
-      } finally {
-        pending.delete(id);
-      }
+      return sendRequest("consume", input);
+    },
+    async reserveKeeper(input) {
+      return sendRequest("reserve-keeper", input);
     },
     async stop() {
       if (child.exitCode !== null || child.signalCode !== null) return;
@@ -615,6 +730,12 @@ async function replicaMain() {
     pid: process.pid,
     replicaId,
   });
+  const transportEvidence = () => ({
+    requestCount: observation.requestCount,
+    request: observation.lastRequest,
+    tlsAuthorized: observation.tlsAuthorized,
+    tlsProtocol: observation.tlsProtocol,
+  });
   let queue = Promise.resolve();
   process.on("message", (message) => {
     queue = queue.then(async () => {
@@ -623,27 +744,43 @@ async function replicaMain() {
         process.disconnect();
         return;
       }
-      if (message.type !== "consume") return;
       try {
-        const result = await externalRateLimit.consumeExternalRateLimit(
-          message.input.bucket,
-          message.input.key,
-          message.input.limit,
-          message.input.windowMs,
-          message.input.now,
-          fetchImpl,
-        );
-        process.send?.({
-          id: message.id,
-          type: "response",
-          result,
-          transport: {
-            requestCount: observation.requestCount,
-            request: observation.lastRequest,
-            tlsAuthorized: observation.tlsAuthorized,
-            tlsProtocol: observation.tlsProtocol,
-          },
-        });
+        if (message.type === "consume") {
+          const result = await externalRateLimit.consumeExternalRateLimit(
+            message.input.bucket,
+            message.input.key,
+            message.input.limit,
+            message.input.windowMs,
+            message.input.now,
+            fetchImpl,
+          );
+          process.send?.({ id: message.id, type: "response", result, transport: transportEvidence() });
+          return;
+        }
+        if (message.type === "reserve-keeper") {
+          const result = await externalRateLimit.reserveExternalKeeperDailyBudget({
+            chainId: message.input.chainId,
+            contractAddress: message.input.contractAddress,
+            signerAddress: message.input.signerAddress,
+            nonce: message.input.nonce,
+            epoch: BigInt(message.input.epoch),
+            signingIntentHash: message.input.signingIntentHash,
+            reservedMaxCostWei: BigInt(message.input.reservedMaxCostWei),
+            policy: {
+              maxSignatures: message.input.policy.maxSignatures,
+              maxReservedCostWei: BigInt(message.input.policy.maxReservedCostWei),
+            },
+          }, fetchImpl);
+          process.send?.({
+            id: message.id,
+            type: "response",
+            result: {
+              ...result,
+              reservedMaxCostWei: result.reservedMaxCostWei.toString(),
+            },
+            transport: transportEvidence(),
+          });
+        }
       } catch (error) {
         process.send?.({ id: message.id, type: "response", error: redact(error?.message ?? error) });
       }
@@ -902,6 +1039,13 @@ async function main(sourceProvenanceAtStartup) {
       "HEAD, harness, package entry, and production source must remain stable from process startup through setup",
     );
     const expectedExternalRateLimitSha256 = sourceProvenanceBefore.sourceSha256["app/api/_lib/externalRateLimit.ts"];
+    const externalRateLimitSource = sourceProvenanceBefore.files["app/api/_lib/externalRateLimit.ts"];
+    const rateLimitScript = externalRateLimitSource.match(/const RATE_LIMIT_SCRIPT = `([\s\S]*?)`;/)?.[1];
+    const keeperDailyBudgetScript = externalRateLimitSource.match(/const KEEPER_DAILY_BUDGET_SCRIPT = `([\s\S]*?)`;/)?.[1];
+    assert.ok(rateLimitScript, "RATE_LIMIT_SCRIPT must remain extractable for provenance");
+    assert.ok(keeperDailyBudgetScript, "KEEPER_DAILY_BUDGET_SCRIPT must remain extractable for provenance");
+    const rateLimitScriptSha256 = sha256(rateLimitScript);
+    const keeperDailyBudgetScriptSha256 = sha256(keeperDailyBudgetScript);
 
     const replicaA = await createReplica({
       caPath,
@@ -959,14 +1103,11 @@ async function main(sourceProvenanceAtStartup) {
     assert.equal(third.result.allowed, false);
     assert.ok(Number.isInteger(third.result.retryAfter) && third.result.retryAfter >= 1 && third.result.retryAfter <= 60);
     for (const response of [first, second, third]) {
-      assert.equal(response.transport.tlsAuthorized, true);
-      assert.match(response.transport.tlsProtocol, /^TLSv1\.[23]$/);
-      assert.equal(response.transport.request.bearerMatches, true);
-      assert.equal(response.transport.request.commandName, "EVAL");
-      assert.equal(response.transport.request.contentType, "application/json");
-      assert.equal(response.transport.request.keyCount, "1");
-      assert.equal(response.transport.request.method, "POST");
-      assert.equal(response.transport.request.redisKey, redisKey);
+      assertEvalTransport(response, {
+        argumentCount: 1,
+        redisKey,
+        scriptSha256: rateLimitScriptSha256,
+      });
     }
     assert.equal(typeof ttlAfterFirst.json?.result, "number");
     assert.equal(typeof ttlAfterSecond.json?.result, "number");
@@ -975,6 +1116,343 @@ async function main(sourceProvenanceAtStartup) {
 
     const storedCount = await executeRestCommand(ready.fetchImpl, endpoint, restToken, ["GET", redisKey]);
     assert.equal(storedCount.json?.result, "3");
+
+    const keeperClockBefore = await readServerClock(ready.fetchImpl, endpoint, restToken);
+    assert.ok(
+      keeperClockBefore.secondsUntilNextUtcDay > 300,
+      "keeper parity started within five minutes of UTC midnight; rerun after rollover",
+    );
+    const keeperChainId = 59_144;
+    const keeperContractAddress = `0x${randomBytes(20).toString("hex")}`;
+    const keeperSignerAddress = `0x${randomBytes(20).toString("hex")}`;
+    const keeperRedisKey = keeperBudgetRedisKey(keeperChainId, keeperContractAddress);
+    const keeperFirstInput = createKeeperReservationInput({
+      chainId: keeperChainId,
+      contractAddress: keeperContractAddress,
+      signerAddress: keeperSignerAddress,
+      nonce: 1,
+      reservedMaxCostWei: "30",
+    });
+    const keeperSecondInput = createKeeperReservationInput({
+      chainId: keeperChainId,
+      contractAddress: keeperContractAddress,
+      signerAddress: keeperSignerAddress,
+      nonce: 2,
+      reservedMaxCostWei: "40",
+    });
+    const keeperWrongBearerInput = {
+      ...keeperFirstInput,
+      contractAddress: `0x${randomBytes(20).toString("hex")}`,
+    };
+    await assert.rejects(
+      () => wrongBearerReplica.reserveKeeper(keeperWrongBearerInput),
+      /external keeper daily budget store rejected request \((?:401|403)\)/,
+      "the production keeper budget caller must fail closed on the wrong bearer",
+    );
+    const keeperWrongBearerState = await executeRestCommand(
+      ready.fetchImpl,
+      endpoint,
+      restToken,
+      ["EXISTS", keeperBudgetRedisKey(keeperChainId, keeperWrongBearerInput.contractAddress)],
+    );
+    assert.equal(keeperWrongBearerState.json?.result, 0, "wrong-bearer keeper request must not create state");
+    const keeperFirst = await replicaA.reserveKeeper(keeperFirstInput);
+    const keeperExpiryAfterFirst = await inspectKeeperExpiry(ready.fetchImpl, endpoint, restToken, keeperRedisKey);
+    const keeperSecond = await replicaB.reserveKeeper(keeperSecondInput);
+    assert.equal(keeperFirst.result.status, "reserved");
+    assert.equal(keeperFirst.result.utcDay, keeperClockBefore.utcDay);
+    assert.equal(keeperFirst.result.reservedSignatureCount, 1);
+    assert.equal(keeperFirst.result.reservedMaxCostWei, "30");
+    assert.equal(keeperSecond.result.status, "reserved");
+    assert.equal(keeperSecond.result.utcDay, keeperClockBefore.utcDay);
+    assert.equal(keeperSecond.result.reservedSignatureCount, 2);
+    assert.equal(keeperSecond.result.reservedMaxCostWei, "70");
+    assert.equal(keeperExpiryAfterFirst.utcDay, keeperClockBefore.utcDay);
+
+    const keeperRaceInputs = [3, 4].map((nonce) => createKeeperReservationInput({
+      chainId: keeperChainId,
+      contractAddress: keeperContractAddress,
+      signerAddress: keeperSignerAddress,
+      nonce,
+      reservedMaxCostWei: "30",
+    }));
+    const keeperRace = await Promise.allSettled([
+      replicaA.reserveKeeper(keeperRaceInputs[0]),
+      replicaB.reserveKeeper(keeperRaceInputs[1]),
+    ]);
+    const keeperRaceWinnerIndex = keeperRace.findIndex((result) => result.status === "fulfilled");
+    assert.notEqual(keeperRaceWinnerIndex, -1, "one keeper cost race contender must reserve");
+    assert.equal(
+      keeperRace.filter((result) => result.status === "fulfilled").length,
+      1,
+      "exactly one keeper cost race contender must reserve",
+    );
+    const keeperRaceLoser = keeperRace.find((result) => result.status === "rejected");
+    assert.match(keeperRaceLoser?.reason?.message ?? "", /external keeper daily budget reserved cost exhausted/);
+    const keeperRaceWinner = keeperRace[keeperRaceWinnerIndex].value;
+    assert.equal(keeperRaceWinner.result.status, "reserved");
+    assert.equal(keeperRaceWinner.result.utcDay, keeperClockBefore.utcDay);
+    assert.equal(keeperRaceWinner.result.reservedSignatureCount, 3);
+    assert.equal(keeperRaceWinner.result.reservedMaxCostWei, "100");
+
+    const keeperExpiryBeforeReplay = await inspectKeeperExpiry(ready.fetchImpl, endpoint, restToken, keeperRedisKey);
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 75));
+    const keeperReplayReplica = keeperRaceWinnerIndex === 0 ? replicaB : replicaA;
+    const keeperReplay = await keeperReplayReplica.reserveKeeper(keeperRaceInputs[keeperRaceWinnerIndex]);
+    const keeperExpiryAfterReplay = await inspectKeeperExpiry(ready.fetchImpl, endpoint, restToken, keeperRedisKey);
+    assert.deepEqual(keeperReplay.result, {
+      status: "already_reserved",
+      utcDay: keeperClockBefore.utcDay,
+      reservedSignatureCount: 3,
+      reservedMaxCostWei: "100",
+    });
+    assert.equal(
+      keeperExpiryAfterReplay.expiresAtMs,
+      keeperExpiryBeforeReplay.expiresAtMs,
+      "keeper replay must preserve the exact absolute expiry",
+    );
+    assert.ok(
+      keeperExpiryAfterReplay.ttlMs < keeperExpiryBeforeReplay.ttlMs,
+      "keeper replay must not reset the midnight TTL",
+    );
+
+    const [keeperHashBeforeConflictResponse, keeperHashLength] = await Promise.all([
+      executeRestCommand(ready.fetchImpl, endpoint, restToken, ["HGETALL", keeperRedisKey]),
+      executeRestCommand(ready.fetchImpl, endpoint, restToken, ["HLEN", keeperRedisKey]),
+    ]);
+    const keeperHashBeforeConflict = normalizeRedisHashResponse(keeperHashBeforeConflictResponse);
+    assert.equal(keeperHashBeforeConflict.__day, String(keeperClockBefore.utcDay));
+    assert.equal(keeperHashBeforeConflict.__count, "3");
+    assert.equal(keeperHashBeforeConflict.__cost, "100");
+    assert.equal(keeperHashLength.json?.result, 6);
+    await assert.rejects(
+      () => keeperReplayReplica.reserveKeeper({
+        ...keeperRaceInputs[keeperRaceWinnerIndex],
+        signingIntentHash: `0x${sha256("keeper-parity:conflicting-intent")}`,
+      }),
+      /external keeper daily budget reservation conflict/,
+    );
+    const keeperHashAfterConflict = normalizeRedisHashResponse(await executeRestCommand(
+      ready.fetchImpl,
+      endpoint,
+      restToken,
+      ["HGETALL", keeperRedisKey],
+    ));
+    assert.deepEqual(keeperHashAfterConflict, keeperHashBeforeConflict, "keeper conflict must not mutate shared state");
+    const keeperExpiryAfterConflict = await inspectKeeperExpiry(ready.fetchImpl, endpoint, restToken, keeperRedisKey);
+    assert.equal(
+      keeperExpiryAfterConflict.expiresAtMs,
+      keeperExpiryAfterReplay.expiresAtMs,
+      "keeper conflict must preserve the exact absolute expiry",
+    );
+    await assert.rejects(
+      () => replicaA.reserveKeeper(createKeeperReservationInput({
+        chainId: keeperChainId,
+        contractAddress: keeperContractAddress,
+        signerAddress: keeperSignerAddress,
+        nonce: 5,
+        reservedMaxCostWei: "30",
+        maxReservedCostWei: "90",
+      })),
+      /external keeper daily budget stored usage exceeds active policy/,
+    );
+
+    const signatureContractAddress = `0x${randomBytes(20).toString("hex")}`;
+    const signatureRedisKey = keeperBudgetRedisKey(keeperChainId, signatureContractAddress);
+    const signatureRaceInputs = [10, 11].map((nonce) => createKeeperReservationInput({
+      chainId: keeperChainId,
+      contractAddress: signatureContractAddress,
+      signerAddress: keeperSignerAddress,
+      nonce,
+      reservedMaxCostWei: "1",
+      maxSignatures: 1,
+    }));
+    const signatureRace = await Promise.allSettled([
+      replicaA.reserveKeeper(signatureRaceInputs[0]),
+      replicaB.reserveKeeper(signatureRaceInputs[1]),
+    ]);
+    const signatureRaceWinnerIndex = signatureRace.findIndex((result) => result.status === "fulfilled");
+    const signatureRaceWinner = signatureRace.find((result) => result.status === "fulfilled");
+    const signatureRaceLoser = signatureRace.find((result) => result.status === "rejected");
+    assert.equal(signatureRace.filter((result) => result.status === "fulfilled").length, 1);
+    assert.notEqual(signatureRaceWinnerIndex, -1);
+    assert.equal(signatureRaceWinner.value.result.status, "reserved");
+    assert.equal(signatureRaceWinner.value.result.utcDay, keeperClockBefore.utcDay);
+    assert.equal(signatureRaceWinner.value.result.reservedSignatureCount, 1);
+    assert.equal(signatureRaceWinner.value.result.reservedMaxCostWei, "1");
+    assert.match(signatureRaceLoser?.reason?.message ?? "", /external keeper daily budget signature count exhausted/);
+    const signatureHash = normalizeRedisHashResponse(await executeRestCommand(
+      ready.fetchImpl,
+      endpoint,
+      restToken,
+      ["HGETALL", signatureRedisKey],
+    ));
+    const signatureWinnerField = keeperReservationField(
+      keeperSignerAddress,
+      signatureRaceInputs[signatureRaceWinnerIndex].nonce,
+    );
+    const signatureLoserField = keeperReservationField(
+      keeperSignerAddress,
+      signatureRaceInputs[signatureRaceWinnerIndex === 0 ? 1 : 0].nonce,
+    );
+    assert.equal(Object.keys(signatureHash).length, 4);
+    assert.equal(signatureHash.__day, String(keeperClockBefore.utcDay));
+    assert.equal(signatureHash.__count, "1");
+    assert.equal(signatureHash.__cost, "1");
+    assert.match(signatureHash[signatureWinnerField] ?? "", /^[0-9a-f]{64}$/);
+    assert.equal(signatureHash[signatureLoserField], undefined);
+    const signatureExpiry = await inspectKeeperExpiry(ready.fetchImpl, endpoint, restToken, signatureRedisKey);
+    assert.equal(signatureExpiry.utcDay, keeperClockBefore.utcDay);
+
+    const rolloverContractAddress = `0x${randomBytes(20).toString("hex")}`;
+    const rolloverRedisKey = keeperBudgetRedisKey(keeperChainId, rolloverContractAddress);
+    const rolloverSeedInput = createKeeperReservationInput({
+      chainId: keeperChainId,
+      contractAddress: rolloverContractAddress,
+      signerAddress: keeperSignerAddress,
+      nonce: 30,
+      reservedMaxCostWei: "7",
+    });
+    const rolloverSeed = await replicaA.reserveKeeper(rolloverSeedInput);
+    assert.equal(rolloverSeed.result.status, "reserved");
+    assert.equal(rolloverSeed.result.utcDay, keeperClockBefore.utcDay);
+    const forcePreviousDay = await executeRestCommand(
+      ready.fetchImpl,
+      endpoint,
+      restToken,
+      ["HSET", rolloverRedisKey, "__day", String(keeperClockBefore.utcDay - 1)],
+    );
+    assert.equal(forcePreviousDay.ok, true);
+    assert.equal(forcePreviousDay.json?.result, 0);
+    const rolloverReplacementInput = createKeeperReservationInput({
+      chainId: keeperChainId,
+      contractAddress: rolloverContractAddress,
+      signerAddress: keeperSignerAddress,
+      nonce: 31,
+      reservedMaxCostWei: "11",
+    });
+    const rolloverReplacement = await replicaB.reserveKeeper(rolloverReplacementInput);
+    assert.deepEqual(rolloverReplacement.result, {
+      status: "reserved",
+      utcDay: keeperClockBefore.utcDay,
+      reservedSignatureCount: 1,
+      reservedMaxCostWei: "11",
+    });
+    const [rolloverHashLength, rolloverOldReservation, rolloverExpiry] = await Promise.all([
+      executeRestCommand(ready.fetchImpl, endpoint, restToken, ["HLEN", rolloverRedisKey]),
+      executeRestCommand(ready.fetchImpl, endpoint, restToken, [
+        "HGET",
+        rolloverRedisKey,
+        keeperReservationField(keeperSignerAddress, rolloverSeedInput.nonce),
+      ]),
+      inspectKeeperExpiry(ready.fetchImpl, endpoint, restToken, rolloverRedisKey),
+    ]);
+    const rolloverHash = normalizeRedisHashResponse(await executeRestCommand(
+      ready.fetchImpl,
+      endpoint,
+      restToken,
+      ["HGETALL", rolloverRedisKey],
+    ));
+    assert.equal(rolloverHashLength.json?.result, 4);
+    assert.equal(rolloverOldReservation.json?.result, null);
+    assert.equal(rolloverHash.__day, String(keeperClockBefore.utcDay));
+    assert.equal(rolloverHash.__count, "1");
+    assert.equal(rolloverHash.__cost, "11");
+    assert.equal(rolloverExpiry.utcDay, keeperClockBefore.utcDay);
+
+    const malformedContractAddress = `0x${randomBytes(20).toString("hex")}`;
+    const malformedRedisKey = keeperBudgetRedisKey(keeperChainId, malformedContractAddress);
+    const malformedSeedInput = createKeeperReservationInput({
+      chainId: keeperChainId,
+      contractAddress: malformedContractAddress,
+      signerAddress: keeperSignerAddress,
+      nonce: 40,
+      reservedMaxCostWei: "1",
+    });
+    const malformedKeeperSeed = await replicaA.reserveKeeper(malformedSeedInput);
+    assert.equal(malformedKeeperSeed.result.status, "reserved");
+    const malformedSeed = await executeRestCommand(
+      ready.fetchImpl,
+      endpoint,
+      restToken,
+      ["HSET", malformedRedisKey, "__count", "not-a-number"],
+    );
+    assert.equal(malformedSeed.ok, true);
+    assert.equal(malformedSeed.json?.result, 0);
+    const malformedStateBeforeReject = normalizeRedisHashResponse(await executeRestCommand(
+      ready.fetchImpl,
+      endpoint,
+      restToken,
+      ["HGETALL", malformedRedisKey],
+    ));
+    const malformedExpiryBeforeReject = await inspectKeeperExpiry(
+      ready.fetchImpl,
+      endpoint,
+      restToken,
+      malformedRedisKey,
+    );
+    await assert.rejects(
+      () => replicaB.reserveKeeper(createKeeperReservationInput({
+        chainId: keeperChainId,
+        contractAddress: malformedContractAddress,
+        signerAddress: keeperSignerAddress,
+        nonce: 20,
+        reservedMaxCostWei: "1",
+      })),
+      /external keeper daily budget state invalid; manual reconciliation required/,
+    );
+    const malformedStateAfterReject = normalizeRedisHashResponse(await executeRestCommand(
+      ready.fetchImpl,
+      endpoint,
+      restToken,
+      ["HGETALL", malformedRedisKey],
+    ));
+    const malformedExpiryAfterReject = await inspectKeeperExpiry(
+      ready.fetchImpl,
+      endpoint,
+      restToken,
+      malformedRedisKey,
+    );
+    assert.deepEqual(
+      malformedStateAfterReject,
+      malformedStateBeforeReject,
+      "malformed keeper refusal must not mutate the corrupted hash",
+    );
+    assert.equal(
+      malformedExpiryAfterReject.expiresAtMs,
+      malformedExpiryBeforeReject.expiresAtMs,
+      "malformed keeper refusal must preserve the exact absolute expiry",
+    );
+    const malformedDelete = await executeRestCommand(ready.fetchImpl, endpoint, restToken, ["DEL", malformedRedisKey]);
+    assert.equal(malformedDelete.json?.result, 1);
+
+    const keeperClockAfter = await readServerClock(ready.fetchImpl, endpoint, restToken);
+    assert.equal(keeperClockAfter.utcDay, keeperClockBefore.utcDay, "keeper parity sequence must remain within one UTC day");
+    for (const response of [keeperFirst, keeperSecond, keeperRaceWinner, keeperReplay]) {
+      assertEvalTransport(response, {
+        argumentCount: 5,
+        redisKey: keeperRedisKey,
+        scriptSha256: keeperDailyBudgetScriptSha256,
+      });
+    }
+    assertEvalTransport(signatureRaceWinner.value, {
+      argumentCount: 5,
+      redisKey: signatureRedisKey,
+      scriptSha256: keeperDailyBudgetScriptSha256,
+    });
+    for (const response of [rolloverSeed, rolloverReplacement]) {
+      assertEvalTransport(response, {
+        argumentCount: 5,
+        redisKey: rolloverRedisKey,
+        scriptSha256: keeperDailyBudgetScriptSha256,
+      });
+    }
+    assertEvalTransport(malformedKeeperSeed, {
+      argumentCount: 5,
+      redisKey: malformedRedisKey,
+      scriptSha256: keeperDailyBudgetScriptSha256,
+    });
+
     const unauthorized = await executeRestCommand(ready.fetchImpl, endpoint, wrongToken, ["PING"]);
     assert.equal(unauthorized.ok, false);
     assert.ok(unauthorized.status === 401 || unauthorized.status === 403);
@@ -1006,16 +1484,10 @@ async function main(sourceProvenanceAtStartup) {
     const sourceBindings = sourceProvenanceBefore.bindings;
     const allRelevantFilesBoundToRevision = Object.values(sourceBindings)
       .every((binding) => binding.boundToSourceRevision);
-    const rateLimitSource = sourceProvenanceBefore.files["app/api/_lib/externalRateLimit.ts"];
     const harnessSource = sourceProvenanceBefore.files["scripts/test-valkey-rest-rate-limit.mjs"];
-    const rateLimitScript = rateLimitSource.match(/const RATE_LIMIT_SCRIPT = `([\s\S]*?)`;/)?.[1];
-    assert.ok(rateLimitScript, "RATE_LIMIT_SCRIPT must remain extractable for provenance");
-    for (const response of [first, second, third]) {
-      assert.equal(response.transport.request.scriptSha256, sha256(rateLimitScript));
-    }
     evidence = {
       status: "partial",
-      scope: "https-rest-rate-limit-two-replica",
+      scope: "https-rest-rate-limit-keeper-two-replica",
       sourceRevisionSha: sourceProvenanceBefore.sourceRevisionSha,
       sourceBinding: {
         allRelevantFilesBoundToRevision,
@@ -1032,11 +1504,13 @@ async function main(sourceProvenanceAtStartup) {
       }])),
       runtime: {
         httpsProxyVersion: caddyVersion,
+        keeperUtcDay: keeperClockBefore.utcDay,
         valkeyVersion,
       },
       sourceSha256: {
-        externalRateLimit: sha256(rateLimitSource),
-        rateLimitScript: sha256(rateLimitScript),
+        externalRateLimit: sha256(externalRateLimitSource),
+        keeperDailyBudgetScript: keeperDailyBudgetScriptSha256,
+        rateLimitScript: rateLimitScriptSha256,
         testHarness: sha256(harnessSource),
       },
       checks: {
@@ -1050,12 +1524,18 @@ async function main(sourceProvenanceAtStartup) {
         twoIndependentNodeReplicas: true,
         sharedAllowedAllowedBlockedSequence: true,
         ttlSetOnceAndNotReset: true,
+        keeperDailyBudgetThroughHttpsRest: true,
+        keeperCrossReplicaReplayAndConflict: true,
+        keeperAtomicCostAndSignatureCaps: true,
+        keeperConflictLeftStateUnchanged: true,
+        keeperPastDayStateResetAgainstServerTime: true,
+        keeperServerTimeUtcDayAndMidnightTtl: true,
+        keeperMalformedStateFailClosed: true,
         loopbackOnlyPublishedPort: true,
         ownedResourceIdsAndLabelsVerified: true,
       },
       missing: [
         "REST facade self-reported runtime version (immutable manifest is verified)",
-        "keeper daily budget through HTTPS REST",
         "admin session rotation through HTTPS REST",
         "deployed web replicas and provider-managed HTTPS endpoint",
         "persistent external database and backup/restore evidence",
