@@ -1,12 +1,24 @@
 # Agent Progress
 
-Last updated: 2026-08-24.
+Last updated: 2026-08-25.
 
 Current truth is in [`current_state.md`](current_state.md). The active queue is
 [`remaining-worklist.md`](remaining-worklist.md); long-running testnet work is
 in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
+
+- Current `HEAD` is `3c8886acc1fa33045aa7bcc1d03bab9fa84fd09b`. It closes the
+  final deposits-recovery transport bound found by targeted security review:
+  recovery head/log reads use one `http(RPC_URL, { timeout: 20_000,
+  retryCount: 1 })` client, so `41 * 2 * 20s = 1,640,000ms` remains below the
+  `1,800,000ms` shared lock. Focused recovery safety, TypeScript, and focused
+  ESLint passed in a detached clean checkout; targeted Standard scan
+  `d7d531b4-3c25-4c98-a2a4-afc8c314bd92` found no remaining issue in those
+  corrected paths or OG asset origin. Fresh `npm ci` passed and the local proof
+  summary passed L1--L17. Do not call the full `check-local` green for this SHA:
+  its full run was stopped during a long active ESLint stage and recorded exit
+  `4294967295`. No external/wallet/RPC/Preview action occurred.
 
 - Branch `codex/repo-cleanup`; immutable baseline `HEAD` is
   `63da5c4428d429ddda7e5d5a8fd7df56f01e5c73`. Its clean detached worktree

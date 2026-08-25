@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-08-24.
+Last updated: 2026-08-25.
 
 This file is the current repository truth. Historical detail is retained under
 [`docs/archive/`](archive/). The active queue is
@@ -10,10 +10,18 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Current immutable baseline `HEAD`: `63da5c4428d429ddda7e5d5a8fd7df56f01e5c73`
-  (`chore: finalize release candidate hardening`). Its detached clean checkout
-  completed fresh `npm ci`, typecheck, hermetic build, and the CI policy check;
-  it remains local evidence, not sealed provenance, hosted, or external proof.
+- Current immutable baseline `HEAD`: `3c8886acc1fa33045aa7bcc1d03bab9fa84fd09b`
+  (`fix: bound deposits recovery RPC transport`). It retains the prior bounded
+  shared admission/lease hardening and uses one 20-second, one-retry RPC
+  transport for the optional deposits recovery, so a configured fallback chain
+  cannot outlive the cross-replica lease. A detached clean checkout completed
+  fresh `npm ci`, focused recovery safety, TypeScript, and focused ESLint. The
+  exact-SHA targeted Standard security scan `d7d531b4-3c25-4c98-a2a4-afc8c314bd92`
+  found no remaining issue in the corrected deposits/OG paths. The summary-only
+  local launch proof passed L1--L17. Its full `check-local` attempt was stopped
+  during an anomalously long ESLint stage and returned exit `4294967295`; it is
+  explicitly not final-SHA full-gate evidence. No push, deployment, wallet,
+  signing, RPC, Preview, or chain action occurred.
 - The goal's `318` paths describe a historical snapshot at `281c5fd02`; that
   candidate later grew to `320` paths and was committed in eight local commits.
   It is not the current permission scope. The current HEAD-bound permission
