@@ -61,7 +61,10 @@ const ROUTE_METRIC_KEY = "api/deposits";
 const DEPOSIT_RECOVERY_EPOCH_LAG = 8;
 const RECENT_RECOVERY_BLOCK_WINDOW = 100_000n;
 const DEPOSITS_BACKGROUND_RECOVERY_COOLDOWN_MS = 15_000;
-const DEPOSITS_RECOVERY_SHARED_LOCK_TTL_MS = 300_000;
+// A full bounded recovery performs one head read plus up to forty sequential
+// getLogs calls. Each transport call may use its two 20-second attempts, so
+// keep the cross-replica lease longer than that worst-case bounded work.
+const DEPOSITS_RECOVERY_SHARED_LOCK_TTL_MS = 1_800_000;
 const DEPOSITS_RECOVERY_SHARED_BUDGET_WINDOW_MS = 60_000;
 const CURRENT_EPOCH_CACHE_MS = 60_000;
 const INLINE_REWARD_EPOCH_LIMIT = 64;

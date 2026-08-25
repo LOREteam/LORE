@@ -11,6 +11,12 @@ assert.match(
 
 assert.match(
   depositsRouteSource,
+  /DEPOSITS_RECOVERY_SHARED_LOCK_TTL_MS = 1_800_000/,
+  "the shared recovery lock must outlive the bounded worst-case RPC sequence",
+);
+
+assert.match(
+  depositsRouteSource,
   /requiresExternalSharedLock\(\)[\s\S]*hasPublicExternalRateLimitStore\(\)[\s\S]*fallback: "deny"[\s\S]*consumeExternalRateLimit\([\s\S]*"api-deposits-chain-recovery"[\s\S]*"global"[\s\S]*1,[\s\S]*DEPOSITS_RECOVERY_SHARED_BUDGET_WINDOW_MS[\s\S]*acquireExternalExpiringLock\([\s\S]*"api-deposits-chain-recovery"[\s\S]*DEPOSITS_RECOVERY_SHARED_LOCK_TTL_MS/,
   "multi-replica deposits recovery must fail closed without the external store and use one shared budget plus expiring lock before RPC work",
 );
