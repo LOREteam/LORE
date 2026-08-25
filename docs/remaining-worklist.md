@@ -96,8 +96,8 @@ under [`docs/archive/`](archive/).
 - [x] Committed audited baseline at `d3916c37d`: `5387/6166` behavioral assertions
       (`87.37%`) across `106` modules; the coordinator has `95` direct runner
       imports, `2` side-effect imports, and `95` direct runner calls.
-- [x] Current uncommitted schema-v2 packet reports `5820/6346` behavioral
-      assertions (`91.71%`) with `526` source operands across `113` modules;
+- [x] Current committed schema-v2 packet reports `5820/6345` behavioral
+      assertions (`91.73%`) with `525` source operands across `113` modules;
       the audit self-test passes `17/17`. The v2 denominator includes all
       Node 24 assert methods and the source count includes confirmed transparent
       transitive bindings, so it is not directly comparable to schema v1.
@@ -244,6 +244,16 @@ under [`docs/archive/`](archive/).
       `kind`, `tile`, and `epoch` values and proves an identical PNG. Public
       presentation/matrix runners x2, audit x2, self-test `17/17`, syntax,
       diff, and protected-DB checks pass.
+- [x] Remove the redundant AdminOps direct-JSON source regex only after the
+      existing fresh handler child imports the real client, executes all `9`
+      current callbacks, makes direct `response.json()` fail, and proves exact
+      bounded-reader method/route IDs with zero network calls. Exact commit
+      `7eee0cd9b` passed focused x2, audit x2 (`5820/6345`, `525` source),
+      self-test `17/17`, syntax, ESLint, full isolated business, clean-HEAD
+      reproduction, protected-DB identity, and independent review. No P0--P2;
+      reviewer P3 notes this is current-callback coverage, not a blanket future
+      guard for a new unexecuted effect/error-only path. Fresh hosted Linux
+      execution remains open.
 - [ ] Continue replacing source operands only when a stable public behavior seam
       exists; preserve meaningful policy/source bindings.
 - [ ] Keep new assertions in focused domain modules, not coordinator bloat.

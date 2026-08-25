@@ -9,21 +9,21 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Continuation point
 
 - The current tested code baseline and parent of this documentation-only packet
-  is `cc0d5891159065eaa51d59607b250eda1aee3014`. Its exact three-path packet
-  adds one local runtime-role orchestrator and package/ignore wiring. The retained
-  clean-HEAD Node `24.5.0` run binds all `12` relevant blobs to that SHA. It runs
-  the actual indexer entrypoint under two-process lease contention before RPC,
-  then through crash/restart against two loopback-only RPC fixtures; it exercises
-  the production SQLite keeper-budget seam used before bot signing without
-  starting the signer; and it runs the actual monitor summary preflight plus
-  restart/recovery drill in a unique OS-temp directory without live polling.
-  Protected base/WAL/SHM identity is unchanged and exact owned temp cleanup passes.
-  Artifact SHA-256 is
-  `F6949B9AB379C3350A5918CC20CC6D9BB8134E7E9DAEB3F074936D47419C0FE7`.
-  This is local role-wiring evidence only: deployed processes/provider state,
-  cross-host behavior, external DB restore, signing, wallet, RPC, Preview, and
-  chain behavior remain unproved. Parent `154b29b59` is the direct Valkey
-  persistence/restore packet; generated artifact directories stay excluded.
+  is `7eee0cd9bc228d0d5068db133e749ecb95dc88da`. Its exact one-file P1.10
+  packet removes one redundant AdminOps source-regex only after the existing
+  fresh handler child imports the real client, invokes all `9` current callbacks,
+  forbids direct `response.json()`, and proves the exact six bounded JSON-read
+  method/route IDs with zero direct JSON or network calls. Focused x2, audit x2,
+  self-test `17/17`, syntax, ESLint, diff hygiene, the full isolated business
+  gate, clean-HEAD focused/audit reproduction, and protected DB identity pass on
+  Node `24.5.0`. The audit is now `5820/6345` behavioral (`91.73%`) with `525`
+  source operands across `113` modules; coordinator fan-out stays `71/2/71`.
+  Independent review found no P0--P2 issue. Its P3 caveat is retained: the child
+  proves all current callbacks, but is not a blanket future guard for a new
+  unexecuted effect/error-only path. Fresh Windows execution passed; Linux wiring
+  exists in hosted `test:logic`, but no fresh hosted Linux run was produced.
+  Parent `cc0d58911` is the local runtime-role packet; all deployed/provider/live
+  boundaries remain open.
 - Earlier security-reviewed baseline `3c8886acc1fa33045aa7bcc1d03bab9fa84fd09b` closes the
   final deposits-recovery transport bound found by targeted security review:
   recovery head/log reads use one `http(RPC_URL, { timeout: 20_000,
@@ -35,11 +35,11 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   summary passed L1--L17. Do not call the full `check-local` green for this SHA:
   its full run was stopped during a long active ESLint stage and recorded exit
   `4294967295`. No external/wallet/RPC/Preview action occurred.
-- The current uncommitted P1 fixture packet restores the API recovery matrix
+- A historical P1 fixture packet restored the API recovery matrix
   after that transport split by mocking `depositsRecoveryPublicClient` for its
   head/log seams. It leaves the production client and route untouched. Two
   focused matrices pass 9 routes, 85 black-box requests, five mutants, and the
-  shared two-process limiter; TypeScript and two behavior audits pass at
+  shared two-process limiter; TypeScript and two behavior audits recorded
   `5819/6345` behavioral, 526 source operands, and self-test `17/17`.
 
 - Branch `codex/repo-cleanup`; immutable baseline `HEAD` is
@@ -61,7 +61,7 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   Recompute its manifest before any
   new commit request; no current staging, push, deployment, wallet/RPC, or
   chain authority exists.
-- The current P1.10 audit is `5819/6345` behavioral (`91.71%`) with `526`
+- The current P1.10 audit is `5820/6345` behavioral (`91.73%`) with `525`
   source operands across `113` modules. Direct coordinator fan-out is `71`
   imports, `2` side-effect imports, and `71` calls; the audit self-test passes
   `17/17`.

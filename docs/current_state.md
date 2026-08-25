@@ -11,20 +11,19 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 - Branch: `codex/repo-cleanup`.
 - The current tested code baseline is
-  `cc0d5891159065eaa51d59607b250eda1aee3014`. Its exact three-path commit
-  adds the local runtime-role orchestrator and package/ignore wiring. A retained
-  clean-HEAD Node `24.5.0` run binds all `12` relevant blobs to that SHA and
-  combines four existing production-seam tests: actual indexer run/watch lease
-  contention before RPC, actual indexer crash/restart through two loopback-only
-  providers, the production SQLite keeper-budget seam used by `bot.ts` before
-  signing, and the actual monitor summary preflight/restart drill. The signer is
-  not started, monitor live polling is not started, no external endpoint is
-  configured, all owned temp state is removed, and protected base/WAL/SHM
-  identity stays unchanged. Artifact SHA-256 is
-  `F6949B9AB379C3350A5918CC20CC6D9BB8134E7E9DAEB3F074936D47419C0FE7`.
-  Parent `154b29b59` is the direct Valkey persistence/restore packet; `9ce4e5ca9`
-  is HTTPS session rotation. These are immutable local partial-parity baselines,
-  not deployed topology or the final release seal.
+  `7eee0cd9bc228d0d5068db133e749ecb95dc88da`. Its exact one-file P1.10
+  commit removes one redundant AdminOps source-regex only after the existing
+  fresh handler child imports the real client, invokes all `9` current callbacks,
+  makes direct `response.json()` fail, and proves the exact six bounded JSON-read
+  method/route IDs with zero direct JSON or network calls. Focused x2, audit x2,
+  self-test `17/17`, syntax, ESLint, diff hygiene, the complete isolated business
+  gate, clean-HEAD focused/audit reproduction, and protected DB identity pass on
+  exact Node `24.5.0`. The current audit is `5820/6345` behavioral (`91.73%`)
+  with `525` source operands across `113` modules and unchanged `71/2/71`
+  coordinator fan-out. Independent review found no P0--P2 issue; its P3 caveat
+  is that this proves all current callbacks, not a hypothetical future unexecuted
+  effect/error-only path. Windows executed locally; fresh hosted Linux evidence
+  remains open. Parent `cc0d58911` is the local runtime-role partial baseline.
 - Latest fully detached broad local-gate baseline: `333d7a81bb8780c5fc631646492ece53bbfa3926`
   (`test: cover bounded deposits recovery transport`). Its `3c8886acc` parent
   provides bounded shared admission/lease hardening and one 20-second,
@@ -51,10 +50,11 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   committed, including the seven-path P1.17 packet at `a5ff9f595`, both
   mobile-mining packages at `aaf515d20` and `39f68888`, and local HTTPS/REST
   Valkey parity through local persistence/restore at `154b29b59`, and local
-  runtime-role wiring at `cc0d58911`. The current five-path expected staging packet is
-  documentation-only: four current Valkey/worklist/state documents plus the
+  runtime-role wiring at `cc0d58911`, and the AdminOps behavioral replacement at
+  `7eee0cd9b`. The current four-path expected staging packet is
+  documentation-only: three current progress/worklist/state documents plus the
   self-excluded manifest. The manifest describes the proposed amended index
-  relative to parent `cc0d58911`; the user-granted local commit authority does
+  relative to parent `7eee0cd9b`; the user-granted local commit authority does
   not widen that exact boundary.
 - A disposable detached checkout of the current code mirror completed fresh
   local composite gates with exit `0`: lint, isolated business, P1 hardening,
@@ -180,8 +180,8 @@ replacement needs another separately reviewed plan and exact approval.
   browser/session data, the protected SQLite trio, and staged recovery assets were retained.
   Workspace cleanup now excludes recovery-prefix directories and fails closed on
   symlink/junction paths that resolve outside the repository.
-- The current uncommitted P1.10 schema-v2 audit is `5819/6345` behavioral
-  assertions (`91.71%`) with `526` source operands across `113` modules.
+- The current committed P1.10 schema-v2 audit is `5820/6345` behavioral
+  assertions (`91.73%`) with `525` source operands across `113` modules.
   Coordinator fan-out is `71` runner imports, `2` side-effect imports, and
   `71` direct calls; the audit self-test passes `17/17`. Schema v2 counts the
   full Node 24 assert surface, fails closed on unknown assert methods, resolves
@@ -276,12 +276,12 @@ replacement needs another separately reviewed plan and exact approval.
 | Current local business suite | The full isolated suite passed on the current dirty worktree after correcting a synchronous negative assertion and removing three dotenv import-time signing-environment side effects. It used an owned OS-temp SQLite path; it does not repair or validate the pre-run protected DB trio. | Pass locally; mutable worktree evidence only |
 | Pre-doc local gate packet | At `7905dc764`: P1 hardening `42/42` in `139491ms`; TypeScript `typegen` plus `tsc`, standalone V10 and V9 local invariants, global-stats `10000+`, leaderboard `110003`, and the hermetic wrapper passed. | Pass locally only; not final immutable-SHA evidence |
 | Read-only browser smoke | Local read-only Playwright smoke passed; screenshot: `artifacts/smoke-browser/sha7905-current-readonly.png`. It did not sign, create a wallet, approve, bet, claim, or send a transaction. | Local UI evidence only, not launch, hosted, or live-wallet proof |
-| P1.10 audit | On the uncommitted working tree, schema v2 reports `5820/6346` behavioral assertions (`91.71%`) and `526` source operands across `113` modules; coordinator fan-out is `71/2/71`, and the self-test passes `17/17`. Focused same-parent x2 passed for error-boundary, wallet-model, wallet-boundary, jackpot/rebate, release-CLI configuration, reward-scanner, and mobile-mining runners; audit x2, syntax, diff hygiene, temp/poison checks, and an isolated full business summary also passed. The new probes execute real production components/hooks/CLI validation in fresh children with fetch poison, owned or deliberately absent DB paths, and no wallet, signing, RPC, network, or chain action. The reward-scanner hook probe uses a synthetic synchronous React primitive runtime, so it does not prove browser scheduler/lifecycle behavior. | Pass locally; partial objective and not committed |
+| P1.10 audit | At clean code SHA `7eee0cd9b`, schema v2 reports `5820/6345` behavioral assertions (`91.73%`) and `525` source operands across `113` modules; coordinator fan-out is `71/2/71`, and self-test passes `17/17`. The latest AdminOps packet runs the real client in a fresh child, invokes all nine current callbacks, forbids direct response JSON, and proves exact bounded-reader IDs with zero network calls. Focused x2, audit x2, syntax, ESLint, diff hygiene, full isolated business, clean-HEAD reproduction, protected-DB identity, and independent review pass. Reviewer P3: this current-callback proof is not a blanket guard for a future unexecuted effect/error-only path. | Committed local test-only progress; P1.10 remains partial and hosted Linux remains open |
 | P1 hardening timeout boundary | A direct isolated `preview-env-boundary` run completed all `30/30` cases in `150472ms`, narrowly exceeding its former `150000ms` parent budget. The runner now retains a bounded `210000ms` limit. Two clean focused P1 runs then passed `41/41` in `270912ms` and `263360ms`; their preview steps took `99120ms` and `98406ms`. Audit schema v2 remained `5819/6345` behavioral assertions (`91.71%`), and its self-test passed `17/17`. | Local test-harness reliability only; P1.10 remains partial and no live behavior is implied |
-| Latest P1.10 fee-policy seam | The standalone runner removes one redundant direct-approval source assertion only after existing builder behavior covers bounded legacy/EIP-1559 requests, fixed gas, legacy-field preservation, ignored caller gas override, and invalid-fee rejection. Focused x2, audit x2, and self-test `17/17` pass; the current official coordinator audit is `5820/6346` with `526` source operands. | Local test-only progress; partial objective |
+| Latest P1.10 fee-policy seam | The standalone runner removes one redundant direct-approval source assertion only after existing builder behavior covers bounded legacy/EIP-1559 requests, fixed gas, legacy-field preservation, ignored caller gas override, and invalid-fee rejection. Focused x2, audit x2, and self-test `17/17` pass; the current official coordinator audit is `5820/6345` with `525` source operands. | Local test-only progress; partial objective |
 | Latest P1.10 fee-policy review | The remaining source assertions bind pre-wallet/signer fee validation, guarded submission sinks, or live-write helpers. No equivalent safe public behavior seam exists without simulating risky signing paths, so they remain fail-closed structural coverage. Focused x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Reviewed; no removal justified |
 | Latest P1.10 fee-policy review | The remaining source assertions bind pre-wallet/signer fee validation, guarded submission sinks, or live-write helpers. No equivalent safe public behavior seam exists without simulating risky signing paths, so they remain fail-closed structural coverage. Focused x2, audit x2, self-test `17/17`, syntax, diff, and protected-DB checks pass. | Reviewed; no removal justified |
-| Latest P1.10 mobile-mining seam | The standalone mobile-mining runner removes one redundant `walletSetup` source assertion only after its stale-settlement behavior scenario proves reset invalidates the old rejected attempt without unlocking or overwriting the new retry. Module `69/21/48 -> 68/20/48`; focused x2, audit x2, and self-test `17/17` pass. It is outside the coordinator graph, so the current official totals are `5820/6346` with `526` source operands. | Local test-only progress; partial objective |
+| Latest P1.10 mobile-mining seam | The standalone mobile-mining runner removes one redundant `walletSetup` source assertion only after its stale-settlement behavior scenario proves reset invalidates the old rejected attempt without unlocking or overwriting the new retry. Module `69/21/48 -> 68/20/48`; focused x2, audit x2, and self-test `17/17` pass. It is outside the coordinator graph, so the current official totals are `5820/6345` with `525` source operands. | Local test-only progress; partial objective |
 | Latest P1.10 docked mobile-action seam | Package A replaces two static dock-wiring assertions with real React SSR checks against the rendered manual and Auto-Miner opening tags. Both in-panel actions must carry `max-[899px]:hidden` while the separate mobile dock owns the primary CTA. Standalone classification is `68/20/48 -> 68/18/50`; focused x2, audit x2 (`5820/6346`, `526` source), self-test `17/17`, targeted ESLint, diff hygiene, protected-DB identity, and independent review pass. The runner remains outside the coordinator graph, so this module delta is not an aggregate delta. | Committed locally at `aaf515d20`; no production change |
 | Latest P1.10 full-Hub mobile seam | Package B renders the real `WagmiProvider -> HubContent -> HubSidePanel` path under a denied custom transport and records zero RPC calls. It replaces two gameplay-stage source assertions and one obsolete-component literal guard with final-markup checks: responsive desktop blur is scoped, unscoped mobile blur is absent, and exactly one `mobile-mine-action` dock renders. Standalone classification is `68/18/50 -> 68/15/53`; focused x2, audit x2, self-test `17/17`, exact-runtime TypeScript, targeted ESLint, diff hygiene, protected-DB identity, and independent review pass. The direct SSR Next Image warning is non-blocking because production `next.config.mjs` already configures qualities `75` and `85`. | Committed locally at `39f68888`; no production change |
 | Latest P1.10 rebate-history seam | The request-boundary runner removes two static pagination assertions only after the existing isolated child executes the real route: `limit=65` returns `400` before any DB read, while `limit=64` reaches the page read with exact `{ beforeEpoch: null, limit: 64 }` and fails closed on its mocked multicall. Focused API and route-child runners passed x2; audit x2 and self-test `17/17` pass. | Local test-only progress; partial and uncommitted |
