@@ -1,8 +1,10 @@
 # Valkey and Upstash REST parity plan
 
-Status: a direct, isolated Lua-engine check passed; HTTPS REST parity and
-shared-runtime evidence remain open. No endpoint or durable credential is
-recorded here.
+Status: direct engine execution covers all three production Lua scripts, and a
+hermetic HTTPS/REST check covers the real rate-limit application path from two
+Node processes at local SHA `cbf916739f6a55682da0af69e5463cec1fec3581`.
+Keeper/session HTTPS, a deployed provider/shared runtime, persistence, restore,
+and non-web processes remain open. No endpoint or durable credential is recorded.
 
 ## Selected candidate
 
@@ -15,6 +17,16 @@ recorded here.
   `sha256:3d9b17f2fa3d938c63c0e951a669f8752f57fdee2d771a757830f66b4c8cc0bf`.
   Deployments must pin the index, record the resolved platform manifest, and
   reject a platform or digest mismatch.
+- Local REST façade only: third-party SRH tag `0.0.10`, observed OCI index
+  `sha256:65128347949bca511e448fd7238780d624573d74c22b79155a7563db19e9b678`,
+  executed Linux AMD64 manifest
+  `sha256:01d66211581ebd552e07292e3b73f1f475e52c48aa725049809aa09a7ba23238`.
+- Local TLS proxy only: Caddy tag `2.11.4-alpine`, observed OCI index
+  `sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648`,
+  executed Linux AMD64 manifest
+  `sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3a6717a3411ad798f7a423a`.
+  Runtime self-report is `v2.11.4`; SRH does not expose a self-reported version,
+  so only its immutable executed manifest and selection tag are claimed.
 
 The prior `sha256:837f...` reference resolves to `linux/arm/v7`; it was not
 used as runtime evidence and must not be selected on an AMD64 host.
@@ -23,8 +35,8 @@ The official image is not safe to publish directly: its documentation states
 that protected mode is off by default for container networking. Keep Valkey on
 an internal network, require authentication, deny host-port publication, and
 place any HTTPS endpoint behind authenticated infrastructure. This is a
-candidate for an isolated staging/parity runtime, not a selection of a managed
-production provider or evidence that a daemon is currently available.
+candidate for isolated staging/parity. The local run below is not selection or
+evidence of a managed production provider.
 
 Sources consulted on 2026-08-25:
 
@@ -33,6 +45,7 @@ Sources consulted on 2026-08-25:
   index and Linux AMD64 manifest above)
 - <https://upstash.com/docs/redis/features/restapi>
 - <https://upstash.com/docs/redis/sdks/ts/commands/scripts/eval>
+- <https://github.com/hiett/serverless-redis-http>
 
 ## Required HTTP compatibility boundary
 
@@ -74,6 +87,38 @@ single ephemeral container, not an Upstash-compatible HTTPS façade, two
 independent application replicas, a persistent external database, or restore
 evidence. It does not authorize deployment, an external request, or wallet
 activity.
+
+## Local HTTPS rate-limit application check (2026-08-25)
+
+The latest retained clean-HEAD run of `scripts/test-valkey-rest-rate-limit.mjs`
+passed at exact local SHA `cbf916739f6a55682da0af69e5463cec1fec3581`;
+`npm run test:valkey:rest-rate-limit` is its package entry. The harness starts
+the three exact Linux AMD64 manifests above on two isolated Docker networks:
+Valkey and SRH publish no host port; only Caddy receives a Docker-assigned
+loopback HTTPS port. The
+client keeps the production-valid host/SNI `valkey-parity.playlore.xyz`, rejects
+the default system CA, and then trusts only the ephemeral Caddy root with normal
+certificate verification enabled.
+
+Two independent long-lived Node processes import the real
+`consumeExternalRateLimit`. They share one Valkey keyspace and pass
+`allowed, allowed, blocked`, positive non-resetting TTL, and exact Lua-script
+hash checks. Wrong Bearer fails both raw REST and the production caller;
+`{result}` and `{error}` envelopes are exercised. Startup, pre-replica, and
+post-execution HEAD/blob/content captures match, every replica reports the
+captured production-source digest, and the clean post-commit artifact reports
+`allRelevantFilesBoundToRevision=true`.
+
+Secrets exist only in process memory or exclusive temporary files. Every
+attempted container/network carries a unique run label; full IDs and labels are
+verified before ID-based removal, followed by exact-name and label scans. The
+post-incident protected SQLite base/WAL/SHM pre/post identity is unchanged.
+Redacted evidence is in
+`artifacts/valkey-runtime/valkey-rest-rate-limit.json`.
+
+This remains **partial local parity**. It does not prove the managed provider,
+deployed web replicas, keeper/session application paths, indexer/bot/monitor,
+persistent external storage, backup/restore, or cross-host behavior.
 
 ## Runtime evidence required
 

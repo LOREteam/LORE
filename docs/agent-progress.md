@@ -8,13 +8,14 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
-- Current `HEAD` is `39f68888ababf5bd26d4f9d895972986e9a40042`. It commits
-  the exact five-path mobile-mining Package B after focused SSR x2, audit x2,
-  exact staged-blob digest, protected-DB, and independent review. Its
-  `aaf515d20` parent commits Package A and `a5ff9f595` commits the preceding
-  P1.17 lifecycle/verifier packet. The current tracked packet adds only the
-  HTTPS REST rate-limit parity harness, its package entry, and current-state
-  documentation; retained generated artifact directories remain excluded.
+- The current tested code baseline and parent of this documentation-only commit
+  is `cbf916739f6a55682da0af69e5463cec1fec3581`. It commits the exact five-path
+  local HTTPS/REST Valkey rate-limit parity packet after
+  the retained clean-HEAD run, direct Lua-engine regression, exact staged
+  digests, post-incident protected base/WAL/SHM invariants, and independent
+  `CLEAN` review. Its
+  `39f68888` parent commits mobile-mining Package B. This documentation-only
+  child records that result; retained generated artifact directories stay excluded.
 - Earlier security-reviewed baseline `3c8886acc1fa33045aa7bcc1d03bab9fa84fd09b` closes the
   final deposits-recovery transport bound found by targeted security review:
   recovery head/log reads use one `http(RPC_URL, { timeout: 20_000,
@@ -547,9 +548,11 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
     action; those remain required before any multi-host or live claim.
 68. [`valkey-upstash-parity-plan.md`](valkey-upstash-parity-plan.md) selects
     Valkey `8.1.9` and records the observed immutable official image manifest
-    plus the mandatory Upstash-style HTTPS REST façade. Docker client `29.5.2`
-    is installed locally, but its daemon is unavailable; no image pull, real
-    Lua `EVAL`, provider configuration, or replica evidence occurred.
+    plus the mandatory Upstash-style HTTPS REST façade. Direct local execution
+    now covers all three real Lua programs, and commit `cbf916739` covers the
+    HTTPS rate-limit application path from two Node processes. A deployed
+    provider, deployed web replicas, keeper/session HTTPS, persistence, and
+    restore evidence remain open.
 69. The `24` source assertions in `test-business-release-operations.mjs` were
     reviewed rather than removed. They protect the Windows-only local-campaign
     fixture; Linux intentionally returns before that executable fixture, so
@@ -734,9 +737,12 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 - Direct execution now covers all three exact production Lua programs on
   pinned Valkey `8.1.9`. The new local parity harness also executes the real
   `consumeExternalRateLimit` from two independent Node processes through
-  verified Caddy TLS/SNI and pinned SRH into the same Valkey keyspace. Focused
-  x2 plus the package entry pass `allowed, allowed, blocked`, wrong Bearer,
-  `{result}`/`{error}`, TTL non-reset, exact cleanup, and protected-DB identity.
+  verified Caddy TLS/SNI and a digest-pinned SRH image selected from tag
+  `0.0.10` into the same Valkey keyspace. The latest retained clean-HEAD run
+  passes `allowed, allowed, blocked`, wrong Bearer, `{result}`/`{error}`, TTL
+  non-reset, exact cleanup, and post-incident base/WAL/SHM pre/post identity.
+  The post-commit rerun reports `allRelevantFilesBoundToRevision=true`, stable
+  startup-to-finish provenance, and exact source revision `cbf916739f6a5568`.
   This is partial local `RATE_LIMIT_SCRIPT` evidence only; keeper/session HTTPS,
   deployed replicas/provider, persistent external DB, and restore remain open.
 - Header balance provenance now carries wagmi fetching/error/stale/updated-at metadata:
@@ -747,7 +753,7 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   scan, and hosted CI cycle is open; the dirty working tree invalidates older
   final-SHA/sealed claims.
 - The user has granted local-commit authority. Stage only the exact current
-  five-path Valkey parity packet after its zero-omission audit; historical
+  five-path documentation packet after its zero-omission audit; historical
   7/74/318/320 scopes
   do not widen that staging boundary or authorize external actions.
 - P1.17 needs a final canonical/profile sealed pair and a real physical
@@ -779,8 +785,8 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   Supported Standard scan `6ca5758f-a4a1-43db-b772-ba98486f1223` found zero
   findings in five critical source surfaces and expressly retained partial
   5-of-785 source coverage plus all live/hosted exclusions. This is local,
-  source-only evidence; Valkey topology, hosted CI, TLS, mobile Privy, and every
-  wallet/chain/Preview action remain open external gates.
+  source-only evidence; deployed provider-managed Valkey topology, hosted CI,
+  TLS, mobile Privy, and every wallet/chain/Preview action remain open gates.
 
 ## External boundary
 
@@ -794,8 +800,9 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   network or wallet and remains local evidence only.
 - G1–G14 remain `0/14`; `25` external/status blockers and `41` recorded
   mainnet-environment failures remain open.
-- Hosted TLS/HTTPS, Privy origins, real replicas/Redis/DB restore, a shared
-  transactional cross-host consent ledger, monitoring, physical mobile
+- Hosted TLS/HTTPS, Privy origins, deployed web replicas with provider-managed
+  Redis/Valkey and DB restore, a shared transactional cross-host consent ledger,
+  monitoring, physical mobile
   wallets, signed canary, recovery/soak campaigns, and final sign-off require
   external evidence.
 - A fresh guest browser probe on 2026-08-23 still failed at

@@ -1,6 +1,6 @@
 # Remaining Worklist
 
-Last updated: 2026-08-24. This is the active queue. Historical detail belongs
+Last updated: 2026-08-25. This is the active queue. Historical detail belongs
 under [`docs/archive/`](archive/).
 
 ## P0: trustworthy local release candidate
@@ -64,7 +64,7 @@ under [`docs/archive/`](archive/).
       mirror after the browser-fixture correction: it exited `0` through lint,
       isolated business, P1, performance self-test, V10/SQLite, hermetic build,
       TypeScript, HTTP, and browser smoke. It is not final-SHA evidence because
-      the candidate code is not yet committed.
+      it predates later commits and has not been repeated as the final seal.
 - [x] Locate and verify the already-present isolated Node `24.5.0` + npm
       `11.5.1` toolchain under `.tmp-npm-runtime-115/`. It passed the Preview
       environment suite `30/30` and exact-runtime typecheck. No runtime was
@@ -361,14 +361,18 @@ under [`docs/archive/`](archive/).
 - [x] Select and document the Valkey `8.1.9` parity-runtime candidate, official
       immutable manifest digest, and mandatory Upstash-compatible HTTPS REST
       façade in [`valkey-upstash-parity-plan.md`](valkey-upstash-parity-plan.md).
-      This is not a deployed provider or runtime proof.
-- [ ] Provision that reviewed shared runtime and execute `RATE_LIMIT_SCRIPT`,
-      `KEEPER_DAILY_BUDGET_SCRIPT`, and `ROTATE_SESSION_SCRIPT` through the
-      actual HTTPS REST contract. Docker client `29.5.2` exists locally but its
-      service/engine is stopped; a raw container or direct TCP test cannot prove
-      application parity.
-- [ ] Exercise two web replicas, indexer/bot/monitor, shared limiter/lock,
-      cross-host consent ledger, external persistent DB and backup/restore.
+      This is not a deployed-provider selection or production proof.
+- [x] Execute the real `RATE_LIMIT_SCRIPT` application path through verified
+      local HTTPS REST from two independent Node processes. Exact commit
+      `cbf916739` has a retained clean-HEAD run covering wrong-Bearer fail-closed,
+      result/error envelopes, shared count/TTL, source/SHA binding, exact Docker
+      cleanup, and post-incident protected base/WAL/SHM invariants. This is
+      hermetic local evidence only.
+- [ ] Provision the reviewed deployed shared runtime, repeat the rate-limit path
+      against that provider, and execute `KEEPER_DAILY_BUDGET_SCRIPT` plus
+      `ROTATE_SESSION_SCRIPT` through the same managed HTTPS REST contract.
+- [ ] Exercise deployed web replicas, indexer/bot/monitor, shared limiter/lock,
+      cross-host consent ledger, external persistent DB, and backup/restore.
 
 ## Long-duration test campaigns
 
@@ -408,7 +412,7 @@ Detailed criteria are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md
 - [ ] Keep all `25` external/status blockers and `41` recorded mainnet
       environment failures open until refreshed canonical evidence changes them.
 - [ ] Complete hosted TLS/HTTPS, Privy origins, ownership/randomness sign-off,
-      processes, two replicas with real Redis/Valkey, DB restore, shared
+      processes, deployed web replicas with provider-managed Redis/Valkey, DB restore, shared
       cross-host consent ledger, monitoring, P1.17 two-hour/mobile wallet QA,
       and final security/QA sign-off. Production HTTPS currently fails with
       `ERR_CERT_COMMON_NAME_INVALID`.
