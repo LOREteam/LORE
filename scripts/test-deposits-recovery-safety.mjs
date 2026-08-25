@@ -11,6 +11,12 @@ assert.match(
 
 assert.match(
   depositsRouteSource,
+  /requiresExternalSharedLock\(\)[\s\S]*hasPublicExternalRateLimitStore\(\)[\s\S]*fallback: "deny"[\s\S]*consumeExternalRateLimit\([\s\S]*"api-deposits-chain-recovery"[\s\S]*"global"[\s\S]*1,[\s\S]*DEPOSITS_RECOVERY_SHARED_BUDGET_WINDOW_MS[\s\S]*acquireExternalExpiringLock\([\s\S]*"api-deposits-chain-recovery"[\s\S]*DEPOSITS_RECOVERY_SHARED_LOCK_TTL_MS/,
+  "multi-replica deposits recovery must fail closed without the external store and use one shared budget plus expiring lock before RPC work",
+);
+
+assert.match(
+  depositsRouteSource,
   /async function getLogsByTopicAndUser\([\s\S]*toBlock: bigint[\s\S]*if \(startBlock > toBlock\) return all[\s\S]*for \(let from = startBlock; from <= toBlock; from \+= LOG_CHUNK_BLOCKS\)[\s\S]*toBlock: to/,
   "deposits recovery topic scans must share one explicit bounded target block",
 );

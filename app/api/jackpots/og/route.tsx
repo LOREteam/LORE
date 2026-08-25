@@ -6,7 +6,6 @@ import {
 } from "../../_lib/responseConcurrencyBudget";
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
-import { getTrustedAuthOrigin } from "../../_lib/trustedAuthOrigin";
 import { getJackpotVisualTheme } from "../../../lib/jackpotVisualTheme";
 import { readVerifiedJackpotShare } from "../../_lib/jackpotShare";
 
@@ -47,7 +46,7 @@ export async function GET(request: NextRequest) {
   }
   const { amount, epoch } = share;
   const theme = getJackpotVisualTheme(share.kind);
-  const artOrigin = getTrustedAuthOrigin(request.url) ?? CANONICAL_SITE_ORIGIN;
+  const artOrigin = CANONICAL_SITE_ORIGIN;
   const artUrl = new URL(theme.ogArt, artOrigin).toString();
   const rewardDisplay = amount ? amount : "REWARD";
   const rewardUnit = amount ? "LINEA" : "CONFIRMED";

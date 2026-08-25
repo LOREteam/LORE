@@ -35,6 +35,12 @@ import {
 } from "../_lib/storedNumberParsing";
 import { logRouteError } from "../_lib/routeError";
 import { enforceSharedRateLimit } from "../_lib/sharedRateLimit";
+import {
+  acquireExternalExpiringLock,
+  consumeExternalRateLimit,
+  hasPublicExternalRateLimitStore,
+  requiresExternalSharedLock,
+} from "../_lib/externalRateLimit";
 import { createRouteCache } from "../_lib/routeCache";
 import { startVersionedBackgroundRefresh, startVersionedInflightBuild } from "../_lib/versionedRouteCache";
 import {
@@ -55,6 +61,8 @@ const ROUTE_METRIC_KEY = "api/deposits";
 const DEPOSIT_RECOVERY_EPOCH_LAG = 8;
 const RECENT_RECOVERY_BLOCK_WINDOW = 100_000n;
 const DEPOSITS_BACKGROUND_RECOVERY_COOLDOWN_MS = 15_000;
+const DEPOSITS_RECOVERY_SHARED_LOCK_TTL_MS = 300_000;
+const DEPOSITS_RECOVERY_SHARED_BUDGET_WINDOW_MS = 60_000;
 const CURRENT_EPOCH_CACHE_MS = 60_000;
 const INLINE_REWARD_EPOCH_LIMIT = 64;
 const MAX_TILE_ID = 25;
@@ -558,8 +566,39 @@ async function recoverDepositsWithGlobalBound(user: string, currentEpochNum: num
     return null;
   }
 
+  const task = (async () => {
+    if (requiresExternalSharedLock()) {
+      if (!hasPublicExternalRateLimitStore()) {
+        logRouteError(ROUTE_METRIC_KEY, new Error("deposits recovery shared store is unavailable"), {
+          phase: "recovery-shared-admission",
+          fallback: "deny",
+        });
+        return [];
+      }
+      try {
+        const budget = await consumeExternalRateLimit(
+          "api-deposits-chain-recovery",
+          "global",
+          1,
+          DEPOSITS_RECOVERY_SHARED_BUDGET_WINDOW_MS,
+        );
+        if (!budget.allowed) return [];
+        const acquired = await acquireExternalExpiringLock(
+          "api-deposits-chain-recovery",
+          DEPOSITS_RECOVERY_SHARED_LOCK_TTL_MS,
+        );
+        if (!acquired) return [];
+      } catch (error) {
+        logRouteError(ROUTE_METRIC_KEY, error, {
+          phase: "recovery-shared-admission",
+          fallback: "deny",
+        });
+        return [];
+      }
+    }
+    return recoverDepositsFromChain(user, currentEpochNum);
+  })();
   depositsRecoveryStartedAt = now;
-  const task = recoverDepositsFromChain(user, currentEpochNum);
   depositsRecoveryInflight = task;
   try {
     return await task;

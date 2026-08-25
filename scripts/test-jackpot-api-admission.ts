@@ -167,8 +167,13 @@ function testOgAdmissionSource() {
   }
   assert.match(
     routeSource,
-    /const artOrigin = getTrustedAuthOrigin\(request\.url\) \?\? CANONICAL_SITE_ORIGIN;\s*const artUrl = new URL\(theme\.ogArt, artOrigin\)\.toString\(\)/,
-    "the OG renderer must resolve relative art against a trusted production origin",
+    /const artOrigin = CANONICAL_SITE_ORIGIN;\s*const artUrl = new URL\(theme\.ogArt, artOrigin\)\.toString\(\)/,
+    "the OG renderer must resolve relative art against the fixed canonical origin in every environment",
+  );
+  assert.doesNotMatch(
+    routeSource,
+    /getTrustedAuthOrigin\(request\.url\)/,
+    "the OG renderer must not derive its asset origin from the request URL outside production",
   );
   assert.doesNotMatch(
     routeSource,
