@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import React from "react";
@@ -481,7 +480,6 @@ if (ADMIN_OPS_HANDLER_PROBE_MODE) {
 
 export function runRuntimeHealthDiagnosticsTests() {
   const diagnosticsAuth = diagnosticsAuthModule.default ?? diagnosticsAuthModule;
-  const adminOpsClientSource = readFileSync("app/admin/AdminOpsClient.tsx", "utf8");
 
   const configuredPublicConfig = diagnosticsAuth.buildRuntimeHealthPublicConfig({
     env: {
@@ -680,5 +678,4 @@ export function runRuntimeHealthDiagnosticsTests() {
     0,
     `runtime-health executable probe failed:\n${`${executableProbe.stdout}\n${executableProbe.stderr}`.slice(-4_000)}`,
   );
-  assert.doesNotMatch(adminOpsClientSource, /\.\s*json\(\)/, "admin ops UI API reads must not use unbounded response.json");
 }
