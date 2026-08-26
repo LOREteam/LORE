@@ -23,9 +23,11 @@ import { getExplorerTxUrl } from "../lib/explorerLinks";
 import { getFreshCacheDelayMs, normalizeCacheTimestamp } from "../lib/cacheTimestamp";
 import {
   ClaimTransactionIntentError,
-  waitForClaimTransactionReceiptAgreement,
+  createClaimTransactionNonceClients,
+  waitForTrackedClaimTransactionReceiptAgreement,
+  withClaimTransactionIntentLease,
 } from "../lib/claimTransactionIntent";
-import { acquireEoaNonceLockLease } from "../lib/eoaNonceLock";
+import type { WalletContractIntentDetails } from "../lib/walletTransferIntent";
 import { isAmbiguousPendingTxError } from "./useMining.shared";
 
 type SilentSendFn = (tx: {
@@ -33,6 +35,7 @@ type SilentSendFn = (tx: {
   data?: `0x${string}`;
   value?: bigint;
   gas?: bigint;
+  contractIntent?: WalletContractIntentDetails;
 }) => Promise<`0x${string}`>;
 
 interface UseRebateOptions {
@@ -877,7 +880,7 @@ export function useRebate(options?: UseRebateOptions) {
 
       for (let attempt = 0; attempt < REBATE_CONFIRM_ATTEMPTS; attempt += 1) {
         try {
-          const confirmation = await waitForClaimTransactionReceiptAgreement(
+          const confirmation = await waitForTrackedClaimTransactionReceiptAgreement(
             {
               actor: sender,
               chainId: APP_CHAIN_ID,
@@ -1271,15 +1274,17 @@ export function useRebate(options?: UseRebateOptions) {
     if (!CONTRACT_HAS_REBATE_API || !rebateAddress || !publicClient || allRebateEpochs.length === 0) return;
     if (!tryAcquireSafetyPoolClaimLock(claimInFlightRef)) return;
     const claimActor = rebateAddress.toLowerCase();
-    const { assertActorActive: assertClaimActorActive, isActorChangedError } =
+    const {
+      actorChangedError: claimActorChangedError,
+      assertActorActive: assertClaimActorActive,
+      isActorChangedError,
+    } =
       createSafetyPoolClaimActorGuard(latestRebateAddressRef, claimActor);
     if (mountedRef.current) {
       setIsClaiming(true);
     }
 
     const claimProgress = createSafetyPoolClaimProgress();
-    let claimLease: { release: () => void } | null = null;
-
     try {
       const connected = address ? getAddress(address) : null;
       const sender = silentSend ? rebateAddress : connected;
@@ -1288,14 +1293,18 @@ export function useRebate(options?: UseRebateOptions) {
         return;
       }
 
-      claimLease = await acquireEoaNonceLockLease({ chainId: APP_CHAIN_ID, actor: sender });
-
       if (!silentSend && sender.toLowerCase() !== rebateAddress.toLowerCase()) {
         throw new Error(
           `Safety Pool sender mismatch. Safety Pool is loaded for ${rebateAddress}, but your connected wallet is ${sender}. Switch wallets or use the embedded wallet and try again.`,
         );
       }
       assertClaimActorActive();
+      const connectedClaimNonceClients = silentSend
+        ? null
+        : createClaimTransactionNonceClients();
+      if (!silentSend && !connectedClaimNonceClients) {
+        throw new Error("Safety Pool claim requires two independent nonce RPC origins.");
+      }
 
       const candidateEpochs = allClaimableEpochs.length > 0 ? allClaimableEpochs : allRebateEpochs;
       const verifiedClaimableEpochs = await loadClaimableEpochsExact(
@@ -1360,22 +1369,53 @@ export function useRebate(options?: UseRebateOptions) {
         },
         estimateBatchGas: estimateClaimGas,
         sendBatch: async (epochArgs, gas) => {
-          if (silentSend) {
-            const data = encodeFunctionData({
-              abi: GAME_ABI,
-              functionName: "claimEpochsRebate",
-              args: [epochArgs],
-            });
-            return silentSend({ to: CONTRACT_ADDRESS, data, gas });
-          }
-          return writeContractAsync({
-            address: CONTRACT_ADDRESS,
+          const data = encodeFunctionData({
             abi: GAME_ABI,
             functionName: "claimEpochsRebate",
             args: [epochArgs],
-            chainId: APP_CHAIN_ID,
-            gas,
           });
+          if (silentSend) {
+            return silentSend({
+              to: CONTRACT_ADDRESS,
+              data,
+              gas,
+              contractIntent: { contract: CONTRACT_ADDRESS, calldata: data },
+            });
+          }
+          if (!connectedClaimNonceClients) {
+            throw new Error("Safety Pool claim requires two independent nonce RPC origins.");
+          }
+          return withClaimTransactionIntentLease(
+            {
+              actor: sender,
+              chainId: APP_CHAIN_ID,
+              contract: CONTRACT_ADDRESS,
+              calldata: data,
+            },
+            connectedClaimNonceClients,
+            async (acquisition, retainResult) => {
+              if (acquisition.status === "known-hash") return acquisition.hash;
+              assertClaimActorActive();
+              const retained = await retainResult(
+                writeContractAsync({
+                  address: CONTRACT_ADDRESS,
+                  abi: GAME_ABI,
+                  functionName: "claimEpochsRebate",
+                  args: [epochArgs],
+                  chainId: APP_CHAIN_ID,
+                  account: sender,
+                  nonce: acquisition.lease.nonce,
+                  gas,
+                }).then((hash) => ({ hash })),
+                acquisition.lease,
+              );
+              return retained.hash;
+            },
+            {
+              abandonOnError: (error) =>
+                isUserRejection(error) || error === claimActorChangedError,
+            },
+          );
         },
         simulateSingle: async (epoch) => {
           await publicClient.simulateContract({
@@ -1388,22 +1428,53 @@ export function useRebate(options?: UseRebateOptions) {
         },
         estimateSingleGas: estimateSingleClaimGas,
         sendSingle: async (epoch, gas) => {
-          if (silentSend) {
-            const data = encodeFunctionData({
-              abi: GAME_ABI,
-              functionName: "claimEpochRebate",
-              args: [epoch],
-            });
-            return silentSend({ to: CONTRACT_ADDRESS, data, gas });
-          }
-          return writeContractAsync({
-            address: CONTRACT_ADDRESS,
+          const data = encodeFunctionData({
             abi: GAME_ABI,
             functionName: "claimEpochRebate",
             args: [epoch],
-            chainId: APP_CHAIN_ID,
-            gas,
           });
+          if (silentSend) {
+            return silentSend({
+              to: CONTRACT_ADDRESS,
+              data,
+              gas,
+              contractIntent: { contract: CONTRACT_ADDRESS, calldata: data },
+            });
+          }
+          if (!connectedClaimNonceClients) {
+            throw new Error("Safety Pool claim requires two independent nonce RPC origins.");
+          }
+          return withClaimTransactionIntentLease(
+            {
+              actor: sender,
+              chainId: APP_CHAIN_ID,
+              contract: CONTRACT_ADDRESS,
+              calldata: data,
+            },
+            connectedClaimNonceClients,
+            async (acquisition, retainResult) => {
+              if (acquisition.status === "known-hash") return acquisition.hash;
+              assertClaimActorActive();
+              const retained = await retainResult(
+                writeContractAsync({
+                  address: CONTRACT_ADDRESS,
+                  abi: GAME_ABI,
+                  functionName: "claimEpochRebate",
+                  args: [epoch],
+                  chainId: APP_CHAIN_ID,
+                  account: sender,
+                  nonce: acquisition.lease.nonce,
+                  gas,
+                }).then((hash) => ({ hash })),
+                acquisition.lease,
+              );
+              return retained.hash;
+            },
+            {
+              abandonOnError: (error) =>
+                isUserRejection(error) || error === claimActorChangedError,
+            },
+          );
         },
         confirm: (hash, intent) => confirmClaimBatch(hash, sender, intent),
         onInitialSplit: () => {
@@ -1442,7 +1513,6 @@ export function useRebate(options?: UseRebateOptions) {
       }
       notify?.(outcome.message, outcome.tone);
     } finally {
-      claimLease?.release();
       releaseSafetyPoolClaimLock(claimInFlightRef);
       if (mountedRef.current) {
         setIsClaiming(false);
