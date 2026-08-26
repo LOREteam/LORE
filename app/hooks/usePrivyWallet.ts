@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getEmbeddedConnectedWallet,
   usePrivy,
@@ -185,6 +185,14 @@ export function usePrivyWallet() {
   const embeddedWalletAddress = normalizeWalletAddress(embeddedWallet?.address) ?? normalizeWalletAddress(linkedEmbeddedWalletAddress);
   const embeddedWalletReady = Boolean(embeddedWallet);
   const externalWalletAddress = providerExternalWalletAddress ?? normalizeWalletAddress(externalWallet?.address);
+  const embeddedWalletAddressRef = useRef<`0x${string}` | null>(embeddedWalletAddress);
+  embeddedWalletAddressRef.current = embeddedWalletAddress;
+  const assertEmbeddedWalletActorCurrent = useCallback((expectedActor: `0x${string}`) => {
+    const currentActor = embeddedWalletAddressRef.current;
+    if (!currentActor || currentActor.toLowerCase() !== expectedActor.toLowerCase()) {
+      throw new WalletTransferIntentError("wallet_transfer_intent_actor_changed");
+    }
+  }, []);
   const embeddedWalletSyncing =
     authenticated &&
     !embeddedWalletAddress &&
@@ -203,7 +211,8 @@ export function usePrivyWallet() {
   }, [embeddedWallet, address, setActiveWallet]);
 
   const ensureEmbeddedWallet = useCallback(async () => {
-    if (!embeddedWallet) throw new Error("Privy embedded wallet not found.");
+    if (!embeddedWallet || !embeddedWalletAddress) throw new Error("Privy embedded wallet not found.");
+    const expectedActor = embeddedWalletAddress;
     try {
       await withTimeout(setActiveWallet(embeddedWallet), ACTIVE_WALLET_TIMEOUT_MS, "Privy setActiveWallet");
     } catch (error) {
@@ -212,7 +221,8 @@ export function usePrivyWallet() {
       }
       throw error;
     }
-  }, [embeddedWallet, setActiveWallet]);
+    assertEmbeddedWalletActorCurrent(expectedActor);
+  }, [assertEmbeddedWalletActorCurrent, embeddedWallet, embeddedWalletAddress, setActiveWallet]);
 
   const exportEmbeddedWallet = useCallback(async () => {
     if (!embeddedWalletAddress) return;
@@ -232,6 +242,14 @@ export function usePrivyWallet() {
       gasOverrides?: FeeOverrides,
     ) => {
       if (!embeddedWallet || !embeddedWalletAddress) throw new Error("Privy embedded wallet not found.");
+      const expectedActor = embeddedWalletAddress;
+      if (
+        tx.expectedActor &&
+        getAddress(tx.expectedActor).toLowerCase() !== expectedActor.toLowerCase()
+      ) {
+        throw new WalletTransferIntentError("wallet_transfer_intent_actor_changed");
+      }
+      assertEmbeddedWalletActorCurrent(expectedActor);
       // Some flows can switch active signer to external wallet; force embedded signer for silent tx.
       try {
         await withTimeout(setActiveWallet(embeddedWallet), ACTIVE_WALLET_TIMEOUT_MS, "Privy setActiveWallet");
@@ -241,6 +259,7 @@ export function usePrivyWallet() {
         }
         throw error;
       }
+      assertEmbeddedWalletActorCurrent(expectedActor);
       const feeMode = tx.feeMode ?? "normal";
       const effectiveGas = tx.gas ?? (
         feeMode === "normal" && tx.data === undefined ? NORMAL_VALUE_TRANSFER_GAS_LIMIT : undefined
@@ -257,6 +276,7 @@ export function usePrivyWallet() {
       const resolvedFees = hasCompleteFeeOverrides(gasOverrides)
         ? undefined
         : ((await resolveFeeOverrides(publicClient, feeMode, APP_CHAIN_ID)) ?? getFallbackFeeOverrides(APP_CHAIN_ID, feeMode));
+      assertEmbeddedWalletActorCurrent(expectedActor);
       const effectiveFees = mergeFeeOverrides(resolvedFees, gasOverrides);
       if (feeMode === "normal") {
         assertNormalFeeBudget(effectiveFees, effectiveGas, APP_CHAIN_ID);
@@ -306,8 +326,9 @@ export function usePrivyWallet() {
         retainResult?: (promise: Promise<SendReceipt>, lease: WalletTransferIntentLease) => Promise<SendReceipt>,
       ) => {
         if (lease) baseRequest.nonce = BigInt(lease.nonce);
+        assertEmbeddedWalletActorCurrent(expectedActor);
         const sendPromise = sendTransaction(baseRequest, {
-          address: embeddedWalletAddress,
+          address: expectedActor,
           uiOptions: { showWalletUIs: false },
         });
         const retainedSendPromise = lease && retainResult
@@ -342,7 +363,7 @@ export function usePrivyWallet() {
       }
       return submitSilentTransaction();
     },
-    [sendTransaction, embeddedWallet, embeddedWalletAddress, publicClient, setActiveWallet],
+    [assertEmbeddedWalletActorCurrent, sendTransaction, embeddedWallet, embeddedWalletAddress, publicClient, setActiveWallet],
   );
 
   const sendTransactionFromExternal = useCallback(

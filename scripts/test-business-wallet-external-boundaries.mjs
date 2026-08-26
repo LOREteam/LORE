@@ -173,6 +173,11 @@ export function runWalletExternalBoundaryTests() {
   );
   assert.match(
     privyWalletSource,
+    /embeddedWalletAddressRef\.current = embeddedWalletAddress[\s\S]*const expectedActor = embeddedWalletAddress[\s\S]*await withTimeout\(setActiveWallet\(embeddedWallet\)[\s\S]*assertEmbeddedWalletActorCurrent\(expectedActor\)[\s\S]*await resolveFeeOverrides[\s\S]*assertEmbeddedWalletActorCurrent\(expectedActor\)[\s\S]*const submitSilentTransaction[\s\S]*assertEmbeddedWalletActorCurrent\(expectedActor\)[\s\S]*sendTransaction\(baseRequest, \{[\s\S]*address: expectedActor/,
+    "embedded transfers must revalidate the live actor after every awaited preparation stage and directly before the wallet send sink",
+  );
+  assert.match(
+    privyWalletSource,
     /accountsChanged[\s\S]*setProviderExternalWalletAddress\(getProviderSelectedAddress\(accounts\)\)/,
     "wallet settings must refresh the displayed external address after an injected-wallet account change",
   );
