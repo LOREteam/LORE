@@ -21,7 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import * as safetyPoolClaimThresholdModule from "../app/lib/safetyPoolClaimThreshold.ts";
 import * as analyticsDepositsStatusModule from "../app/lib/analyticsDepositsStatus.ts";
@@ -41,6 +41,7 @@ import {
   trustedNpmCommand,
   trustedNpmEnvironment,
 } from "./trusted-npm-cli.mjs";
+import { resolveTrustedGitExecutable } from "./build-provenance.mjs";
 import {
   assertCanaryApprovalPostcondition,
   resolveCanaryAllowancePlan,
@@ -59,6 +60,7 @@ const chatAuth = chatAuthModule.default ?? chatAuthModule;
 const chatSession = chatSessionModule.default ?? chatSessionModule;
 const indexerNormalization = indexerNormalizationModule.default ?? indexerNormalizationModule;
 const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+const campaignFixtureGitExecutable = resolveTrustedGitExecutable();
 
 function readBehaviorArtifactText(filePath) {
   return readFileSync(filePath, "utf8");
@@ -453,7 +455,7 @@ function campaignFixtureGitEnvironment() {
 }
 
 function runCampaignFixtureGit(root, args) {
-  const result = spawnSync("git", ["-C", root, ...args], {
+  const result = spawnSync(campaignFixtureGitExecutable, ["-C", root, ...args], {
     cwd: root,
     env: campaignFixtureGitEnvironment(),
     encoding: "utf8",
@@ -477,6 +479,13 @@ function runCampaignFixturePowerShell(scriptPath, campaignId, { failEventWrite =
   const fixtureRoot = resolve(scriptPath, "..", "..");
   const fixtureSnapshotParent = join(fixtureRoot, ".fixture-source-snapshots");
   const environment = campaignFixtureGitEnvironment();
+  environment.PATH = [
+    dirname(campaignFixtureGitExecutable),
+    dirname(powerShellPath),
+    environment.PATH,
+  ]
+    .filter(Boolean)
+    .join(delimiter);
   delete environment.LORE_CAMPAIGN_FIXTURE_FAULT;
   delete environment.LORE_CAMPAIGN_FIXTURE_SNAPSHOT_PARENT;
   environment.LORE_CAMPAIGN_FIXTURE_SNAPSHOT_PARENT = fixtureSnapshotParent;
@@ -803,7 +812,7 @@ export function assertLocalCampaignSourceProvenance() {
     const removeFixtureSnapshot = (campaignId, sourceSha) => {
       const snapshot = campaignSnapshotDirectory(campaignId, sourceSha);
       if (!existsSync(snapshot)) return;
-      const removed = spawnSync("git", ["-C", root, "worktree", "remove", "--force", snapshot], {
+      const removed = spawnSync(campaignFixtureGitExecutable, ["-C", root, "worktree", "remove", "--force", snapshot], {
         cwd: root,
         env: campaignFixtureGitEnvironment(),
         encoding: "utf8",
