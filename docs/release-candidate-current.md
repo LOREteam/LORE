@@ -1,7 +1,7 @@
 # Current release-candidate permission manifest
 
 Snapshot date: 2026-08-26. Base `HEAD`:
-`409402d39b36fc0415dbb4eacfc4dc4ce144688f` on `codex/repo-cleanup`.
+`0d5fb026487064831eb1d8eba927248bbd132c98` on `codex/repo-cleanup`.
 
 Status: the user has granted authority for local commits. This manifest is the
 exact staging boundary for the documentation packet that records the sealed
@@ -15,14 +15,22 @@ medium and both low scan findings now have local fixes; this documentation does
 not substitute for the required detached post-fix seal and supported scan.
 Diagnostic candidate `37c6fa56a` additionally exposed three stale business
 contracts, fixed locally at `409402d39`; the next docs child, not the failed
-diagnostic candidate, must receive the fresh detached seal. That authority does
-not authorize push, deployment, hosting changes, signing, wallet/RPC use,
-Preview generation, approval, or a chain transaction.
+diagnostic candidate, must receive the fresh detached seal. The subsequent
+detached candidate `91ec244f2` passed fresh install, dependency and V9/V10
+invariants plus every `check-local` row before the main build, then exposed two
+disallowed policy exports in the chat-auth route module. Commit `0d5fb0264`
+moves those constants into the shared verification module; focused x2,
+route-matrix x2, TypeScript, ESLint, audit x2/self-test, and protected-DB checks
+pass. A separate mutable-root build hit its unchanged strict 20-minute timeout
+and is not green evidence. This documentation child must receive a new detached
+fresh-`npm ci` full seal. The authority does not authorize push, deployment,
+hosting changes, signing, wallet/RPC use, Preview generation, approval, or a
+chain transaction.
 
 ## Exact current scope
 
 The path set below is the exact proposed index relative to
-`409402d39b36fc0415dbb4eacfc4dc4ce144688f`. It contains only the durable
+`0d5fb026487064831eb1d8eba927248bbd132c98`. It contains only the durable
 state/progress/worklist update and this self-excluded manifest.
 
 - Proposed child: `3` other tracked paths plus this manifest.
@@ -37,7 +45,7 @@ state/progress/worklist update and this self-excluded manifest.
 - Canonical current content-set SHA-256 for the other `3` candidate files (this
   self-referential manifest excluded; sorted
   `path + NUL + file SHA-256 + LF`):
-  `53d7157d315c9bf823f4669b26be0d5483e58291240d1f4a43a14c45627c0077`.
+  `c234fd03ebc95ad72f2a33da4bebeec9f250f6c6ef18dcee55cfcd920f0e2b78`.
 
 ```text
 docs/agent-progress.md

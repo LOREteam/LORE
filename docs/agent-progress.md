@@ -8,6 +8,22 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
+- Exact detached candidate `91ec244f2c7b59fd591c2c61d20bd134d7a4e9f5`
+  completed fresh `npm ci` (`1315` packages), both direct dependency gates with
+  `0` blocking advisories, and direct V9/V10 invariants. Its full `check-local`
+  passed lint, hermetic boundary, isolated business, security/fetch/number,
+  P1, performance self-test, V10, storage, and monitor rows before the main
+  hermetic build correctly rejected two non-handler exports from
+  `app/api/chat/auth/route.ts`. Commit
+  `0d5fb026487064831eb1d8eba927248bbd132c98` moves the shared `8/minute`
+  chat-auth policy constants into `app/api/_lib/chatSignatureVerification.ts`;
+  the route now exports only `GET` and `POST`. Chat quorum x2, API route matrix
+  x2 (`85` black-box requests each), TypeScript, targeted ESLint, audit x2
+  (`5836/6360`, `91.76%`), self-test `17/17`, and exact protected-DB identity
+  pass. The mutable-root hermetic build later remained CPU-active until its
+  strict 20-minute child timeout, so it is not counted green and the timeout
+  was not widened. The next action is a new docs child followed by a fresh
+  detached full local/prelaunch seal; `91ec244f2` is diagnostic only.
 - Supported Standard Security Scan
   `dcc2a20f-4a50-4d89-9d40-82204b529ff3` completed for exact detached SHA
   `53846fe1635fea0e15c131afa5dc8020d48c0975`. Its deterministic report records

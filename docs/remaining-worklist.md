@@ -33,6 +33,15 @@ under [`docs/archive/`](archive/).
       `npm ci`; run dependency gates, full local/prelaunch gates, hermetic
       build, typecheck, supported browser/HTTP smoke, V10 properties, and DB
       invariants when disk permits.
+- [x] Use exact detached candidate `91ec244f2` to expose the Next route-module
+      export violation after all earlier `check-local` rows passed. Commit
+      `0d5fb0264` moves the two chat-auth policy constants into the shared
+      verification module and leaves only `GET`/`POST` route exports. Chat
+      quorum x2, API route matrix x2 (`85` requests), TypeScript, targeted
+      ESLint, audit x2/self-test, and protected-DB identity pass. A mutable-root
+      hermetic build hit the unchanged strict 20-minute child timeout while
+      CPU-active, so it is not green evidence; the next clean detached SHA must
+      prove the complete build and gates without widening that timeout.
 - [x] Use candidate `37c6fa56a` to expose and fix the three remaining stale
       business contracts from the durable claim packet. Commit `409402d39`
       binds the nonce source guard to two-origin evidence/disagreement, expects

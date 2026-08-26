@@ -10,6 +10,25 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
+- Current code head `0d5fb026487064831eb1d8eba927248bbd132c98`
+  fixes the route-module contract exposed by the next exact detached candidate.
+  Exact SHA `91ec244f2c7b59fd591c2c61d20bd134d7a4e9f5` received an empty detached
+  checkout and fresh `npm ci` (`1315` packages). Direct Node `24.5.0` / npm
+  `11.5.1` dependency policy passed with `0` production high/critical and `5`
+  allowlisted dev-toolchain high advisories (`0` blocking); direct V9/V10
+  invariants passed. Its full `check-local` passed lint, hermetic-boundary,
+  isolated business, security/fetch/number, P1 hardening, performance self-test,
+  V10, storage, and monitor rows, then correctly failed the main hermetic build:
+  Next route type generation rejected the two chat-auth policy constants
+  exported from `app/api/chat/auth/route.ts`. Commit `0d5fb0264` moves those
+  constants to `app/api/_lib/chatSignatureVerification.ts`, leaving the route
+  with only `GET` and `POST` exports. Chat-auth quorum x2, API route matrix x2
+  (`85` requests), TypeScript, targeted ESLint, audit x2 (`5836/6360`,
+  `91.76%`), self-test `17/17`, and exact protected-DB identity pass. A separate
+  hermetic build on the mutable root remained CPU-active until the existing
+  strict 20-minute child timeout and was killed; it is diagnostic, not green
+  build evidence. A new immutable documentation child and detached fresh-`npm
+  ci` full seal are required; `91ec244f2` is not the final SHA.
 - Current remediation head `b7a678970e90ecef8011926b255561f06d895e93`
   closes the scan's final low claim-lease finding in four bounded commits:
   durable exact contract intents (`0cb1381d2`), reward/deep-reward callers
