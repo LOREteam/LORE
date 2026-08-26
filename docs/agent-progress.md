@@ -26,6 +26,15 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   syntax/diff hygiene, and protected DB identity pass. A fresh detached full
   seal and supported scan are required because this commit postdates the
   sealed `53846fe…` scan.
+- Current child `6d70b03140186c87df65c1f2c0efd310e0205e2e` fixes the
+  medium mining account-binding finding. Direct approval requests and all five
+  direct Wagmi bet selectors now bind the exact reserved actor as `account`,
+  while the request builder also receives the verified concrete nonce. Fee
+  policy and wallet-state behavior passed twice, TypeScript passed, and the
+  complete P1 hardening runner passed `41/41` in `272173ms`; protected DB
+  base/WAL/SHM identity is unchanged. No wallet, provider, RPC, signature, or
+  transaction was used. The next final SHA scan must include both remediation
+  commits rather than reusing the sealed parent result.
 - The current tested code baseline and parent of this documentation-only packet
   is `99666ae20`. Exact SHA `75881579d` passed P1 hardening in the full
   prelaunch report but failed the later business row because the trusted-npm

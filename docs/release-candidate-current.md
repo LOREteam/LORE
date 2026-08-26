@@ -1,19 +1,20 @@
 # Current release-candidate permission manifest
 
 Snapshot date: 2026-08-26. Base `HEAD`:
-`33a090729f1aeb785c6ca8e42fc4e51740e36c55` on `codex/repo-cleanup`.
+`6d70b03140186c87df65c1f2c0efd310e0205e2e` on `codex/repo-cleanup`.
 
 Status: the user has granted authority for local commits. This manifest is the
 exact staging boundary for the documentation packet that records the sealed
 Standard Security Scan of `53846fe…` and the committed independent-RPC pending
-repair fix at `33a090729`. That authority does not authorize push, deployment,
-hosting changes, signing, wallet/RPC use, Preview generation, approval, or a
-chain transaction.
+repair fix at `33a090729`, plus the committed reserved-actor/nonce binding fix
+at `6d70b0314`. That authority does not authorize push, deployment, hosting
+changes, signing, wallet/RPC use, Preview generation, approval, or a chain
+transaction.
 
 ## Exact current scope
 
 The path set below is the exact proposed index relative to
-`33a090729f1aeb785c6ca8e42fc4e51740e36c55`. It contains only the durable
+`6d70b03140186c87df65c1f2c0efd310e0205e2e`. It contains only the durable
 state/progress/worklist update and this self-excluded manifest.
 
 - Proposed child: `3` other tracked paths plus this manifest.
@@ -28,7 +29,7 @@ state/progress/worklist update and this self-excluded manifest.
 - Canonical current content-set SHA-256 for the other `3` candidate files (this
   self-referential manifest excluded; sorted
   `path + NUL + file SHA-256 + LF`):
-  `b9c850a9e6f92a98f9bd6d5bb9ac43d941c952bea1069896f22c0b2fa3ddc3fe`.
+  `755e20ffb57d23780fc25356ec908dffa608c437bfe258202f40d726ed62b455`.
 
 ```text
 docs/agent-progress.md

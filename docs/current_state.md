@@ -29,6 +29,14 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   base/WAL/SHM identity is unchanged. Because source changed after the sealed
   scan, `33a090729` is not yet the new final SHA and requires a fresh detached
   seal plus another supported scan.
+- Current child `6d70b0314` closes the scan's mining actor/nonce TOCTOU
+  finding. Both direct approval and direct Wagmi bet requests now carry the
+  exact actor whose nonce and durable intent were reserved; the bet builder
+  also requires the concretely verified reservation nonce at the type boundary.
+  Pure request behavior, fee policy, wallet transaction state, and TypeScript
+  pass, followed by full P1 hardening `41/41` in `272173ms`. Protected SQLite
+  identity remains exact and no wallet/RPC action was executed. This commit also
+  postdates the sealed scan and must be included in the next detached seal/scan.
 - Current tested code baseline `99666ae20` closes the trusted-npm
   release-operations fixture failure exposed by the full prelaunch run at exact
   SHA `75881579d`. P1 hardening passed in that report, but the business row

@@ -121,6 +121,11 @@ under [`docs/archive/`](archive/).
       are required before repair can progress; divergent or duplicate origins
       fail before the wallet sink. Focused behavior x2 (`22` cases), intent,
       business boundary, TypeScript, diff, and protected-DB checks pass.
+- [x] Fix the medium mining actor/nonce binding finding in local commit
+      `6d70b0314`: direct approval and all direct Wagmi bet request builders now
+      carry the exact reserved actor as `account` and the verified concrete
+      nonce. Focused fee-policy and wallet-state behavior x2, TypeScript, full
+      P1 hardening `41/41`, diff, and protected-DB checks pass.
 - [ ] Run and seal a new supported Standard scan on the eventual post-fix final
       SHA. The `53846fe…` scan does not prove later source revisions.
 - [ ] Obtain green hosted Linux/Windows CI for the exact final commit.
