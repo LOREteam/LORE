@@ -69,6 +69,26 @@ export function normalizeWalletTransferAddress(value: string | null | undefined)
   }
 }
 
+export function getWalletTransferActorCacheKey(
+  embeddedAddress?: string,
+  externalWalletAddress?: string | null,
+): string | null {
+  const embedded = normalizeWalletTransferAddress(embeddedAddress);
+  const external = externalWalletAddress
+    ? normalizeWalletTransferAddress(externalWalletAddress)
+    : null;
+  if (!embedded || (externalWalletAddress && !external)) return null;
+  return `${embedded}:${external ?? "any"}`;
+}
+
+export function selectWalletTransferDataForActor(
+  actorCacheKey: string | null,
+  dataCacheKey: string | null,
+  data: WalletTransfersSummary | null,
+) {
+  return actorCacheKey === dataCacheKey ? data : null;
+}
+
 export interface WalletTransfer {
   direction: "in" | "out";
   counterparty: string;
@@ -246,6 +266,7 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
   const cachedAtRef = useRef(0);
   const cachedForRef = useRef<string | null>(null);
   const dataRef = useRef<WalletTransfersSummary | null>(null);
+  const dataForRef = useRef<string | null>(null);
   const requestIdRef = useRef(0);
   const runningForRef = useRef<string | null>(null);
 
@@ -259,12 +280,12 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
   useEffect(() => {
     requestIdRef.current += 1;
     runningForRef.current = null;
-    const addr = normalizeWalletTransferAddress(embeddedAddress);
-    const externalAddr = externalWalletAddress ? normalizeWalletTransferAddress(externalWalletAddress) : null;
-    const cached = addr && (!externalWalletAddress || externalAddr)
-      ? readPersistedWalletTransfers(`${addr}:${externalAddr ?? "any"}`)
+    const cacheKey = getWalletTransferActorCacheKey(embeddedAddress, externalWalletAddress);
+    const cached = cacheKey
+      ? readPersistedWalletTransfers(cacheKey)
       : null;
     dataRef.current = cached;
+    dataForRef.current = cacheKey;
     if (mountedRef.current) {
       setLoading(false);
       setData(cached);
@@ -277,6 +298,7 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
     if (!addr || (externalWalletAddress && !externalAddr)) {
       const unavailableSummary = createEmptyWalletTransfersSummary("error", "Wallet address is unavailable. Transfer history was not loaded.");
       dataRef.current = unavailableSummary;
+      dataForRef.current = null;
       if (mountedRef.current) {
         setData(unavailableSummary);
       }
@@ -284,7 +306,8 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
     }
     const cacheKey = `${addr}:${externalAddr ?? "any"}`;
     if (!publicClient) {
-      const unavailableSummary = dataRef.current ?? readPersistedWalletTransfers(cacheKey) ?? createEmptyWalletTransfersSummary(
+      const unavailableSummary = (dataForRef.current === cacheKey ? dataRef.current : null)
+        ?? readPersistedWalletTransfers(cacheKey) ?? createEmptyWalletTransfersSummary(
         "error",
         "Transfer history is temporarily unavailable. Check your network connection and try again.",
       );
@@ -294,6 +317,7 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
         statusMessage: unavailableSummary.statusMessage ?? "Transfer history is temporarily unavailable. Check your network connection and try again.",
       };
       dataRef.current = errorSummary;
+      dataForRef.current = cacheKey;
       if (mountedRef.current) setData(errorSummary);
       return;
     }
@@ -318,10 +342,11 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
       const fromBlock = getWalletTransferScanFromBlock(toBlock);
       if (fromBlock === null) {
         const emptySummary = createEmptyWalletTransfersSummary();
-        cachedAtRef.current = Date.now();
-        cachedForRef.current = cacheKey;
-        dataRef.current = emptySummary;
         if (mountedRef.current && requestId === requestIdRef.current) {
+          cachedAtRef.current = Date.now();
+          cachedForRef.current = cacheKey;
+          dataRef.current = emptySummary;
+          dataForRef.current = cacheKey;
           setData(emptySummary);
         }
         return;
@@ -329,16 +354,20 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
 
       const transferSig = encodeEventTopics({ abi: TRANSFER_ABI, eventName: "Transfer" })[0];
       if (!transferSig) {
-        const unavailableSummary = dataRef.current ?? createEmptyWalletTransfersSummary(
+        const unavailableSummary = (dataForRef.current === cacheKey ? dataRef.current : null)
+          ?? createEmptyWalletTransfersSummary(
           "error",
           "Transfer history is temporarily unavailable. Check your network connection and try again.",
         );
         if (mountedRef.current && requestId === requestIdRef.current) {
-          setData({
+          const errorSummary = {
             ...unavailableSummary,
             dataStatus: unavailableSummary.dataStatus === "stale" ? "stale" : "error",
             statusMessage: unavailableSummary.statusMessage ?? "Transfer history is temporarily unavailable. Check your network connection and try again.",
-          });
+          } satisfies WalletTransfersSummary;
+          dataRef.current = errorSummary;
+          dataForRef.current = cacheKey;
+          setData(errorSummary);
         }
         return;
       }
@@ -542,16 +571,18 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
         updatedAt: Date.now(),
         statusMessage: hasPartialCoverage ? "Transfer history is partial; observed records may be missing." : null,
       };
-      cachedAtRef.current = Date.now();
-      cachedForRef.current = cacheKey;
-      dataRef.current = summary;
       persistWalletTransfers(cacheKey, summary);
       if (mountedRef.current && requestId === requestIdRef.current) {
+        cachedAtRef.current = Date.now();
+        cachedForRef.current = cacheKey;
+        dataRef.current = summary;
+        dataForRef.current = cacheKey;
         setData(summary);
       }
     } catch {
       if (mountedRef.current && requestId === requestIdRef.current) {
-        const unavailableSummary = dataRef.current ?? readPersistedWalletTransfers(cacheKey) ?? createEmptyWalletTransfersSummary(
+        const unavailableSummary = (dataForRef.current === cacheKey ? dataRef.current : null)
+          ?? readPersistedWalletTransfers(cacheKey) ?? createEmptyWalletTransfersSummary(
           "error",
           "Transfer history is temporarily unavailable. Check your network connection and try again.",
         );
@@ -563,6 +594,7 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
             : "Transfer history is temporarily unavailable. Check your network connection and try again.",
         };
         dataRef.current = errorSummary;
+        dataForRef.current = cacheKey;
         setData(errorSummary);
       }
     } finally {
@@ -575,5 +607,13 @@ export function useWalletTransfers(embeddedAddress?: string, externalWalletAddre
     }
   }, [publicClient, embeddedAddress, externalWalletAddress, loading]);
 
-  return { data, loading, fetch };
+  const actorCacheKey = getWalletTransferActorCacheKey(
+    embeddedAddress,
+    externalWalletAddress,
+  );
+  return {
+    data: selectWalletTransferDataForActor(actorCacheKey, dataForRef.current, data),
+    loading,
+    fetch,
+  };
 }

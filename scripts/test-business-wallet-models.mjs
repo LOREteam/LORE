@@ -1176,6 +1176,30 @@ export async function runWalletModelTests() {
   assert.equal(walletTransfers.normalizeWalletTransferAddress("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"), "0xd8da6bf26964af9d7eed9e03e53415d37aa96045");
   assert.equal(walletTransfers.normalizeWalletTransferAddress("0xabc"), null);
   assert.equal(walletTransfers.normalizeWalletTransferAddress(null), null);
+  const transferActorA = walletTransfers.getWalletTransferActorCacheKey(
+    "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    null,
+  );
+  const transferActorB = walletTransfers.getWalletTransferActorCacheKey(
+    "0x1111111111111111111111111111111111111111",
+    null,
+  );
+  const actorASummary = { transfers: [{ txHash: `0x${"a".repeat(64)}` }] };
+  assert.equal(
+    walletTransfers.selectWalletTransferDataForActor(transferActorA, transferActorA, actorASummary),
+    actorASummary,
+    "the current actor may render only its own transfer summary",
+  );
+  assert.equal(
+    walletTransfers.selectWalletTransferDataForActor(transferActorB, transferActorA, actorASummary),
+    null,
+    "an actor switch must hide the previous transfer summary during the render before effects",
+  );
+  assert.equal(
+    walletTransfers.selectWalletTransferDataForActor(null, transferActorA, actorASummary),
+    null,
+    "disconnect or malformed identity must hide the previous actor's transfer summary",
+  );
   const persistedTransferCache = {
     version: 3,
     savedAt: 1_700_000_000_000,
