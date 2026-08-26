@@ -8,6 +8,21 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
+- Exact SHA `304d3a45c22b988622d929bdc5492ae1fc53d964` passed the
+  full detached fresh-install local/prelaunch seal and supported Standard scan
+  `b128f3de-c9c3-4521-b42d-cd4c6f72b1a8`. The sealed result has `9` findings
+  (`2 high`, `5 medium`, `2 low`) with honest partial coverage. Four bounded
+  local remediation commits now postdate it: `b7790aab8` rechecks the live
+  embedded actor after every awaited Privy preparation stage and at the sink;
+  `a00b4ef08` reconciles the persisted exact approval amount before Auto-Miner
+  can reserve a larger approval; `66ed497ab` makes missing production topology
+  fail closed; and `430df4850` validates canonical non-reparse SQLite parent,
+  DB, WAL, and SHM identity before and after production open. Each focused
+  suite passed twice, TypeScript passed, and protected SQLite identity is exact.
+  Next: bind the exact 17-path code/test/docs manifest, commit it, then restart
+  the detached full seal and supported scan on the resulting SHA. Protocol
+  randomness/full-grid findings, external cross-host consent, and the two chat
+  policy findings remain open; no live action is authorized.
 - Immutable diagnostic child
   `849b97e8a08ad64e01c954bd4d451c7760243fbe` completed a clean detached fresh
   install (`1315` packages), both dependency gates with `0` blocking, and

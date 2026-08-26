@@ -196,8 +196,18 @@ under [`docs/archive/`](archive/).
       required to release it. Focused behavior x2, wallet-actions `23` cases,
       TypeScript, audit x2 (`5836/6360`, `91.76%`), self-test `17/17`, P1
       hardening `41/41` in `273734ms`, syntax/diff, and protected-DB checks pass.
-- [ ] Run and seal a new supported Standard scan on the eventual post-fix final
-      SHA. The `53846fe…` scan does not prove later source revisions.
+- [x] Run and seal supported Standard scan
+      `b128f3de-c9c3-4521-b42d-cd4c6f72b1a8` on exact immutable SHA
+      `304d3a45c22b988622d929bdc5492ae1fc53d964`: honest partial coverage,
+      `9` reportable findings (`2 high`, `5 medium`, `2 low`), and no runtime,
+      network, RPC, wallet, signing, Preview, deployment, push, or chain action.
+- [x] Fix four source-remediable scan rows in bounded commits `b7790aab8`,
+      `a00b4ef08`, `66ed497ab`, and `430df4850`: embedded-wallet actor TOCTOU,
+      Auto-Miner exact-approval recovery, undeclared production topology, and
+      production SQLite reparse identity. Focused x2, TypeScript, diff, and
+      protected-DB checks pass for every packet.
+- [ ] Run and seal another supported Standard scan on the eventual remediation
+      final SHA. The `304d3a45…` scan proves its parent only.
 - [ ] Obtain green hosted Linux/Windows CI for the exact final commit.
 - [x] Refresh the current pre-permission path manifest before any staging.
 - [x] Receive user authority for local commits. Stage only the exact current

@@ -1,43 +1,52 @@
 # Current release-candidate permission manifest
 
-Snapshot date: 2026-08-26. Base `HEAD`:
-`849b97e8a08ad64e01c954bd4d451c7760243fbe` on `codex/repo-cleanup`.
+Snapshot date: 2026-08-26. Base immutable SHA:
+`304d3a45c22b988622d929bdc5492ae1fc53d964` on `codex/repo-cleanup`.
 
 Status: the user has granted standing authority for local commits. This
-manifest binds the exact test-only correction exposed by the detached
-`849b97e8…` diagnostic and its current status documentation. The correction
-adds the now-required approval `amountRaw` to the max-safe nonce fixture; it
-does not change production behavior. The focused wallet-model runner and full
-isolated business suite pass afterward. It does not authorize push, deployment,
-hosting changes, Preview generation, RPC access, signing, wallet use, approval,
-or any chain transaction.
+manifest binds the exact four security-remediation packets and their current
+status documentation. It does not authorize push, deployment, hosting changes,
+Preview generation, RPC access, signing, wallet use, approval, or any chain
+transaction.
 
 ## Exact current scope
 
 The path set below is the exact proposed index relative to
-`849b97e8a08ad64e01c954bd4d451c7760243fbe`.
+`304d3a45c22b988622d929bdc5492ae1fc53d964`.
 
-- Proposed child: `4` other tracked paths plus this self-excluded manifest.
-- Test paths: `1`.
-- Current status/worklist paths other than this manifest: `3`.
-- Excluded and retained generated evidence: `329` files in the three user-owned
-  untracked directories `artifacts/final-sha-local-gates-12c4909c/`,
+- Production paths: `8`.
+- Test paths: `5`.
+- Current status/worklist/manifest paths: `4`.
+- Excluded and retained generated evidence: the three user-owned untracked
+  directories `artifacts/final-sha-local-gates-12c4909c/`,
   `artifacts/test-campaign-2026-08-20/`, and `artifacts/valkey-runtime/`.
-- Authorized/expected staging paths: `5`.
+- Authorized/expected staging paths: `17`.
 - Exactness: `missing=0`, `extra=0`, `duplicates=0` under the exclusion above.
 - Canonical path-set SHA-256 (UTF-8, ordinal-sorted paths, LF after every path):
-  `571c36be4e2da94df8e5a0a37c36ca5003370bed67284acc30a480569668cd82`.
-- Canonical current content-set SHA-256 for the other `4` candidate files
-  (this self-referential manifest excluded; ordinal-sorted
-  `path + NUL + lowercase file SHA-256 + LF`):
-  `6a3bd9c91c5d16d7f7090d02d1dc38afea0eeae97feb07d22353c598d0ba6dc4`.
+  `5d13b992b8e0d059be66370f3740137458069ba2ba70ee2556961179722eca94`.
+- Canonical staged Git-blob content-set SHA-256 for the other `16` candidate
+  files (this self-referential manifest excluded; ordinal-sorted
+  `path + NUL + lowercase blob SHA-256 + LF`):
+  `ed9eee8ee614dad5f138616b9846f442967b75542bfb078e4bc85f8b6624fd15`.
 
 ```text
+app/api/_lib/externalRateLimit.ts
+app/hooks/useMiningAllowance.ts
+app/hooks/usePrivyWallet.ts
+app/lib/mining/autoMineBootstrap.ts
+app/lib/miningTxPath.ts
+config/productionRuntime.ts
 docs/agent-progress.md
 docs/current_state.md
 docs/release-candidate-current.md
 docs/remaining-worklist.md
-scripts/test-business-wallet-models.mjs
+scripts/test-business-client-identity-rate-limit.mjs
+scripts/test-business-indexer-storage-behavior.mjs
+scripts/test-business-production-runtime-env.mjs
+scripts/test-business-wallet-external-boundaries.mjs
+scripts/test-business-wallet-route-safety.mjs
+server/db.ts
+server/dbPathSafety.ts
 ```
 
 The retained artifact directories stay on disk and must not be staged. Any

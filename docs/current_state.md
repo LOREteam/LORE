@@ -10,6 +10,27 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
+- Exact immutable SHA `304d3a45c22b988622d929bdc5492ae1fc53d964`
+  completed an empty detached checkout, fresh `npm ci` (`1315` packages),
+  both dependency policies with `0` blocking, direct V9/V10 invariants, the
+  complete `check-local` package, hermetic build, TypeScript, HTTP/browser
+  smoke, full prelaunch report, L1--L17, and protected-DB identity. Supported
+  Standard Security Scan `b128f3de-c9c3-4521-b42d-cd4c6f72b1a8` is sealed for
+  that exact SHA with honest partial coverage and `9` reportable findings:
+  `2 high`, `5 medium`, and `2 low`. Local commits `b7790aab8`, `a00b4ef08`,
+  `66ed497ab`, and `430df4850` subsequently close four source-remediable rows:
+  embedded-wallet actor TOCTOU, Auto-Miner exact-approval recovery, undeclared
+  production replica topology, and production SQLite reparse identity. Their
+  focused suites pass twice, TypeScript passes after every packet, diff hygiene
+  passes, and protected `data/lore-v10.sqlite` remains exactly `319488` bytes
+  with SHA-256
+  `4EA3ECB92D5EFD081030F1C10E84C444E75460E628BB216FD063E72941BF38F7`
+  and no WAL/SHM. The two high contract findings remain open by the explicit
+  no-randomness-redesign boundary. Cross-host consent remains an unimplemented
+  external architecture, while chat session revocation and Sybil-resistant
+  profile admission require separate product/runtime policy. The remediation
+  child is not sealed until a new docs commit receives detached fresh-`npm ci`,
+  full local/prelaunch reproduction, and another supported exact-SHA scan.
 - Diagnostic immutable SHA
   `849b97e8a08ad64e01c954bd4d451c7760243fbe` received an empty detached
   checkout and fresh `npm ci` (`1315` packages). Production dependency policy
