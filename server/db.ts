@@ -3,6 +3,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { threadId } from "node:worker_threads";
 import { assertProductionRuntimeConfig } from "../config/productionRuntime";
+import { assertProductionDatabasePathSafe } from "./dbPathSafety";
 
 const DEFAULT_DB_PATH = "data/lore.sqlite";
 const HERMETIC_BUILD_MARKER = "1";
@@ -62,9 +63,17 @@ export function resolveDbPath() {
 
 export const dbPath = resolveDbPath();
 
-mkdirSync(dirname(dbPath), { recursive: true });
+const requireProductionDatabasePathSafety = process.env.NODE_ENV === "production";
+if (requireProductionDatabasePathSafety) {
+  assertProductionDatabasePathSafe(dbPath);
+} else {
+  mkdirSync(dirname(dbPath), { recursive: true });
+}
 
 export const db = new DatabaseSync(dbPath);
+if (requireProductionDatabasePathSafety) {
+  assertProductionDatabasePathSafe(dbPath);
+}
 let dbShuttingDown = false;
 const shutdownGlobal = globalThis as typeof globalThis & {
   __loreDbShutdownHandlersInstalled?: boolean;

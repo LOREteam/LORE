@@ -1,13 +1,25 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   INDEXER_STORAGE_REQUIRED_PROOF_FIELDS,
   summarizeIndexerStorageResult,
 } from "./run-indexer-storage-summary.mjs";
+import * as dbPathSafetyModule from "../server/dbPathSafety.ts";
 
 const PROTECTED_DATABASE_PATHS = [
   "data/lore-v10.sqlite",
@@ -33,6 +45,41 @@ function ownedIndexerTempEntries() {
 }
 
 export function runIndexerStorageBehaviorTests() {
+  const dbPathSafety = dbPathSafetyModule.default ?? dbPathSafetyModule;
+  const safetyRoot = mkdtempSync(join(tmpdir(), "lore-db-path-safety-"));
+  const ownedParent = join(safetyRoot, "owned");
+  const databasePath = join(ownedParent, "lore.sqlite");
+  mkdirSync(ownedParent);
+  try {
+    assert.equal(dbPathSafety.assertProductionDatabasePathSafe(databasePath), resolve(databasePath));
+    writeFileSync(databasePath, "fixture");
+    assert.equal(dbPathSafety.assertProductionDatabasePathSafe(databasePath), resolve(databasePath));
+    const missingParentPath = join(safetyRoot, "missing", "lore.sqlite");
+    assert.throws(
+      () => dbPathSafety.assertProductionDatabasePathSafe(missingParentPath),
+      /must be provisioned before startup/,
+    );
+    const externalParent = join(safetyRoot, "external");
+    const linkedParent = join(safetyRoot, "linked");
+    mkdirSync(externalParent);
+    symlinkSync(externalParent, linkedParent, process.platform === "win32" ? "junction" : "dir");
+    try {
+      assert.throws(
+        () => dbPathSafety.assertProductionDatabasePathSafe(join(linkedParent, "lore.sqlite")),
+        /ordinary non-reparse|symlink, junction, or reparse point/,
+      );
+    } finally {
+      unlinkSync(linkedParent);
+    }
+    const directoryAtDatabasePath = join(ownedParent, "directory.sqlite");
+    mkdirSync(directoryAtDatabasePath);
+    assert.throws(
+      () => dbPathSafety.assertProductionDatabasePathSafe(directoryAtDatabasePath),
+      /ordinary non-reparse file/,
+    );
+  } finally {
+    rmSync(safetyRoot, { recursive: true, force: true });
+  }
   const databaseBefore = protectedDatabaseSnapshot();
   const tempBefore = ownedIndexerTempEntries();
   const result = spawnSync(
