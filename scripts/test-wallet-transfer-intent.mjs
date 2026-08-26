@@ -2093,8 +2093,8 @@ await assert.rejects(
 const privyWalletSource = readFileSync("app/hooks/usePrivyWallet.ts", "utf8");
 assert.match(
   privyWalletSource,
-  /selectWalletTransferAgreementRpcUrls\([\s\S]*createPublicClient\(\{ chain: APP_CHAIN, transport: http\(urls\[0\]\) \}\)[\s\S]*if \(lease\) baseRequest\.nonce = BigInt\(lease\.nonce\)[\s\S]*const sendPromise = sendTransaction\(baseRequest, \{[\s\S]*address: embeddedWalletAddress[\s\S]*withWalletTransferIntentLease\([\s\S]*WALLET_TRANSFER_NONCE_CLIENTS[\s\S]*submitSilentTransaction\(acquisition\.lease, retainResult\)/,
-  "the final silent-send boundary must acquire the durable lease, bind reconciled retries, and retain late results",
+  /selectWalletTransferAgreementRpcUrls\([\s\S]*createPublicClient\(\{ chain: APP_CHAIN, transport: http\(urls\[0\]\) \}\)[\s\S]*if \(lease\) baseRequest\.nonce = BigInt\(lease\.nonce\)[\s\S]*assertEmbeddedWalletActorCurrent\(expectedActor\)[\s\S]*const sendPromise = sendTransaction\(baseRequest, \{[\s\S]*address: expectedActor[\s\S]*withWalletTransferIntentLease\([\s\S]*WALLET_TRANSFER_NONCE_CLIENTS[\s\S]*submitSilentTransaction\(acquisition\.lease, retainResult\)/,
+  "the final silent-send boundary must acquire the durable lease, revalidate the captured actor at the sink, bind reconciled retries, and retain late results",
 );
 assert.match(
   privyWalletSource,

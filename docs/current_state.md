@@ -10,6 +10,23 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
+- Exact candidate `107de3734d4702113646a764e354d4f5a005c05d` completed an
+  empty detached checkout, fresh `npm ci`, both dependency policies with zero
+  blocking, and direct V9/V10 invariants. Its full `check-local` passed lint,
+  hermetic-boundary, the complete business suite, security follow-up,
+  fetch-timeout, and stored-number parsing before P1 exposed two stale test
+  contracts left by the topology and actor-sink remediations. The OG route
+  fixture had deleted `WEB_REPLICA_COUNT` before intentionally switching to
+  production, so the new fail-closed topology rule correctly returned `503`;
+  it now declares the intended single replica. The wallet-transfer source proof
+  expected the old mutable embedded address at the send sink; it now requires
+  `assertEmbeddedWalletActorCurrent(expectedActor)` and `address: expectedActor`.
+  API route matrix x2 (`85` requests), wallet-transfer intent x2, P1 hardening
+  `41/41` in `293580ms`, behavior audit x2 (`5845/6371`, `91.74%`, `526`
+  source operands), self-test `17/17`, TypeScript, diff hygiene, and exact
+  protected-DB identity pass. Because both test corrections postdate the
+  candidate, `107de3734` is diagnostic only; the exact `19`-path delta from
+  `304d3a45c` requires a new local manifest commit and full detached restart.
 - Exact immutable SHA `304d3a45c22b988622d929bdc5492ae1fc53d964`
   completed an empty detached checkout, fresh `npm ci` (`1315` packages),
   both dependency policies with `0` blocking, direct V9/V10 invariants, the

@@ -338,7 +338,10 @@ async function runOgScenario() {
   }]);
   storage.setMetaJson("lastIndexedBlock", "31678225");
   const route = await loadRoute("og");
-  Object.assign(process.env, { NODE_ENV: "production" });
+  Object.assign(process.env, {
+    NODE_ENV: "production",
+    WEB_REPLICA_COUNT: "1",
+  });
   const baseUrl = "https://attacker.invalid/api/jackpots/og";
   const verifiedUrl = `${baseUrl}?event=${encodeURIComponent(eventId)}`;
   const headers = requestHeaders({ host: "attacker.invalid" });

@@ -8,6 +8,20 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
+- Exact candidate `107de3734d4702113646a764e354d4f5a005c05d` received an
+  empty detached checkout, fresh `npm ci`, dependency policy with zero blocking,
+  and direct V9/V10 green invariants. Its full `check-local` passed lint,
+  hermetic-boundary, the complete business suite, and the first three compact
+  boundary rows before P1 correctly exposed two stale test contracts introduced
+  by the production-topology and embedded-actor hardening. The OG fixture now
+  declares its intentional single-replica production topology, and the wallet
+  transfer source proof requires the captured actor to be revalidated at the
+  sink and passed as the send address. API route matrix x2 (`85` requests),
+  wallet-transfer intent x2, P1 hardening `41/41` in `293580ms`, audit x2
+  (`5845/6371`, `91.74%`), self-test `17/17`, TypeScript, diff hygiene, and
+  protected DB identity pass. Next: seal the exact `19`-path delta from
+  `304d3a45c`, create a new immutable SHA, and restart the detached full gate;
+  `107de3734` is diagnostic only.
 - Exact SHA `304d3a45c22b988622d929bdc5492ae1fc53d964` passed the
   full detached fresh-install local/prelaunch seal and supported Standard scan
   `b128f3de-c9c3-4521-b42d-cd4c6f72b1a8`. The sealed result has `9` findings

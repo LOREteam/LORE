@@ -5,6 +5,16 @@ under [`docs/archive/`](archive/).
 
 ## P0: trustworthy local release candidate
 
+- [x] Use exact detached candidate `107de3734` to expose and correct the two
+      stale post-remediation test contracts. The OG production fixture now
+      declares its intentional single replica, while the wallet-transfer proof
+      requires sink-adjacent validation and submission of the captured actor.
+      API route matrix x2, wallet-transfer intent x2, P1 `41/41`, audit x2
+      (`5845/6371`, `91.74%`), self-test `17/17`, TypeScript, diff hygiene, and
+      protected-DB identity pass. Production fail-closed behavior is unchanged.
+- [ ] Commit the exact two-test/four-doc `19`-path delta from `304d3a45c`, then
+      create a new immutable SHA and restart fresh detached dependency,
+      V9/V10, full local/prelaunch, protected-DB, and supported scan gates.
 - [x] Use detached SHA `849b97e8a` to expose and correct the stale max-safe
       approval-nonce fixture. Fresh install, dependency policy, V9/V10, ESLint,
       and hermetic-boundary checks passed before the business row rejected the
