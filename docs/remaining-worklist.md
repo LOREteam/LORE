@@ -126,6 +126,12 @@ under [`docs/archive/`](archive/).
       carry the exact reserved actor as `account` and the verified concrete
       nonce. Focused fee-policy and wallet-state behavior x2, TypeScript, full
       P1 hardening `41/41`, diff, and protected-DB checks pass.
+- [x] Fix the medium chat identity impersonation finding in local commit
+      `0c673336f`: message presentation is derived from the authenticated
+      address's server profile, spoofed request-body identity is ignored, and
+      named rows always show their wallet address. Route-matrix x2, rendered UI
+      x2, TypeScript, audit x2/self-test, full P1 hardening `41/41`, diff, and
+      protected-DB checks pass.
 - [ ] Run and seal a new supported Standard scan on the eventual post-fix final
       SHA. The `53846fe…` scan does not prove later source revisions.
 - [ ] Obtain green hosted Linux/Windows CI for the exact final commit.

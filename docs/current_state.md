@@ -37,6 +37,17 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   pass, followed by full P1 hardening `41/41` in `272173ms`. Protected SQLite
   identity remains exact and no wallet/RPC action was executed. This commit also
   postdates the sealed scan and must be included in the next detached seal/scan.
+- Current child `0c673336f` closes the scan's chat identity impersonation
+  finding. Message writes now snapshot only the authenticated sender's
+  server-side profile, so request-body name/avatar values cannot override the
+  address-bound identity; named rows also always render the shortened wallet
+  address and expose the full address in `title`. API route-matrix behavior
+  passed twice (`85` black-box requests each), rendered chat-client safety
+  passed twice, TypeScript passed, P1 audit x2 reports `5826/6350` behavioral
+  assertions (`91.75%`) with self-test `17/17`, and exact final-source P1
+  hardening passed `41/41` in `271792ms`. Protected SQLite identity remains
+  exact; no network, wallet, provider, RPC, signature, or transaction was used.
+  This commit postdates the sealed scan and requires the next detached seal/scan.
 - Current tested code baseline `99666ae20` closes the trusted-npm
   release-operations fixture failure exposed by the full prelaunch run at exact
   SHA `75881579d`. P1 hardening passed in that report, but the business row

@@ -35,6 +35,17 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   base/WAL/SHM identity is unchanged. No wallet, provider, RPC, signature, or
   transaction was used. The next final SHA scan must include both remediation
   commits rather than reusing the sealed parent result.
+- Current child `0c673336f832cdfbeca1e88ae4a0a6e77704de90` fixes the
+  medium chat identity impersonation finding. The authenticated message route
+  derives its stored name/avatar snapshot from the server profile bound to the
+  session address and ignores spoofed request-body presentation. Named message
+  rows always show the shortened wallet address beside the name and retain the
+  full address in `title`. Route-matrix x2 (`85` black-box requests each),
+  rendered chat-client safety x2, TypeScript, audit x2 (`5826/6350`, `91.75%`),
+  self-test `17/17`, diff hygiene, and exact final-source P1 hardening `41/41`
+  in `271792ms` pass. Protected DB base/WAL/SHM identity is exact; the fixture
+  forbids external fetch and no wallet, provider, RPC, signing, or transaction
+  occurred. A fresh detached seal and supported scan remain required.
 - The current tested code baseline and parent of this documentation-only packet
   is `99666ae20`. Exact SHA `75881579d` passed P1 hardening in the full
   prelaunch report but failed the later business row because the trusted-npm
