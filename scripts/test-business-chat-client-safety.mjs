@@ -22,6 +22,7 @@ import * as chatWalletRuntimeModule from "../app/lib/chatWalletRuntime.ts";
 import * as chatProfileReadPolicyModule from "../app/api/chat/profile/readPolicy.ts";
 import * as rebateModule from "../app/hooks/useRebate.ts";
 import * as chatProfileModalModule from "../app/components/chat/ChatProfileModal.tsx";
+import * as chatMessageModule from "../app/components/chat/ChatMessage.tsx";
 import * as chatWindowModule from "../app/components/chat/ChatWindow.tsx";
 import * as floatingActionsModule from "../app/components/FloatingActions.tsx";
 import * as headerWalletCardModule from "../app/components/header/HeaderWalletCard.tsx";
@@ -52,6 +53,7 @@ const chatWalletRuntime = chatWalletRuntimeModule.default ?? chatWalletRuntimeMo
 const chatProfileReadPolicy = chatProfileReadPolicyModule.default ?? chatProfileReadPolicyModule;
 const rebate = rebateModule.default ?? rebateModule;
 const chatProfileModal = chatProfileModalModule.default ?? chatProfileModalModule;
+const chatMessage = chatMessageModule.default ?? chatMessageModule;
 const chatWindow = chatWindowModule.default ?? chatWindowModule;
 const floatingActions = floatingActionsModule.default ?? floatingActionsModule;
 const headerWalletCard = headerWalletCardModule.default ?? headerWalletCardModule;
@@ -1214,6 +1216,20 @@ export async function runChatAndClientSafetyTests() {
   assert.match(profileAction, /aria-label="Profile"/);
   assert.match(profileAction, /\bh-12\b/);
   assert.match(profileAction, /\bw-12\b/);
+  const identifiedMessageMarkup = renderToStaticMarkup(React.createElement(chatMessage.ChatMessageRow, {
+    message: {
+      id: "server:identity",
+      text: "verified identity",
+      sender: CHAT_PROFILE_ADDRESS_A,
+      senderName: "Miner",
+      senderAvatar: "miner-helmet",
+      timestamp: 1_700_000_000_000,
+    },
+    isOwn: false,
+  }));
+  assert.match(identifiedMessageMarkup, />Miner<\/span>/);
+  assert.match(identifiedMessageMarkup, />0x1111\.\.\.1111<\/span>/);
+  assert.match(identifiedMessageMarkup, new RegExp(`title="${CHAT_PROFILE_ADDRESS_A}"`));
   const closeChatAction = findButtonTag(connectedChatMarkup, 'aria-label="Close chat panel"');
   assert.match(closeChatAction, /type="button"/);
   assert.match(closeChatAction, /\bh-12\b/);

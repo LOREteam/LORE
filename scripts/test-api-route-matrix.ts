@@ -752,6 +752,8 @@ function validateChatMessages(result: WorkerResult) {
   const acceptedMessage = asRecord(acceptedPayload.message, "chat messages canonical sender message");
   assert.equal(acceptedPayload.ok, true);
   assert.equal(acceptedMessage.sender, "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd");
+  assert.equal(acceptedMessage.senderName, "Verified Miner");
+  assert.equal(acceptedMessage.senderAvatar, "miner-helmet");
   assert.equal(acceptedMessage.text, "canonical sender");
 
   assertSupportedRouteMethodBoundary(
@@ -763,7 +765,7 @@ function validateChatMessages(result: WorkerResult) {
     adminSessions: 0,
     authProofLocks: 0,
     chatMessages: 1,
-    chatProfiles: 0,
+    chatProfiles: 1,
   }, "chat messages canonical sender must persist exactly one normalized row");
   assertLogsRedacted(result, "chat messages", ["hostile.invalid.value", "must not persist"]);
 }

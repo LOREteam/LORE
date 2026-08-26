@@ -1008,11 +1008,18 @@ async function runChatAuthScenario() {
 
 async function runChatMessagesScenario() {
   const readNetworkFetchUrls = installForbiddenNetworkFetch();
+  const storage = await import("../../server/storage");
   const route = await loadRoute("chat-messages");
   const baseUrl = "https://playlore.xyz/api/chat/messages";
   const sessionCookie = chatSessionCookie(TEST_WALLET);
   const canonicalSender = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
   const canonicalSenderCookie = chatSessionCookie(canonicalSender);
+  storage.upsertChatProfile(canonicalSender, {
+    name: "Verified Miner",
+    avatar: "miner-helmet",
+    customAvatar: null,
+    updatedAt: 1_700_000_000_000,
+  });
   const before = await persistenceState();
   const captured = await captureRouteLogs(async () => ({
     unsupportedType: await snapshotResponse(await dispatch(route, "POST", baseUrl, {
@@ -1045,7 +1052,12 @@ async function runChatMessagesScenario() {
     })),
     mixedCaseSender: await snapshotResponse(await dispatch(route, "POST", baseUrl, {
       headers: jsonHeaders({ cookie: canonicalSenderCookie }),
-      body: JSON.stringify({ text: "canonical sender", sender: `0x${canonicalSender.slice(2).toUpperCase()}` }),
+      body: JSON.stringify({
+        text: "canonical sender",
+        sender: `0x${canonicalSender.slice(2).toUpperCase()}`,
+        senderName: "Impostor",
+        senderAvatar: "skull",
+      }),
     })),
     methods: await supportedRouteMethodBoundary(route, baseUrl, "PUT"),
   }));

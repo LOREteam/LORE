@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getChatMessages, insertChatMessage } from "../../../../server/storage";
+import { getChatMessages, getChatProfile, insertChatMessage } from "../../../../server/storage";
 import { clearChatSession, readChatSession } from "../../_lib/chatSession";
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 import { createRouteCache } from "../../_lib/routeCache";
@@ -110,12 +110,21 @@ export async function POST(request: NextRequest) {
       return response;
     }
 
-    const senderName = typeof body.senderName === "string" ? body.senderName.trim() : null;
-    if (senderName !== null && senderName.length > MAX_NAME_LENGTH) {
+    const requestedSenderName = typeof body.senderName === "string" ? body.senderName.trim() : null;
+    if (requestedSenderName !== null && requestedSenderName.length > MAX_NAME_LENGTH) {
       failRouteMetric(metric, 400);
       return applyNoStoreHeaders(NextResponse.json({ error: "Sender name is too long" }, { status: 400 }), { varyCookie: true });
     }
-    const senderAvatar = sanitizeChatAvatarValue(body.senderAvatar, MAX_AVATAR_LENGTH);
+
+    const profile = getChatProfile(sender);
+    const senderName =
+      typeof profile?.name === "string" && profile.name.length <= MAX_NAME_LENGTH
+        ? profile.name
+        : null;
+    const senderAvatar = sanitizeChatAvatarValue(
+      profile?.customAvatar ?? profile?.avatar,
+      MAX_AVATAR_LENGTH,
+    );
 
     const message = insertChatMessage({
       sender,

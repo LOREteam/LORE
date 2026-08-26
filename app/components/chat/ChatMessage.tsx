@@ -20,7 +20,9 @@ function shortenAddr(addr: string): string {
 }
 
 export const ChatMessageRow = memo(function ChatMessageRow({ message, isOwn }: Props) {
-  const name = message.senderName || shortenAddr(message.sender);
+  const senderAddress = shortenAddr(message.sender);
+  const name = message.senderName || senderAddress;
+  const showSenderAddress = Boolean(message.senderName);
   const ts = typeof message.timestamp === "number" ? formatTimestamp(message.timestamp) : "";
 
   const avatarStr = message.senderAvatar;
@@ -41,6 +43,14 @@ export const ChatMessageRow = memo(function ChatMessageRow({ message, isOwn }: P
           <span className={`font-medium truncate ${isOwn ? "text-violet-400" : "text-slate-400"}`}>
             {name}
           </span>
+          {showSenderAddress && (
+            <span
+              className="shrink-0 font-mono text-[9px] text-slate-600"
+              title={message.sender}
+            >
+              {senderAddress}
+            </span>
+          )}
           {ts && <span className="text-slate-600 tabular-nums">{ts}</span>}
         </div>
         <div
