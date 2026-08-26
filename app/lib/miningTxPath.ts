@@ -115,6 +115,34 @@ export interface PendingMiningApprovalState {
   ts: number;
 }
 
+export async function settleRecoveredMiningApprovalAllowance(input: {
+  pendingState: Pick<PendingMiningApprovalState, "amountRaw">;
+  requiredAmount: bigint;
+  pollAgreedAllowanceUntil: (minimumAmount: bigint) => Promise<boolean>;
+  clearApprovalState: () => void;
+  readAgreedAllowance: () => Promise<bigint>;
+}): Promise<"satisfied" | "approval-required"> {
+  if (typeof input.requiredAmount !== "bigint" || input.requiredAmount <= 0n) {
+    throw new Error("Mining approval amount must be a positive bigint.");
+  }
+  let persistedAmount: bigint;
+  try {
+    persistedAmount = BigInt(input.pendingState.amountRaw);
+  } catch {
+    throw new Error("Persisted approval amount is invalid; manual reconciliation is required.");
+  }
+  if (persistedAmount <= 0n) {
+    throw new Error("Persisted approval amount is invalid; manual reconciliation is required.");
+  }
+  if (!await input.pollAgreedAllowanceUntil(persistedAmount)) {
+    throw new Error("Finalized approval is not reflected in live allowance; manual reconciliation is required.");
+  }
+  input.clearApprovalState();
+  return await input.readAgreedAllowance() >= input.requiredAmount
+    ? "satisfied"
+    : "approval-required";
+}
+
 const STORAGE_KEY = "lineaore:mining-tx-path:v1";
 const PENDING_TX_STORAGE_PREFIX = "lineaore:pending-mining-tx:v2";
 const PENDING_APPROVAL_STORAGE_PREFIX = "lineaore:pending-mining-approval:v1";

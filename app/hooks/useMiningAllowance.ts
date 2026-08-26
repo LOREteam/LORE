@@ -20,12 +20,12 @@ import {
   readAgreedPendingMiningApprovalNonce,
   readPendingMiningApprovalState,
   recoverPendingMiningApproval,
+  settleRecoveredMiningApprovalAllowance,
   withPendingMiningApprovalLock,
   writePendingMiningApprovalState,
 } from "../lib/miningTxPath";
 import type { GasOverrides, SilentSendFn } from "./useMining.types";
 import type { PendingApproveState, ReceiptState } from "./useMining.stateTypes";
-import type { PendingMiningApprovalState } from "../lib/miningTxPath";
 import { withMiningRpcTimeout } from "./useMining.shared";
 
 type WriteContractFn = (...args: unknown[]) => Promise<unknown>;
@@ -97,32 +97,6 @@ export function buildDirectApprovalWriteRequest(
     nonce: approvalNonce,
     gas: MIN_GAS_APPROVE,
   };
-}
-
-export async function settleRecoveredMiningApprovalAllowance(input: {
-  pendingState: Pick<PendingMiningApprovalState, "amountRaw">;
-  requiredAmount: bigint;
-  pollAgreedAllowanceUntil: (minimumAmount: bigint) => Promise<boolean>;
-  clearApprovalState: () => void;
-  readAgreedAllowance: () => Promise<bigint>;
-}): Promise<"satisfied" | "approval-required"> {
-  const requiredAmount = assertExactApprovalAmount(input.requiredAmount);
-  let persistedAmount: bigint;
-  try {
-    persistedAmount = BigInt(input.pendingState.amountRaw);
-  } catch {
-    throw new Error("Persisted approval amount is invalid; manual reconciliation is required.");
-  }
-  if (persistedAmount <= 0n) {
-    throw new Error("Persisted approval amount is invalid; manual reconciliation is required.");
-  }
-  if (!await input.pollAgreedAllowanceUntil(persistedAmount)) {
-    throw new Error("Finalized approval is not reflected in live allowance; manual reconciliation is required.");
-  }
-  input.clearApprovalState();
-  return await input.readAgreedAllowance() >= requiredAmount
-    ? "satisfied"
-    : "approval-required";
 }
 
 interface UseMiningAllowanceOptions {

@@ -10,6 +10,7 @@ import {
   readAgreedPendingMiningApprovalNonce,
   readPendingMiningApprovalState,
   recoverPendingMiningApproval,
+  settleRecoveredMiningApprovalAllowance,
   withPendingMiningApprovalLock,
   writePendingMiningApprovalState,
 } from "../miningTxPath";
@@ -157,12 +158,12 @@ export async function prepareAutoMineBootstrap({
     );
   };
 
-  const pollAllowanceUntil = async (timeoutMs: number) => {
+  const pollAllowanceUntil = async (minimumAmount: bigint, timeoutMs: number) => {
     const deadline = computeBootstrapAllowancePollDeadline(Date.now(), timeoutMs);
     if (deadline === null) return false;
     while (autoMineActive() && Date.now() < deadline) {
       try {
-        if ((await readAllowance()) >= absoluteTotal) {
+        if ((await readAllowance()) >= minimumAmount) {
           clearApprovalState();
           refetchAllowance();
           return true;
@@ -218,9 +219,17 @@ export async function prepareAutoMineBootstrap({
     }
     const recovery = await recoverPendingMiningApproval(approvalAgreementClients, pendingApprovalState);
     if (recovery === "confirmed") {
-      const allowanceUpdated = await pollAllowanceUntil(APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS);
-      if (allowanceUpdated) return true;
-      throw new Error("Finalized approval is not reflected in live allowance; manual reconciliation is required.");
+      const outcome = await settleRecoveredMiningApprovalAllowance({
+        pendingState: pendingApprovalState,
+        requiredAmount: absoluteTotal,
+        pollAgreedAllowanceUntil: (minimumAmount) =>
+          pollAllowanceUntil(minimumAmount, APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS),
+        clearApprovalState,
+        readAgreedAllowance: readAllowance,
+      });
+      refetchAllowance();
+      if (outcome === "satisfied") return true;
+      pendingApprovalState = null;
     }
     if (recovery === "reverted") {
       clearApprovalState();
@@ -341,7 +350,7 @@ export async function prepareAutoMineBootstrap({
       }
       const recovery = await recoverPendingMiningApproval(approvalAgreementClients, submittedState);
       if (recovery === "confirmed") {
-        const allowanceUpdated = await pollAllowanceUntil(APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS);
+        const allowanceUpdated = await pollAllowanceUntil(absoluteTotal, APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS);
         if (!allowanceUpdated) {
           throw new Error("Finalized approval is not reflected in live allowance; manual reconciliation is required.");
         }

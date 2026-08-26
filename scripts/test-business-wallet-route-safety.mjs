@@ -82,6 +82,7 @@ export async function runWalletAndRouteSafetyTests() {
   const miningTxPath = miningTxPathModule.default ?? miningTxPathModule;
   const standardBetPathSource = readFileSync("app/hooks/useMiningStandardBetPath.ts", "utf8");
   const miningReceiptSource = readFileSync("app/hooks/useMiningReceipt.ts", "utf8");
+  const autoMineBootstrapSource = readFileSync("app/lib/mining/autoMineBootstrap.ts", "utf8");
   [
     "app/hooks/useLineaOreWalletRuntime.ts",
     "app/hooks/useMining.ts",
@@ -140,7 +141,7 @@ export async function runWalletAndRouteSafetyTests() {
   let recoveredApprovalPollTarget = null;
   let recoveredApprovalCleared = false;
   assert.equal(
-    await miningAllowance.settleRecoveredMiningApprovalAllowance({
+    await miningTxPath.settleRecoveredMiningApprovalAllowance({
       pendingState: { amountRaw: "123" },
       requiredAmount: 500n,
       pollAgreedAllowanceUntil: async (minimumAmount) => {
@@ -157,6 +158,11 @@ export async function runWalletAndRouteSafetyTests() {
   );
   assert.equal(recoveredApprovalPollTarget, 123n, "recovery must poll for the persisted approval amount");
   assert.equal(recoveredApprovalCleared, true, "the proven smaller approval state must be released");
+  assert.match(
+    autoMineBootstrapSource,
+    /settleRecoveredMiningApprovalAllowance\(\{[\s\S]*pendingState: pendingApprovalState,[\s\S]*requiredAmount: absoluteTotal,[\s\S]*pollAllowanceUntil\(minimumAmount, APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS\)[\s\S]*if \(outcome === "satisfied"\) return true;[\s\S]*pendingApprovalState = null/,
+    "Auto-Miner must reconcile and clear the persisted exact approval before reserving a larger amount",
+  );
 
   const approvalActor = "0x1111111111111111111111111111111111111111";
   const approvalToken = "0x2222222222222222222222222222222222222222";
