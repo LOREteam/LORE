@@ -335,6 +335,7 @@ const fixtureHtml = `<!doctype html>
           nonce,
           spender: spenderAddress,
           token: tokenAddress,
+          amountRaw: "1",
         });
         if (!reservation) throw new Error("approval reservation was not persisted");
         const approvalKeys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
@@ -364,6 +365,7 @@ const fixtureHtml = `<!doctype html>
           nonce,
           spender: spenderAddress,
           token: tokenAddress,
+          amountRaw: "1",
         });
         if (!ambiguousReservation) throw new Error("ambiguous approval reservation was not persisted");
         const ambiguousError = await captureError(() =>
@@ -393,6 +395,7 @@ const fixtureHtml = `<!doctype html>
           nonce,
           spender: spenderAddress,
           token: tokenAddress,
+          amountRaw: "1",
         });
         if (!submittedState) throw new Error("submitted approval state was not persisted");
         const chainDisagreementClients = [

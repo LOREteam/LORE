@@ -281,6 +281,7 @@ async function main() {
       spender: boundarySpender,
       actor: boundaryActor,
       nonce: 3,
+      amountRaw: "1",
     });
     assert.ok(rejectedApprovalReservation);
     assert.equal(
@@ -308,6 +309,7 @@ async function main() {
       spender: boundarySpender,
       actor: boundaryActor,
       nonce: 3,
+      amountRaw: "1",
     });
     assert.ok(approvalReservation);
     const submittedHash = await executeReservedMiningApprovalWalletSink(

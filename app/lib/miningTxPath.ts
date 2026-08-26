@@ -1,6 +1,6 @@
 "use client";
 
-import { createPublicClient, encodeFunctionData, getAddress, http, maxUint256 } from "viem";
+import { createPublicClient, encodeFunctionData, getAddress, http } from "viem";
 import { getStableLineaReadRpcs } from "../../config/publicConfig";
 import { APP_CHAIN, APP_NETWORK, GAME_ABI, TOKEN_ABI } from "./constants";
 import {
@@ -110,6 +110,7 @@ export interface PendingMiningApprovalState {
   spender: `0x${string}`;
   actor: `0x${string}`;
   nonce: number;
+  amountRaw: string;
   hash?: `0x${string}`;
   ts: number;
 }
@@ -354,6 +355,15 @@ export function sanitizePendingMiningApprovalState(
   const nonce = normalizePendingTxNonce(raw.nonce);
   const ts = normalizeMiningTimestamp(raw.ts, now);
   if (!Number.isSafeInteger(chainId) || chainId <= 0 || nonce === null || ts === null) return null;
+  if (typeof raw.amountRaw !== "string" || !UINT_RE.test(raw.amountRaw)) return null;
+  let amountRaw: string;
+  try {
+    const amount = BigInt(raw.amountRaw);
+    if (amount <= 0n) return null;
+    amountRaw = amount.toString();
+  } catch {
+    return null;
+  }
   let token: `0x${string}`;
   let spender: `0x${string}`;
   let actor: `0x${string}`;
@@ -372,6 +382,7 @@ export function sanitizePendingMiningApprovalState(
     spender,
     actor,
     nonce,
+    amountRaw,
     ...(typeof rawHash === "string" ? { hash: rawHash.toLowerCase() as `0x${string}` } : {}),
     ts,
   };
@@ -1050,7 +1061,7 @@ function approvalTransactionFingerprint(
   const expectedCalldata = encodeFunctionData({
     abi: TOKEN_ABI,
     functionName: "approve",
-    args: [state.spender, maxUint256],
+    args: [state.spender, BigInt(state.amountRaw)],
   }).toLowerCase();
   try {
     if (
@@ -1081,6 +1092,7 @@ function approvalTransactionFingerprint(
       state.token,
       state.spender,
       state.nonce,
+      state.amountRaw,
       expectedCalldata,
       transaction.blockHash?.toLowerCase() ?? "",
       transaction.blockNumber?.toString() ?? "",

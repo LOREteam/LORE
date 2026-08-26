@@ -298,7 +298,6 @@ export async function executeSafetyPoolClaimBatches(options: SafetyPoolClaimBatc
     const hash = await sendBatch(batch, gas);
     progress.lastClaimTxHash = hash;
     progress.claimTxCount += 1;
-    assertActorActive();
     await confirm(hash, { kind: "batch", epochs: batch });
     assertActorActive();
   };
@@ -312,7 +311,6 @@ export async function executeSafetyPoolClaimBatches(options: SafetyPoolClaimBatc
     const hash = await sendSingle(epoch, gas);
     progress.lastClaimTxHash = hash;
     progress.claimTxCount += 1;
-    assertActorActive();
     await confirm(hash, { kind: "single", epochs: [epoch] });
     assertActorActive();
   };

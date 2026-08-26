@@ -70,7 +70,7 @@ export type WalletTransferNonceClient = {
   getTransactionCount: (args: {
     address: `0x${string}`;
     blockTag: "latest" | "pending";
-  }) => Promise<number>;
+  }) => Promise<unknown>;
   getTransaction?: (args: { hash: `0x${string}` }) => Promise<unknown>;
 };
 
@@ -127,7 +127,7 @@ const MAX_FUTURE_SKEW_MS = 5_000;
 export const HASHLESS_TRANSFER_RECONCILIATION_GRACE_MS = 15 * 60_000;
 export const WALLET_TRANSFER_FINALITY_CONFIRMATIONS = 2;
 const HASH_RE = /^0x[0-9a-fA-F]{64}$/;
-const HEX_RE = /^0x(?:[0-9a-fA-F]{2})+$/;
+const HEX_RE = /^0x(?:[0-9a-fA-F]{2})*$/;
 const LEASE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ERC20_TRANSFER_ABI = [
   {
@@ -270,6 +270,19 @@ export function createWalletContractIntent(input: {
     destination: input.contract,
     amountWei: 0n,
     calldata: input.calldata,
+  });
+}
+
+export function createWalletRepairIntent(input: {
+  actor: string;
+  chainId: number;
+}): WalletTransferIntent {
+  const actor = normalizeAddress(input.actor);
+  return createWalletContractIntent({
+    actor,
+    chainId: input.chainId,
+    contract: actor,
+    calldata: "0x",
   });
 }
 
@@ -422,12 +435,22 @@ function sanitizeState(value: unknown, now: number): WalletTransferIntentState |
   const nonce = normalizeSafeNonce(raw.nonce);
   const latestNonce = normalizeSafeNonce(raw.latestNonce);
   const pendingNonce = normalizeSafeNonce(raw.pendingNonce);
+  const isExactRepairState =
+    asset === "contract-call" &&
+    actor === destination &&
+    raw.amountWei === "0" &&
+    calldata === "0x" &&
+    nonce !== null &&
+    latestNonce !== null &&
+    pendingNonce !== null &&
+    nonce === latestNonce &&
+    pendingNonce > latestNonce;
   if (
     nonce === null ||
     latestNonce === null ||
     pendingNonce === null ||
     pendingNonce < latestNonce ||
-    nonce !== pendingNonce
+    (nonce !== pendingNonce && !isExactRepairState)
   ) {
     return null;
   }
@@ -735,6 +758,7 @@ async function acquireWalletTransferIntentLeaseLocked(
   intent: WalletTransferIntent,
   clients: WalletTransferNonceClients,
   now: number,
+  replacementNonce?: number,
 ): Promise<WalletTransferIntentAcquisition> {
   assertNoConflictingActorState(intent, now);
   const existing = readState(intent, now);
@@ -778,6 +802,21 @@ async function acquireWalletTransferIntentLeaseLocked(
     };
   }
 
+  if (replacementNonce !== undefined) {
+    if (
+      !Number.isSafeInteger(replacementNonce) ||
+      replacementNonce < 0 ||
+      intent.asset !== "contract-call" ||
+      intent.actor !== intent.destination ||
+      intent.amountWei !== 0n ||
+      intent.calldata !== "0x" ||
+      snapshot.latestNonce !== replacementNonce ||
+      snapshot.pendingNonce <= replacementNonce
+    ) {
+      throw intentError("wallet_repair_intent_nonce_reconciliation_unsafe");
+    }
+  }
+
   const id = createLeaseId();
   const state: WalletTransferIntentState = {
     id,
@@ -787,7 +826,7 @@ async function acquireWalletTransferIntentLeaseLocked(
     destination: intent.destination,
     amountWei: intent.amountWei.toString(),
     ...(intent.calldata ? { calldata: intent.calldata } : {}),
-    nonce: snapshot.pendingNonce,
+    nonce: replacementNonce ?? snapshot.pendingNonce,
     latestNonce: snapshot.latestNonce,
     pendingNonce: snapshot.pendingNonce,
     broadcastObserved: false,
@@ -822,7 +861,7 @@ export async function acquireWalletTransferIntentLease(
   );
 }
 
-export async function withWalletTransferIntentLease<T>(
+async function withWalletTransferIntentLeaseInternal<T>(
   input: WalletTransferIntent,
   clients: WalletTransferNonceClients,
   callback: (
@@ -831,12 +870,19 @@ export async function withWalletTransferIntentLease<T>(
   ) => Promise<T>,
   options?: {
     abandonOnError?: (error: unknown) => boolean;
+    abandonOnNonceAdvanceError?: (error: unknown) => boolean;
   },
   now = Date.now(),
+  replacementNonce?: number,
 ): Promise<T> {
   const intent = normalizeAcquisitionInput(input, now);
   return withIntentLock(intent, true, async () => {
-    const acquisition = await acquireWalletTransferIntentLeaseLocked(intent, clients, now);
+    const acquisition = await acquireWalletTransferIntentLeaseLocked(
+      intent,
+      clients,
+      now,
+      replacementNonce,
+    );
     let lockHeld = true;
     const retainWhileLocked: typeof retainWalletTransferSendResult = (promise, lease) =>
       retainWalletTransferSendResult(promise, lease, async (retainedLease, hash) => {
@@ -875,9 +921,12 @@ export async function withWalletTransferIntentLease<T>(
     try {
       return await callback(acquisition, retainWhileLocked);
     } catch (error) {
+      const abandonOnStableSnapshot = options?.abandonOnError?.(error) === true;
+      const abandonOnAdvancedRepairNonce =
+        options?.abandonOnNonceAdvanceError?.(error) === true;
       if (
         acquisition.status === "acquired" &&
-        options?.abandonOnError?.(error) === true
+        (abandonOnStableSnapshot || abandonOnAdvancedRepairNonce)
       ) {
         const current = readState(intent, Math.max(now, Date.now()));
         if (current?.id === acquisition.lease.id && !current.hash) {
@@ -890,10 +939,19 @@ export async function withWalletTransferIntentLease<T>(
           } catch {
             throw intentError("wallet_transfer_intent_rejection_unresolved");
           }
-          if (
+          const snapshotChanged =
             rejectionSnapshot.latestNonce !== current.latestNonce ||
-            rejectionSnapshot.pendingNonce !== current.pendingNonce
-          ) {
+            rejectionSnapshot.pendingNonce !== current.pendingNonce;
+          const exactRepairNonceAdvanced =
+            abandonOnAdvancedRepairNonce &&
+            intent.asset === "contract-call" &&
+            intent.actor === intent.destination &&
+            intent.amountWei === 0n &&
+            intent.calldata === "0x" &&
+            current.nonce === current.latestNonce &&
+            rejectionSnapshot.latestNonce > current.nonce &&
+            rejectionSnapshot.pendingNonce >= rejectionSnapshot.latestNonce;
+          if (!exactRepairNonceAdvanced && (!abandonOnStableSnapshot || snapshotChanged)) {
             throw intentError("wallet_transfer_intent_rejection_unresolved");
           }
           removeState(intent);
@@ -904,6 +962,55 @@ export async function withWalletTransferIntentLease<T>(
       lockHeld = false;
     }
   });
+}
+
+export async function withWalletTransferIntentLease<T>(
+  input: WalletTransferIntent,
+  clients: WalletTransferNonceClients,
+  callback: (
+    acquisition: WalletTransferIntentAcquisition,
+    retainResult: typeof retainWalletTransferSendResult,
+  ) => Promise<T>,
+  options?: {
+    abandonOnError?: (error: unknown) => boolean;
+    abandonOnNonceAdvanceError?: (error: unknown) => boolean;
+  },
+  now = Date.now(),
+): Promise<T> {
+  return withWalletTransferIntentLeaseInternal(input, clients, callback, options, now);
+}
+
+export async function withWalletTransferRepairIntentLease<T>(
+  input: WalletTransferIntent,
+  clients: WalletTransferNonceClients,
+  replacementNonce: number,
+  callback: (
+    acquisition: WalletTransferIntentAcquisition,
+    retainResult: typeof retainWalletTransferSendResult,
+  ) => Promise<T>,
+  options?: {
+    abandonOnError?: (error: unknown) => boolean;
+    abandonOnNonceAdvanceError?: (error: unknown) => boolean;
+  },
+  now = Date.now(),
+): Promise<T> {
+  const intent = createWalletTransferIntent(input);
+  if (
+    intent.asset !== "contract-call" ||
+    intent.actor !== intent.destination ||
+    intent.amountWei !== 0n ||
+    intent.calldata !== "0x"
+  ) {
+    throw intentError("wallet_repair_intent_invalid");
+  }
+  return withWalletTransferIntentLeaseInternal(
+    intent,
+    clients,
+    callback,
+    options,
+    now,
+    replacementNonce,
+  );
 }
 
 function recordWalletTransferIntentHashLocked(

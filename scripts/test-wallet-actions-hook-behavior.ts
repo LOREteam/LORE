@@ -444,8 +444,28 @@ function createHookRenderer(initialOptions: RenderOptions) {
     const rawSilentSend = options.sendTransactionSilent ?? (async () => HASH);
     const rawWriteContract = options.writeContractAsync ?? (async () => HASH);
     const durableSilentSend = async (transaction: TransactionRequest) => {
-      if (!transaction.contractIntent) return rawSilentSend(transaction);
       const actor = (options.embeddedWalletAddress ?? EMBEDDED_ACTOR).toLowerCase() as `0x${string}`;
+      const isRepair =
+        !transaction.contractIntent &&
+        !transaction.transferIntent &&
+        transaction.to.toLowerCase() === actor &&
+        transaction.data?.toLowerCase() === "0x" &&
+        transaction.value === 0n &&
+        Number.isSafeInteger(transaction.nonce);
+      if (isRepair) {
+        transferTransaction = {
+          hash: HASH,
+          chainId: APP_CHAIN_ID,
+          from: actor,
+          nonce: transaction.nonce!,
+          to: actor,
+          value: 0n,
+          input: "0x",
+          type: "eip1559",
+        };
+        return rawSilentSend(transaction);
+      }
+      if (!transaction.contractIntent) return rawSilentSend(transaction);
       const intent = createWalletContractIntent({
         actor,
         chainId: APP_CHAIN_ID,
@@ -597,11 +617,81 @@ async function testRejectedRepair() {
     },
   });
   await hook.result.cancelPendingTransaction();
-  assert.equal(sends, 1);
+  assert.equal(sends, 1, "a rejected repair must reach the wallet sink exactly once");
+  assert.equal(
+    storageData.size,
+    1,
+    "an untyped rejection returned after entering the wallet sink must retain the hashless repair intent",
+  );
   assert.deepEqual(notifications.at(-1), {
-    message: "Pending transaction repair rejected in wallet.",
-    tone: "info",
+    message: "Pending transaction repair returned a rejection without a transaction hash. Its nonce remains blocked until exact reconciliation.",
+    tone: "warning",
   });
+}
+
+async function testAmbiguousWrongNetworkRepairRetainsLease() {
+  resetRuntimeState();
+  const notifications: Notification[] = [];
+  let sends = 0;
+  const hook = createHookRenderer({
+    notifications,
+    sendTransactionSilent: async () => {
+      sends += 1;
+      if (sends === 1) throw new Error("chain id mismatch: wrong network");
+      throw Object.assign(new Error("User rejected the request"), { code: 4001 });
+    },
+  });
+
+  await hook.result.cancelPendingTransaction();
+  assert.equal(
+    storageData.size,
+    1,
+    "a free-text wrong-network failure after entering the wallet sink must retain its repair lease",
+  );
+  await hook.result.cancelPendingTransaction();
+  assert.equal(sends, 1, "an unresolved hashless repair must block a duplicate wallet send");
+  assert.equal(storageData.size, 1);
+}
+
+async function testNonceTooLowRepairRequiresAdvancedProof() {
+  resetRuntimeState();
+  const notifications: Notification[] = [];
+  let nonceAdvanced = false;
+  let sends = 0;
+  const nonceReader: TestNonceReader = async ({ blockTag }) => {
+    if (!nonceAdvanced) return blockTag === "latest" ? TRACKED_NONCE : TRACKED_NONCE + 1;
+    return TRACKED_NONCE + 1;
+  };
+  const hook = createHookRenderer({
+    notifications,
+    getTransactionCount: nonceReader,
+    secondGetTransactionCount: nonceReader,
+    sendTransactionSilent: async () => {
+      sends += 1;
+      nonceAdvanced = true;
+      throw new Error("nonce too low");
+    },
+  });
+
+  await hook.result.cancelPendingTransaction();
+  assert.equal(sends, 1, "nonce advancement must never trigger an automatic replacement resend");
+  assert.equal(storageData.size, 0, "matching two-RPC advancement must release the obsolete hashless repair intent");
+  assert.ok(hasNotification(notifications, "success", "already advanced"));
+
+  resetRuntimeState();
+  const unprovenNotifications: Notification[] = [];
+  let unprovenSends = 0;
+  const unprovenHook = createHookRenderer({
+    notifications: unprovenNotifications,
+    sendTransactionSilent: async () => {
+      unprovenSends += 1;
+      throw new Error("nonce too low");
+    },
+  });
+  await unprovenHook.result.cancelPendingTransaction();
+  assert.equal(unprovenSends, 1);
+  assert.equal(storageData.size, 1, "a nonce-too-low string without two-RPC advancement must remain blocked");
+  assert.ok(hasNotification(unprovenNotifications, "danger", "still unresolved"));
 }
 
 async function testPendingRepair() {
@@ -610,8 +700,13 @@ async function testPendingRepair() {
   let sends = 0;
   const hook = createHookRenderer({
     notifications,
-    sendTransactionSilent: async () => {
+    sendTransactionSilent: async (tx) => {
       sends += 1;
+      assert.equal(tx.to.toLowerCase(), EMBEDDED_ACTOR.toLowerCase());
+      assert.equal(tx.data, "0x");
+      assert.equal(tx.value, 0n);
+      assert.equal(tx.gas, 21_000n);
+      assert.equal(tx.nonce, TRACKED_NONCE);
       return HASH;
     },
   });
@@ -624,6 +719,81 @@ async function testPendingRepair() {
       message.includes(`${EXPLORER_TX_BASE_URL}/${HASH}`)
     ),
     "a hash-known receipt timeout must transition to pending with an explorer link",
+  );
+}
+
+async function testRepairEnvelopeMismatchFailsClosed() {
+  resetRuntimeState();
+  const notifications: Notification[] = [];
+  let sends = 0;
+  const hook = createHookRenderer({
+    notifications,
+    sendTransactionSilent: async () => {
+      sends += 1;
+      transferTransaction = {
+        ...transferTransaction,
+        to: OTHER_ACTOR.toLowerCase() as `0x${string}`,
+      };
+      return HASH;
+    },
+  });
+
+  await hook.result.cancelPendingTransaction();
+
+  assert.equal(sends, 1);
+  assert.equal(
+    storageData.size,
+    1,
+    "a hash whose canonical transaction does not match the repair envelope must remain durably blocked",
+  );
+  assert.ok(hasNotification(notifications, "danger", "still unresolved"));
+  assert.equal(
+    notifications.some(({ tone }) => tone === "success"),
+    false,
+    "a mismatched repair envelope must never be reported as successful",
+  );
+}
+
+async function testRepairActorSwitchStillResolvesTerminalIntent() {
+  resetRuntimeState();
+  transferReceiptMode = "success";
+  const notifications: Notification[] = [];
+  const receiptGate = deferred<StableReceipt>();
+  const nonceReader: TestNonceReader = async ({ blockTag }) =>
+    blockTag === "latest" ? TRACKED_NONCE : TRACKED_NONCE + 1;
+  const receiptClients = [
+    {
+      ...createReceiptClient("rpc-one.example.com", nonceReader, () => "success"),
+      waitForTransactionReceipt: async () => receiptGate.promise,
+    },
+    {
+      ...createReceiptClient("rpc-two.example.net", nonceReader, () => "success"),
+      waitForTransactionReceipt: async () => receiptGate.promise,
+    },
+  ] as const;
+  const hook = createHookRenderer({
+    notifications,
+    walletTransferReceiptClients: receiptClients,
+  });
+
+  const repair = hook.result.cancelPendingTransaction();
+  await flushMicrotasks();
+  await flushMicrotasks();
+  assert.equal(storageData.size, 1, "the submitted repair must remain durable while finality is pending");
+  hook.rerender({ embeddedWalletAddress: OTHER_ACTOR });
+  receiptGate.resolve(receiptFor("success"));
+  await repair;
+
+  assert.equal(
+    storageData.size,
+    0,
+    "terminal exact repair evidence must clear the original actor intent even after the UI actor changes",
+  );
+  assert.ok(hasNotification(notifications, "warning", "Privy wallet changed"));
+  assert.equal(
+    notifications.some(({ tone }) => tone === "success"),
+    false,
+    "a stale actor must not receive a success transition after terminal reconciliation",
   );
 }
 
@@ -1278,7 +1448,11 @@ async function main() {
   useWalletActions = hookFactory as UseWalletActions;
   await testWrongNetworkRefresh();
   await testRejectedRepair();
+  await testAmbiguousWrongNetworkRepairRetainsLease();
+  await testNonceTooLowRepairRequiresAdvancedProof();
   await testPendingRepair();
+  await testRepairEnvelopeMismatchFailsClosed();
+  await testRepairActorSwitchStillResolvesTerminalIntent();
   await testDivergentNonceEvidenceBlocksRepair();
   await testDuplicateNonceClientBlocksRepair();
   await testManualReplacementReconciliationPresentation();
@@ -1300,7 +1474,7 @@ async function main() {
   await testEmbeddedResolverActorSwitchStillResolvesTerminalIntent();
   await testResolverRejectionAndProviderRedaction();
 
-  console.log("wallet actions hook behavior tests passed (23 cases)");
+  console.log("wallet actions hook behavior tests passed (28 cases)");
 }
 
 void main().catch((error) => {

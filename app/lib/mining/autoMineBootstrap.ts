@@ -201,18 +201,9 @@ export async function prepareAutoMineBootstrap({
       nonce: pendingApprovalState.nonce,
     };
   } else if (pendingApproveRef.current) {
-    const migrated = writePendingMiningApprovalState({
-      chainId: APP_CHAIN_ID,
-      token: LINEA_TOKEN_ADDRESS,
-      spender: CONTRACT_ADDRESS,
-      actor: actorAddress,
-      nonce: pendingApproveRef.current.nonce,
-      ...(pendingApproveRef.current.hash ? { hash: pendingApproveRef.current.hash } : {}),
-    });
-    if (!migrated) {
-      throw new Error("Approval pending state could not be persisted; Auto-Miner approval is blocked.");
-    }
-    pendingApprovalState = migrated;
+    throw new Error(
+      "Legacy Auto-Miner approval state is not bound to an exact amount; manual reconciliation is required.",
+    );
   }
 
   if (await readAllowance() >= absoluteTotal) {
@@ -280,6 +271,7 @@ export async function prepareAutoMineBootstrap({
           spender: CONTRACT_ADDRESS,
           actor: actorAddress,
           nonce: approvalNonce,
+          amountRaw: maxUint256.toString(),
         });
         if (!approvalReservation) {
           throw new Error("Approval intent could not be persisted and verified; Auto-Miner approval is blocked.");
@@ -308,6 +300,7 @@ export async function prepareAutoMineBootstrap({
           spender: CONTRACT_ADDRESS,
           actor: actorAddress,
           nonce: approvalNonce,
+          amountRaw: maxUint256.toString(),
         });
         if (!approvalReservation) {
           throw new Error("Approval intent could not be persisted and verified; Auto-Miner approval is blocked.");

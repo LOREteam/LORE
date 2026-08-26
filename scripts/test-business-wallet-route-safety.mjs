@@ -137,6 +137,27 @@ export async function runWalletAndRouteSafetyTests() {
     }
   }
 
+  let recoveredApprovalPollTarget = null;
+  let recoveredApprovalCleared = false;
+  assert.equal(
+    await miningAllowance.settleRecoveredMiningApprovalAllowance({
+      pendingState: { amountRaw: "123" },
+      requiredAmount: 500n,
+      pollAgreedAllowanceUntil: async (minimumAmount) => {
+        recoveredApprovalPollTarget = minimumAmount;
+        return true;
+      },
+      clearApprovalState: () => {
+        recoveredApprovalCleared = true;
+      },
+      readAgreedAllowance: async () => 123n,
+    }),
+    "approval-required",
+    "a finalized smaller approval must clear its exact state and allow a new larger approval",
+  );
+  assert.equal(recoveredApprovalPollTarget, 123n, "recovery must poll for the persisted approval amount");
+  assert.equal(recoveredApprovalCleared, true, "the proven smaller approval state must be released");
+
   const approvalActor = "0x1111111111111111111111111111111111111111";
   const approvalToken = "0x2222222222222222222222222222222222222222";
   const approvalSpender = "0x3333333333333333333333333333333333333333";
@@ -186,6 +207,7 @@ export async function runWalletAndRouteSafetyTests() {
       nonce: 22,
       spender: approvalSpender,
       token: approvalToken,
+      amountRaw: "1",
     });
     assert.ok(reservation, "approval reservation must persist before a wallet sink is reachable");
     assert.equal(
@@ -224,6 +246,7 @@ export async function runWalletAndRouteSafetyTests() {
       nonce: 22,
       spender: approvalSpender,
       token: approvalToken,
+      amountRaw: "1",
     });
     assert.ok(ambiguousReservation);
     await assert.rejects(

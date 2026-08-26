@@ -119,7 +119,11 @@ async function testActorSwitchStopsLaterSends() {
   })));
   assert.equal(error, actorChangedError);
   assert.equal(sends, 1, "wallet switch must stop the remaining split send");
-  assert.equal(confirmations, 0, "stale actor must not continue into confirmation polling");
+  assert.equal(
+    confirmations,
+    1,
+    "a hash-known claim must finish immutable intent reconciliation before stale-actor UI work stops",
+  );
   assert.equal(progress.claimTxCount, 1);
   assert.equal(progress.claimedEpochCount, 0);
 }

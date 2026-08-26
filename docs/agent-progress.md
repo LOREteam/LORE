@@ -8,6 +8,23 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
+- Parent `949b639ff8a3a3934fd3b62b1b72558915a11015` now has a bounded
+  uncommitted `14`-path wallet/mining/rebate remediation packet. Exact approval
+  amounts are persisted and fingerprinted, pending-nonce repair uses the shared
+  durable exact transaction/receipt lifecycle, and a hash-known rebate claim is
+  terminally reconciled across an actor switch. The final correction retains a
+  hashless repair intent for every untyped provider/user/network/session error
+  after the wallet sink; only a pre-sink actor sentinel or exact two-RPC nonce
+  advancement can remove it. Focused suites x2, TypeScript, audit x2
+  (`5839/6363`, `91.76%`, `524` source operands), self-test `17/17`, diff
+  hygiene, and full P1 hardening `42/42` in `315622ms` pass. The same independent
+  reviewer that found the ambiguous-release liveness flaw reports no remaining
+  actionable issue after correction. Protected SQLite base/WAL/SHM identity is
+  exact. Next: bind the exact code/test/docs manifest, commit locally under the
+  user's standing authority, then run the resulting immutable SHA through a
+  detached fresh install, complete local/prelaunch seal, and fresh supported
+  security scan. No push, Preview, RPC, wallet, signature, or transaction is
+  authorized.
 - Exact detached candidate `91ec244f2c7b59fd591c2c61d20bd134d7a4e9f5`
   completed fresh `npm ci` (`1315` packages), both direct dependency gates with
   `0` blocking advisories, and direct V9/V10 invariants. Its full `check-local`

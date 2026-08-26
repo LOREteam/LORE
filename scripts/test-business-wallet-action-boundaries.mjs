@@ -16,7 +16,7 @@ export function runWalletActionBoundaryTests() {
   assert.equal(hookBehavior.status, 0, "wallet action behavior harness must pass");
   assert.match(
     hookBehavior.stdout,
-    /wallet actions hook behavior tests passed \(23 cases\)/,
+    /wallet actions hook behavior tests passed \(28 cases\)/,
     "wallet action behavior harness must exercise receipt quorum finality, reward display, external-balance boundaries, and wallet action states",
   );
 }

@@ -5,6 +5,20 @@ under [`docs/archive/`](archive/).
 
 ## P0: trustworthy local release candidate
 
+- [x] Correct the three post-scan wallet lifecycle gaps on parent `949b639ff`:
+      exact approval-amount recovery, durable exact pending-nonce repair, and
+      terminal rebate reconciliation after actor switch. Focused suites x2,
+      TypeScript, audit x2 (`5839/6363`, `91.76%`), self-test `17/17`, P1
+      hardening `42/42`, diff hygiene, independent final review, and protected
+      DB identity pass on the mutable worktree.
+- [ ] Seal that `14`-path code/test packet plus the three current status docs
+      and self-excluded release manifest in one exact local commit. Recompute
+      canonical path/content digests immediately before staging and exclude the
+      three retained user-owned artifact directories.
+- [ ] Run the resulting immutable SHA in an empty detached checkout with fresh
+      `npm ci`, the full dependency/local/prelaunch/hermetic/browser/V9/V10/DB
+      package, then a fresh supported Standard security scan. Historical scan
+      and mutable-tree results do not seal this remediation.
 - [x] Align the wallet-model contract with truthful unavailable balances:
       invalid cache is `null`, not a fabricated `0.00`; focused test and the
       isolated business runner passed.

@@ -25,6 +25,7 @@ import {
 } from "../lib/miningTxPath";
 import type { GasOverrides, SilentSendFn } from "./useMining.types";
 import type { PendingApproveState, ReceiptState } from "./useMining.stateTypes";
+import type { PendingMiningApprovalState } from "../lib/miningTxPath";
 import { withMiningRpcTimeout } from "./useMining.shared";
 
 type WriteContractFn = (...args: unknown[]) => Promise<unknown>;
@@ -96,6 +97,32 @@ export function buildDirectApprovalWriteRequest(
     nonce: approvalNonce,
     gas: MIN_GAS_APPROVE,
   };
+}
+
+export async function settleRecoveredMiningApprovalAllowance(input: {
+  pendingState: Pick<PendingMiningApprovalState, "amountRaw">;
+  requiredAmount: bigint;
+  pollAgreedAllowanceUntil: (minimumAmount: bigint) => Promise<boolean>;
+  clearApprovalState: () => void;
+  readAgreedAllowance: () => Promise<bigint>;
+}): Promise<"satisfied" | "approval-required"> {
+  const requiredAmount = assertExactApprovalAmount(input.requiredAmount);
+  let persistedAmount: bigint;
+  try {
+    persistedAmount = BigInt(input.pendingState.amountRaw);
+  } catch {
+    throw new Error("Persisted approval amount is invalid; manual reconciliation is required.");
+  }
+  if (persistedAmount <= 0n) {
+    throw new Error("Persisted approval amount is invalid; manual reconciliation is required.");
+  }
+  if (!await input.pollAgreedAllowanceUntil(persistedAmount)) {
+    throw new Error("Finalized approval is not reflected in live allowance; manual reconciliation is required.");
+  }
+  input.clearApprovalState();
+  return await input.readAgreedAllowance() >= requiredAmount
+    ? "satisfied"
+    : "approval-required";
 }
 
 interface UseMiningAllowanceOptions {
@@ -218,12 +245,12 @@ export function useMiningAllowance({
             actor,
           );
         };
-        const pollAgreedAllowanceUntil = async (timeoutMs: number) => {
+        const pollAgreedAllowanceUntil = async (minimumAmount: bigint, timeoutMs: number) => {
           const deadline = computeAllowancePollDeadline(Date.now(), timeoutMs);
           if (deadline === null) return false;
           while (Date.now() < deadline) {
             try {
-              if (await readAgreedAllowance() >= requiredAmount) return true;
+              if (await readAgreedAllowance() >= minimumAmount) return true;
             } catch {
               // Disagreement and transient failures both fail closed until the next bounded poll.
             }
@@ -246,18 +273,9 @@ export function useMiningAllowance({
             nonce: pendingApprovalState.nonce,
           };
         } else if (pendingApproveRef.current) {
-          const migrated = writePendingMiningApprovalState({
-            chainId: APP_CHAIN_ID,
-            token: LINEA_TOKEN_ADDRESS,
-            spender: CONTRACT_ADDRESS,
-            actor,
-            nonce: pendingApproveRef.current.nonce,
-            ...(pendingApproveRef.current.hash ? { hash: pendingApproveRef.current.hash } : {}),
-          });
-          if (!migrated) {
-            throw new Error("Approval pending state could not be persisted; wallet approval is blocked.");
-          }
-          pendingApprovalState = migrated;
+          throw new Error(
+            "Legacy approval pending state is not bound to an exact amount; manual reconciliation is required.",
+          );
         }
 
         let liveAllowance = await readAgreedAllowance();
@@ -273,15 +291,18 @@ export function useMiningAllowance({
           }
           const recovery = await recoverPendingMiningApproval(approvalAgreementClients, pendingApprovalState);
           if (recovery === "confirmed") {
-            const allowanceUpdated = await pollAgreedAllowanceUntil(APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS);
-            if (!allowanceUpdated) {
-              throw new Error("Finalized approval is not reflected in live allowance; manual reconciliation is required.");
-            }
-            clearApprovalState();
+            const outcome = await settleRecoveredMiningApprovalAllowance({
+              pendingState: pendingApprovalState,
+              requiredAmount,
+              pollAgreedAllowanceUntil: (minimumAmount) =>
+                pollAgreedAllowanceUntil(minimumAmount, APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS),
+              clearApprovalState,
+              readAgreedAllowance,
+            });
             refetchAllowance();
-            return;
-          }
-          if (recovery === "reverted") {
+            if (outcome === "satisfied") return;
+            pendingApprovalState = null;
+          } else if (recovery === "reverted") {
             clearApprovalState();
             pendingApprovalState = null;
           } else if (recovery === "pending") {
@@ -316,6 +337,7 @@ export function useMiningAllowance({
             spender: CONTRACT_ADDRESS,
             actor,
             nonce: approvalNonce,
+            amountRaw: requiredAmount.toString(),
           });
           if (!reservation) {
             throw new Error("Approval intent could not be persisted and verified; wallet approval is blocked.");
@@ -373,7 +395,10 @@ export function useMiningAllowance({
           }
           const recovery = await recoverPendingMiningApproval(approvalAgreementClients, submittedState);
           if (recovery === "confirmed") {
-            const allowanceUpdated = await pollAgreedAllowanceUntil(APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS);
+            const allowanceUpdated = await pollAgreedAllowanceUntil(
+              BigInt(submittedState.amountRaw),
+              APPROVE_ALLOWANCE_SYNC_TIMEOUT_MS,
+            );
             if (!allowanceUpdated) {
               throw new Error("Finalized approval is not reflected in live allowance; manual reconciliation is required.");
             }

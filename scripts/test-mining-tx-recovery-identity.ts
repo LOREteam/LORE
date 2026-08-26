@@ -20,6 +20,7 @@ import {
   recoverPendingMiningApproval,
   recoverPendingMiningTx,
   reservePendingMiningTxIntent,
+  sanitizePendingMiningApprovalState,
   sanitizePendingMiningTxState,
   selectPendingMiningAgreementRpcUrls,
   waitForPendingMiningReceiptAgreement,
@@ -42,6 +43,12 @@ const approvalCalldata = encodeFunctionData({
   abi: TOKEN_ABI,
   functionName: "approve",
   args: [approvalSpender, maxUint256],
+});
+const standardApprovalAmount = 123n;
+const standardApprovalCalldata = encodeFunctionData({
+  abi: TOKEN_ABI,
+  functionName: "approve",
+  args: [approvalSpender, standardApprovalAmount],
 });
 
 function createClient(overrides: Partial<PendingMiningTxClient> = {}): PendingMiningTxClient {
@@ -325,6 +332,7 @@ async function main() {
       spender: actor,
       actor,
       nonce: 6,
+      amountRaw: "1",
     });
     assert.ok(approvalReservation, "approval must be durably reserved before its wallet sink");
     assert.equal(
@@ -340,6 +348,7 @@ async function main() {
       spender: approvalSpender,
       actor,
       nonce: 7,
+      amountRaw: maxUint256.toString(),
       hash,
       ts: Date.now(),
     } as const;
@@ -362,7 +371,46 @@ async function main() {
     assert.equal(
       await recoverPendingMiningApproval(pair(approvalClient), approvalState, 1n),
       "confirmed",
-      "an exact finalized approve transaction must recover as confirmed",
+      "an exact finalized Auto-Miner max approval must recover as confirmed",
+    );
+    const standardApprovalState = {
+      ...approvalState,
+      amountRaw: standardApprovalAmount.toString(),
+    };
+    const standardApprovalClient = createClient({
+      getTransaction: async () => ({ ...approvalTransaction, input: standardApprovalCalldata }),
+      getTransactionReceipt: async () => approvalReceipt,
+    });
+    assert.equal(
+      await recoverPendingMiningApproval(pair(standardApprovalClient), standardApprovalState, 1n),
+      "confirmed",
+      "an exact finalized standard-mining approval must recover with its persisted non-max amount",
+    );
+    assert.equal(
+      sanitizePendingMiningApprovalState({
+        chainId: APP_CHAIN_ID,
+        token: contract,
+        spender: approvalSpender,
+        actor,
+        nonce: 7,
+        hash,
+        ts: Date.now(),
+      }),
+      null,
+      "legacy approval state without an exact amount must remain fail-closed",
+    );
+    const alteredApprovalCalldata = encodeFunctionData({
+      abi: TOKEN_ABI,
+      functionName: "approve",
+      args: [approvalSpender, maxUint256 - 1n],
+    });
+    assert.equal(
+      await recoverPendingMiningApproval(pair(createClient({
+        getTransaction: async () => ({ ...approvalTransaction, input: alteredApprovalCalldata }),
+        getTransactionReceipt: async () => approvalReceipt,
+      })), approvalState, 1n),
+      "manual-reconciliation-required",
+      "a different approval amount must never satisfy the exact persisted intent",
     );
     const replacementHash = `0x${"d".repeat(64)}` as `0x${string}`;
     const replacementState = { ...approvalState, hash: replacementHash };

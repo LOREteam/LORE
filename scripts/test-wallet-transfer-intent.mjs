@@ -354,6 +354,100 @@ const afterConfirmed = await transferIntent.acquireWalletTransferIntentLease(
 assert.equal(afterConfirmed.status, "acquired", "a confirmed intent must not block a later deliberate transfer");
 
 storage.clear();
+const repairIntent = transferIntent.createWalletRepairIntent({ actor, chainId: 59144 });
+const pendingGapNonceClient = {
+  getTransactionCount: async ({ blockTag }) => blockTag === "latest" ? 7 : 8,
+};
+const pendingGapNonceClients = [pendingGapNonceClient, pendingGapNonceClient];
+await assert.rejects(
+  transferIntent.withWalletTransferRepairIntentLease(
+    repairIntent,
+    pendingGapNonceClients,
+    8,
+    async () => undefined,
+  ),
+  /wallet_repair_intent_nonce_reconciliation_unsafe/,
+  "repair must target the agreed oldest blocked nonce rather than the pending tail",
+);
+await assert.rejects(
+  transferIntent.withWalletTransferRepairIntentLease(
+    repairIntent,
+    stableNonceClients,
+    7,
+    async () => undefined,
+  ),
+  /wallet_repair_intent_nonce_reconciliation_unsafe/,
+  "repair must not reserve a nonce when the two-RPC snapshot has no pending gap",
+);
+const repairAcquisition = await transferIntent.withWalletTransferRepairIntentLease(
+  repairIntent,
+  pendingGapNonceClients,
+  7,
+  async (acquisition) => acquisition,
+);
+assert.equal(repairAcquisition.status, "acquired");
+assert.equal(
+  repairAcquisition.lease.nonce,
+  7,
+  "an exact repair intent must durably reserve the agreed oldest blocked nonce",
+);
+
+storage.clear();
+let repairNonceAdvanced = false;
+const advancingRepairNonceClient = {
+  getTransactionCount: async ({ blockTag }) => {
+    if (!repairNonceAdvanced) return blockTag === "latest" ? 7 : 8;
+    return 8;
+  },
+};
+const nonceTooLowError = new Error("nonce too low");
+await assert.rejects(
+  transferIntent.withWalletTransferRepairIntentLease(
+    repairIntent,
+    [advancingRepairNonceClient, advancingRepairNonceClient],
+    7,
+    async () => {
+      repairNonceAdvanced = true;
+      throw nonceTooLowError;
+    },
+    { abandonOnNonceAdvanceError: (error) => error === nonceTooLowError },
+  ),
+  /nonce too low/,
+  "a pre-hash nonce-too-low result may release only after both RPCs prove that exact repair nonce advanced",
+);
+const reloadedAfterAdvancedRepair = await import(
+  new URL(`../app/lib/walletTransferIntent.ts?repair-advanced=${Date.now()}`, import.meta.url).href
+);
+assert.equal(
+  reloadedAfterAdvancedRepair.hasTrackedWalletTransferNonce(59144, actor, 7),
+  false,
+  "a safely advanced hashless repair must remain released after a module reload",
+);
+
+storage.clear();
+await assert.rejects(
+  transferIntent.withWalletTransferRepairIntentLease(
+    repairIntent,
+    pendingGapNonceClients,
+    7,
+    async () => {
+      throw nonceTooLowError;
+    },
+    { abandonOnNonceAdvanceError: (error) => error === nonceTooLowError },
+  ),
+  /wallet_transfer_intent_rejection_unresolved/,
+  "a nonce-too-low string without matching two-RPC nonce advancement must stay fail-closed",
+);
+const reloadedAfterUnprovenRepair = await import(
+  new URL(`../app/lib/walletTransferIntent.ts?repair-unproven=${Date.now()}`, import.meta.url).href
+);
+assert.equal(
+  reloadedAfterUnprovenRepair.hasTrackedWalletTransferNonce(59144, actor, 7),
+  true,
+  "an unproven hashless repair failure must remain durably blocked after a module reload",
+);
+
+storage.clear();
 const contractCalldata = `0x${"12".repeat(32)}`;
 const contractIntent = transferIntent.createWalletContractIntent({
   actor,
@@ -2109,11 +2203,6 @@ assert.match(
   walletActionsSource,
   /handleWithdrawEthToExternal[\s\S]*createWalletTransferIntent\([\s\S]*sendTransactionSilent\([\s\S]*waitForTransferReceipt\(transferIntent, hash\)[\s\S]*if \(receiptState\.status === "pending"\)[\s\S]*return;[\s\S]*resolveTransferIntent\(transferIntent, receiptState\.hash, "confirmed"\)/,
   "known-hash pending behavior must retain the lease and confirmed receipts must resolve it",
-);
-assert.match(
-  walletActionsSource,
-  /waitForStableWalletTransferReceipt\([\s\S]*err instanceof WalletTransactionRevertedError[\s\S]*resolveTransferIntent\(transferIntent, knownHash, "reverted"\)/,
-  "only a stably re-read typed reverted receipt for the same hash may release the transfer intent for retry",
 );
 assert.match(
   walletActionsSource,

@@ -23,18 +23,18 @@ import { log } from "../lib/logger";
 import { isUserRejection, normalizeDecimalInput } from "../lib/utils";
 import { parsePositiveLineaAmountWei } from "../lib/tokenAmountMath";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
-import { withEoaNonceLock } from "../lib/eoaNonceLock";
 import { withClaimTransactionIntentLease } from "../lib/claimTransactionIntent";
 import {
   createWalletContractIntent,
+  createWalletRepairIntent,
   createWalletTransferIntent,
   getWalletTransferIntentErrorHash,
   isWalletTransferIntentError,
   reconcileWalletTransferReplacementCandidate,
   resolveWalletTransferIntent,
   selectWalletTransferAgreementRpcUrls,
-  waitForStableWalletTransferReceipt,
   waitForWalletTransferIntentReceipt,
+  withWalletTransferRepairIntentLease,
   WalletTransferIntentError,
   WalletTransactionRevertedError,
   type WalletContractIntentDetails,
@@ -61,17 +61,12 @@ type SilentSendFn = (
 type ExternalSendFn = (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; expectedActor?: `0x${string}`; transferIntent?: WalletTransferIntentDetails; contractIntent?: WalletContractIntentDetails }) => Promise<`0x${string}`>;
 type WriteContractAsyncFn = ReturnType<typeof useWriteContract>["writeContractAsync"];
 type BalanceData = { value: bigint } | null | undefined;
-type ReceiptState = "confirmed" | "pending";
 type PendingTransactionNonceClient = {
   getTransactionCount: (args: {
     address: `0x${string}`;
     blockTag: "latest" | "pending";
   }) => Promise<unknown>;
 };
-type PendingTransactionNonceClients = readonly [
-  PendingTransactionNonceClient,
-  PendingTransactionNonceClient,
-];
 type WalletTransferAgreementClient = WalletTransferReceiptClient &
   PendingTransactionNonceClient & {
     canonicalHost: string;
@@ -196,6 +191,9 @@ function formatWalletActionFailure(error: unknown, action: string, fallback: str
   if (/rpc|provider|infura|alchemy|sendrawtransaction|sendtransaction|json-rpc/i.test(message)) {
     return `${action} could not be submitted through the wallet provider. Check wallet activity before retrying.`;
   }
+  if (isWalletTransferIntentError(error)) {
+    return `${action} is still unresolved. Check wallet activity and the latest/pending nonce status before retrying.`;
+  }
   return fallback;
 }
 
@@ -210,9 +208,14 @@ function normalizePendingTransactionNonce(value: unknown): number | null {
   return value;
 }
 
+function isNonceAlreadyConsumedError(error: unknown) {
+  const message = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
+  return message.includes("nonce too low") || message.includes("lower than the current nonce");
+}
+
 function getIndependentPendingTransactionNonceClients(
   clients: WalletTransferAgreementClients | undefined,
-): PendingTransactionNonceClients | null {
+): WalletTransferAgreementClients | null {
   if (
     !clients ||
     clients[0] === clients[1] ||
@@ -229,10 +232,7 @@ function getIndependentPendingTransactionNonceClients(
   ) {
     return null;
   }
-  return [
-    first as PendingTransactionNonceClient,
-    second as PendingTransactionNonceClient,
-  ];
+  return clients;
 }
 
 export function assertPendingTxRepairNonceIsUntracked(
@@ -398,23 +398,6 @@ export function useWalletActions({
     const txUrl = getExplorerTxUrl(hash);
     return txUrl ? `${message} ${txUrl}` : message;
   }, []);
-
-  const waitForReceipt = useCallback(
-    async (hash: `0x${string}`): Promise<ReceiptState> => {
-      if (!walletTransferReceiptClients) {
-        throw new WalletTransferIntentError(
-          "wallet_transfer_receipt_independent_rpc_required",
-          hash,
-        );
-      }
-      return waitForStableWalletTransferReceipt(
-        walletTransferReceiptClients,
-        hash,
-        TX_RECEIPT_TIMEOUT_MS,
-      );
-    },
-    [walletTransferReceiptClients],
-  );
 
   const waitForTransferReceipt = useCallback(
     async (intent: WalletTransferIntent, hash: `0x${string}`) => {
@@ -604,6 +587,7 @@ export function useWalletActions({
       return;
     }
     const repairActor = getAddress(embeddedWalletAddress).toLowerCase();
+    const repairActorChangedError = new Error("pending_tx_repair_actor_changed");
     const assertPendingRepairActorActive = () => {
       if (activePendingRepairAddressRef.current !== repairActor) {
         notify("Pending transaction repair stopped because the Privy wallet changed.", "warning");
@@ -616,95 +600,141 @@ export function useWalletActions({
     setIsCancellingPendingTx(true);
     let repairTxHash: `0x${string}` | null = null;
     try {
-      await withEoaNonceLock(
-        { chainId: APP_CHAIN_ID, actor: repairActor },
-        { ifAvailable: true },
-        async () => {
-          const status = await refreshPendingTransactionStatus();
-          if (!assertPendingRepairActorActive()) return;
-          if (!status || status.nonceGap <= 0 || status.blockedNonce === null) {
-            notify("No stuck pending transaction was found to cancel.", "info");
-            return;
-          }
+      const status = await refreshPendingTransactionStatus();
+      if (!assertPendingRepairActorActive()) return;
+      if (!status || status.nonceGap <= 0 || status.blockedNonce === null) {
+        notify("No stuck pending transaction was found to cancel.", "info");
+        return;
+      }
 
-          try {
-            assertPendingTxRepairNonceIsUntracked(APP_CHAIN_ID, repairActor, status.blockedNonce);
-          } catch {
-            notify(
-              "This nonce belongs to a tracked transfer, bet, or approval. Reconcile that transaction instead of replacing it.",
-              "warning",
-            );
-            return;
-          }
-
-          const sendCancel = async (nonce: number) => {
-            assertPendingTxRepairNonceIsUntracked(APP_CHAIN_ID, repairActor, nonce);
-            let feeOverrides:
-              | { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint }
-              | undefined;
-            try {
-              const fees = await withMiningRpcTimeout(publicClient.estimateFeesPerGas(), "settings.estimateFeesPerGas");
-              feeOverrides = getKeeperFeeOverrides(fees, APP_CHAIN_ID, 145n, 145n);
-            } catch {
-              feeOverrides = getFallbackFeeOverrides(APP_CHAIN_ID, "keeper");
-            }
-
-            return sendTransactionSilent(
-              {
-                to: getAddress(embeddedWalletAddress),
-                value: 0n,
-                gas: 21_000n,
-                nonce,
-                feeMode: "keeper",
-              },
-              feeOverrides,
-            );
-          };
-
-          let targetNonce = status.blockedNonce;
-          let hash: `0x${string}`;
-          try {
-            hash = await sendCancel(targetNonce);
-            repairTxHash = hash;
-          } catch (err) {
-            const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
-            if (!message.includes("nonce too low")) throw err;
-            const refreshed = await refreshPendingTransactionStatus();
-            if (!assertPendingRepairActorActive()) return;
-            if (!refreshed || refreshed.nonceGap <= 0 || refreshed.blockedNonce === null) {
-              notify("The blocked nonce already advanced. No stuck pending transaction remains to clear.", "success");
-              return;
-            }
-            if (refreshed.blockedNonce === targetNonce) throw err;
-            targetNonce = refreshed.blockedNonce;
-            hash = await sendCancel(targetNonce);
-            repairTxHash = hash;
-          }
-
-          const receiptState = await waitForReceipt(hash);
-          if (!assertPendingRepairActorActive()) return;
-          if (receiptState === "pending") {
-            void refreshPendingTransactionStatus();
-            notify(
-              formatTxStatusMessage(
-                `Pending transaction repair submitted for nonce ${targetNonce} and is still pending confirmation.`,
-                hash,
-              ),
-              "warning",
-            );
-            return;
-          }
-
-          const refreshed = await refreshPendingTransactionStatus();
-          if (!assertPendingRepairActorActive()) return;
-          if (refreshed && refreshed.nonceGap > 0) {
-            notify(formatTxStatusMessage(`Replaced blocked nonce ${targetNonce}. If more are queued, run clear again.`, hash), "warning");
-          } else {
-            notify(formatTxStatusMessage(`Stuck pending transaction cleared at nonce ${targetNonce}.`, hash), "success");
-          }
-        },
+      try {
+        assertPendingTxRepairNonceIsUntracked(APP_CHAIN_ID, repairActor, status.blockedNonce);
+      } catch {
+        notify(
+          "This nonce belongs to a tracked transfer, bet, or approval. Reconcile that transaction instead of replacing it.",
+          "warning",
+        );
+        return;
+      }
+      const repairNonceClients = getIndependentPendingTransactionNonceClients(
+        walletTransferReceiptClients,
       );
+      if (!repairNonceClients) {
+        notify("Pending transaction repair requires two independent RPCs.", "warning");
+        return;
+      }
+      const repairIntent = createWalletRepairIntent({
+        actor: repairActor,
+        chainId: APP_CHAIN_ID,
+      });
+
+      const sendCancel = async (nonce: number) => {
+        assertPendingTxRepairNonceIsUntracked(APP_CHAIN_ID, repairActor, nonce);
+        let feeOverrides:
+          | { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint }
+          | undefined;
+        try {
+          const fees = await withMiningRpcTimeout(publicClient.estimateFeesPerGas(), "settings.estimateFeesPerGas");
+          feeOverrides = getKeeperFeeOverrides(fees, APP_CHAIN_ID, 145n, 145n);
+        } catch {
+          feeOverrides = getFallbackFeeOverrides(APP_CHAIN_ID, "keeper");
+        }
+
+        return withWalletTransferRepairIntentLease(
+          repairIntent,
+          repairNonceClients,
+          nonce,
+          async (acquisition, retainResult) => {
+            if (acquisition.status === "known-hash") return acquisition.hash;
+            if (!assertPendingRepairActorActive()) throw repairActorChangedError;
+            const retained = await retainResult(
+              sendTransactionSilent(
+                {
+                  to: getAddress(embeddedWalletAddress),
+                  data: "0x",
+                  value: 0n,
+                  gas: 21_000n,
+                  nonce: acquisition.lease.nonce,
+                  feeMode: "keeper",
+                },
+                feeOverrides,
+              ).then((hash) => ({ hash })),
+              acquisition.lease,
+            );
+            return retained.hash;
+          },
+          {
+            // Only this sentinel is thrown before sendTransactionSilent is
+            // invoked. Provider-classified rejection/network/session errors
+            // can surface after the wallet sink was reached, so they must
+            // retain the hashless intent until exact nonce evidence resolves it.
+            abandonOnError: (error) => error === repairActorChangedError,
+            abandonOnNonceAdvanceError: isNonceAlreadyConsumedError,
+          },
+        );
+      };
+
+      const targetNonce = status.blockedNonce;
+      const hash = await sendCancel(targetNonce);
+      repairTxHash = hash;
+
+      let receiptState: Awaited<ReturnType<typeof waitForTransferReceipt>>;
+      try {
+        receiptState = await waitForTransferReceipt(repairIntent, hash);
+      } catch (error) {
+        if (error instanceof WalletTransactionRevertedError) {
+          if (!await resolveTransferIntent(repairIntent, error.transactionHash, "reverted")) {
+            throw new WalletTransferIntentError(
+              "wallet_transfer_intent_resolution_mismatch",
+              error.transactionHash,
+            );
+          }
+          if (!assertPendingRepairActorActive()) return;
+        }
+        throw error;
+      }
+      if (receiptState.status === "pending") {
+        if (!assertPendingRepairActorActive()) return;
+        void refreshPendingTransactionStatus();
+        notify(
+          formatTxStatusMessage(
+            `Pending transaction repair submitted for nonce ${targetNonce} and is still pending confirmation.`,
+            hash,
+          ),
+          "warning",
+        );
+        return;
+      }
+      if (!await resolveTransferIntent(repairIntent, receiptState.hash, "confirmed")) {
+        throw new WalletTransferIntentError(
+          "wallet_transfer_intent_resolution_mismatch",
+          receiptState.hash,
+        );
+      }
+      if (!assertPendingRepairActorActive()) return;
+
+      const refreshed = await refreshPendingTransactionStatus();
+      if (!assertPendingRepairActorActive()) return;
+      if (refreshed && refreshed.nonceGap > 0) {
+        notify(formatTxStatusMessage(`Replaced blocked nonce ${targetNonce}. If more are queued, run clear again.`, hash), "warning");
+      } else {
+        notify(formatTxStatusMessage(`Stuck pending transaction cleared at nonce ${targetNonce}.`, hash), "success");
+      }
     } catch (err) {
+      if (err === repairActorChangedError) return;
+      if (isNonceAlreadyConsumedError(err)) {
+        const refreshed = await refreshPendingTransactionStatus();
+        if (!assertPendingRepairActorActive()) return;
+        if (!refreshed || refreshed.nonceGap <= 0 || refreshed.blockedNonce === null) {
+          notify("The blocked nonce already advanced. No stuck pending transaction remains to clear.", "success");
+        } else {
+          notify(
+            `The blocked nonce advanced to ${refreshed.blockedNonce}. Run clear again for the remaining queue.`,
+            "warning",
+          );
+        }
+        return;
+      }
       if (!isUserRejection(err)) {
         log.error("PendingTx", "cancel failed", err);
         if (isAmbiguousPendingTxError(err) && repairTxHash) {
@@ -719,7 +749,10 @@ export function useWalletActions({
           notify(formatWalletActionFailure(err, "Pending transaction repair", "Could not clear pending transaction."), "danger");
         }
       } else {
-        notify("Pending transaction repair rejected in wallet.", "info");
+        notify(
+          "Pending transaction repair returned a rejection without a transaction hash. Its nonce remains blocked until exact reconciliation.",
+          "warning",
+        );
       }
     } finally {
       pendingTxRepairInFlightRef.current = false;
@@ -733,7 +766,9 @@ export function useWalletActions({
     formatTxStatusMessage,
     refreshPendingTransactionStatus,
     sendTransactionSilent,
-    waitForReceipt,
+    waitForTransferReceipt,
+    resolveTransferIntent,
+    walletTransferReceiptClients,
   ]);
 
   const refreshResolverRewardReads = useCallback(() => {

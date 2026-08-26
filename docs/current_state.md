@@ -10,6 +10,27 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
+- Current mutable baseline is exact parent
+  `949b639ff8a3a3934fd3b62b1b72558915a11015` plus a bounded `14`-path
+  wallet-recovery remediation packet. It binds mining approval recovery to the
+  exact persisted approval amount (standard exact allowance versus Auto-Miner
+  maximum allowance), verifies pending-nonce repair through a durable exact
+  self/zero/empty-calldata intent and two independent RPC observations, and
+  reconciles hash-known Safety Pool claims before suppressing stale actor UI.
+  Hashless repair state is abandoned only for the identity-checked actor-change
+  sentinel thrown before the wallet sink, or for exact two-RPC proof that the
+  reserved nonce advanced; provider/user/network/session errors after entering
+  the sink retain the duplicate-send block. Focused wallet/mining/rebate suites
+  passed twice, TypeScript passed, schema-v2 audit passed twice at `5839/6363`
+  behavioral assertions (`91.76%`, `524` source operands) with self-test
+  `17/17`, and the final-source P1 hardening coordinator passed `42/42` in
+  `315622ms` including EVM fuzz. Independent post-correction review found no
+  actionable issue. Diff hygiene passes and protected
+  `data/lore-v10.sqlite` remains exactly `319488` bytes with SHA-256
+  `4EA3ECB92D5EFD081030F1C10E84C444E75460E628BB216FD063E72941BF38F7`
+  and no WAL/SHM. This is mutable-worktree evidence only: an exact manifest,
+  local commit, detached fresh-`npm ci` full seal, hosted CI, and a fresh
+  supported security scan of the resulting SHA remain open.
 - Current code head `0d5fb026487064831eb1d8eba927248bbd132c98`
   fixes the route-module contract exposed by the next exact detached candidate.
   Exact SHA `91ec244f2c7b59fd591c2c61d20bd134d7a4e9f5` received an empty detached
