@@ -10,6 +10,19 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
+- Diagnostic immutable SHA
+  `849b97e8a08ad64e01c954bd4d451c7760243fbe` received an empty detached
+  checkout and fresh `npm ci` (`1315` packages). Production dependency policy
+  passed with `0` high/critical; the complete policy passed with `9` allowlisted
+  dev-toolchain high advisories and `0` blocking. Direct V9/V10 invariants
+  passed. Its full `check-local` then correctly stopped in the isolated business
+  row: the nonce-normalization fixture built an approval state without the new
+  required `amountRaw`, so the hardened sanitizer returned `null` as designed.
+  The current one-line test correction supplies `amountRaw: "1"`; the focused
+  wallet-model runner and the complete isolated business suite now pass with all
+  proof fields true. Production recovery behavior did not change and legacy
+  amount-less state remains fail-closed. Because the correction postdates
+  `849b97e8…`, a new immutable SHA and detached full seal are required.
 - Current mutable baseline is exact parent
   `949b639ff8a3a3934fd3b62b1b72558915a11015` plus a bounded `14`-path
   wallet-recovery remediation packet. It binds mining approval recovery to the

@@ -5,6 +5,15 @@ under [`docs/archive/`](archive/).
 
 ## P0: trustworthy local release candidate
 
+- [x] Use detached SHA `849b97e8a` to expose and correct the stale max-safe
+      approval-nonce fixture. Fresh install, dependency policy, V9/V10, ESLint,
+      and hermetic-boundary checks passed before the business row rejected the
+      invalid amount-less fixture. After adding `amountRaw: "1"`, the focused
+      wallet-model runner and complete isolated business suite pass. Production
+      fail-closed behavior is unchanged.
+- [ ] Commit the exact one-test/three-doc/self-excluded-manifest correction and
+      restart all detached gates on its new immutable SHA; do not count
+      `849b97e8a` as final evidence.
 - [x] Correct the three post-scan wallet lifecycle gaps on parent `949b639ff`:
       exact approval-amount recovery, durable exact pending-nonce repair, and
       terminal rebate reconciliation after actor switch. Focused suites x2,

@@ -798,6 +798,7 @@ export async function runWalletModelTests() {
     token: "0x1111111111111111111111111111111111111111",
     spender: "0x2222222222222222222222222222222222222222",
     actor: "0x3333333333333333333333333333333333333333",
+    amountRaw: "1",
     nonce: BigInt(Number.MAX_SAFE_INTEGER),
     ts: 1_000,
   };

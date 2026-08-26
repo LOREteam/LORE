@@ -8,6 +8,17 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
+- Immutable diagnostic child
+  `849b97e8a08ad64e01c954bd4d451c7760243fbe` completed a clean detached fresh
+  install (`1315` packages), both dependency gates with `0` blocking, and
+  direct V9/V10 invariants. `check-local` passed ESLint and the hermetic-boundary
+  test, then exposed one stale business fixture: its max-safe nonce probe omitted
+  the newly required approval `amountRaw`, so the production sanitizer correctly
+  rejected the whole state. The one-line test-only correction adds
+  `amountRaw: "1"`. The focused wallet-model runner and complete isolated
+  business suite pass afterward with every proof field true. Next: commit this
+  correction with an exact five-path docs/manifest packet and restart the
+  detached full seal on the resulting SHA. `849b97e8…` remains diagnostic only.
 - Parent `949b639ff8a3a3934fd3b62b1b72558915a11015` now has a bounded
   uncommitted `14`-path wallet/mining/rebate remediation packet. Exact approval
   amounts are persisted and fingerprinted, pending-nonce repair uses the shared
