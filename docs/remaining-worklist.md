@@ -111,8 +111,18 @@ under [`docs/archive/`](archive/).
 - [x] Obtain explicit permission for local staging and one local commit of
       exactly that current `74`-path manifest. It does not authorize push,
       deploy, signing, wallet, RPC, Preview generation, or transactions.
-- [ ] Run and seal the supported final security scan of that exact immutable
-      SHA. Existing scans are historical patch evidence, not final-SHA proof.
+- [x] Run and seal a supported Standard security scan of exact immutable SHA
+      `53846fe1635fea0e15c131afa5dc8020d48c0975`. Scan
+      `dcc2a20f-4a50-4d89-9d40-82204b529ff3` reports `2 high`, `5 medium`, and
+      `2 low` findings with honest partial coverage `96/787`; it was offline and
+      read-only.
+- [x] Fix the medium single-RPC pending-repair finding in local commit
+      `33a090729`: exact two-origin nonce agreement and stable receipt quorum
+      are required before repair can progress; divergent or duplicate origins
+      fail before the wallet sink. Focused behavior x2 (`22` cases), intent,
+      business boundary, TypeScript, diff, and protected-DB checks pass.
+- [ ] Run and seal a new supported Standard scan on the eventual post-fix final
+      SHA. The `53846fe…` scan does not prove later source revisions.
 - [ ] Obtain green hosted Linux/Windows CI for the exact final commit.
 - [x] Refresh the current pre-permission path manifest before any staging.
 - [x] Receive user authority for local commits. Stage only the exact current

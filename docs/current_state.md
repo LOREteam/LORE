@@ -10,6 +10,25 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
+- Exact immutable SHA `53846fe1635fea0e15c131afa5dc8020d48c0975`
+  passed fresh detached `npm ci`, dependency policy, the full local/prelaunch
+  package, hermetic build, TypeScript, HTTP/browser smoke, V9/V10 invariants,
+  L1--L17, and protected-DB identity. Supported Standard Security Scan
+  `dcc2a20f-4a50-4d89-9d40-82204b529ff3` is sealed for that SHA with partial
+  source coverage (`96/787` tracked files) and `9` reportable findings:
+  `2 high`, `5 medium`, and `2 low`. The generated report is a static,
+  offline, read-only result; no RPC, wallet, signing, Preview, deployment,
+  push, or chain action occurred.
+- Current code baseline `33a090729` closes the scan's single-RPC pending-repair
+  finding. Repair now requires exact `latest`/`pending` nonce agreement from
+  two configured clients carrying distinct canonical RPC hosts, rejects
+  duplicate origins or divergent values before the wallet sink, and uses the
+  same independent pair for stable receipt verification. Focused hook behavior
+  passed twice (`22` cases), wallet-transfer intent and business wallet-boundary
+  suites pass, exact Node `24.5.0` TypeScript passes, and protected SQLite
+  base/WAL/SHM identity is unchanged. Because source changed after the sealed
+  scan, `33a090729` is not yet the new final SHA and requires a fresh detached
+  seal plus another supported scan.
 - Current tested code baseline `99666ae20` closes the trusted-npm
   release-operations fixture failure exposed by the full prelaunch run at exact
   SHA `75881579d`. P1 hardening passed in that report, but the business row
@@ -351,7 +370,7 @@ replacement needs another separately reviewed plan and exact approval.
 | Sepolia V10 target | Canonical target is `0x985c71613bb73fac5653c253a8ba37cd0ec8ab9a` at block `31678224`; managed runtime must set `NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1` and require the epoch-bound selector. The offline manifest/provenance verifier passed at local `HEAD` `13522de026b1d73bdd0cb0ded7c1348f2e6ff7a2`; no network or wallet was used. | Deployed-bytecode, hosted frontend/indexer, and independent external evidence remain open |
 | Production HTTPS | A fresh guest in-app browser navigation on 2026-08-23 failed at TLS with `ERR_CERT_COMMON_NAME_INVALID`; the safety interstitial was not bypassed. | External hosting/domain remediation; Privy/modal QA remains blocked |
 | Privy embedded modal | `@privy-io/react-auth` remains locked/installed at `3.27.2`; the `Submit` accessible name and 24x24 provider close target are formally accepted only as the upstream exception recorded in [`docs/privy-upstream-accessibility-boundary.md`](privy-upstream-accessibility-boundary.md). The focused app-owned boundary test passes `17` cases without DOM/CSS or `node_modules` overrides. | Upstream exception accepted; real public-HTTPS keyboard/mobile/connect/recovery QA remains open |
-| Supported Standard security scan | Supported entitlement remains unavailable locally | External entitlement blocker |
+| Supported Standard security scan | Scan `dcc2a20f-4a50-4d89-9d40-82204b529ff3` completed and sealed exact SHA `53846fe1635fea0e15c131afa5dc8020d48c0975`; report summary is `9` reportable findings (`2 high`, `5 medium`, `2 low`) with honest partial coverage `96/787`. Current commit `33a090729` fixes the independent-RPC pending-repair finding locally. | The scan gate is proven for `53846fe…`, not the post-fix SHA; remaining findings and a fresh exact-SHA scan stay open |
 
 ## Objective status
 
@@ -366,9 +385,10 @@ replacement needs another separately reviewed plan and exact approval.
 2. Use the user's local-commit authority only after a fresh zero-omission audit
    of the exact current manifest. It does not authorize push, deploy, signing,
    wallet, RPC, or chain actions.
-3. On a new immutable SHA, run a detached fresh `npm ci`, dependency/local
-   prelaunch gates, clean-checkout reproduction, and the supported final
-   security scan when disk and entitlement permit.
+3. On a new immutable post-remediation SHA, repeat detached fresh `npm ci`,
+   dependency/local prelaunch gates, clean-checkout reproduction, and the
+   supported Standard security scan. The sealed `53846fe…` result is valid
+   historical exact-SHA evidence but cannot seal `33a090729` or later source.
 4. Obtain green hosted Linux/Windows CI and real public HTTPS/Privy evidence.
 5. Keep the known block-context randomness risk open; the user explicitly
    deferred the redesign.

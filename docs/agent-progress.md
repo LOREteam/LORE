@@ -8,6 +8,24 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
+- Supported Standard Security Scan
+  `dcc2a20f-4a50-4d89-9d40-82204b529ff3` completed for exact detached SHA
+  `53846fe1635fea0e15c131afa5dc8020d48c0975`. Its deterministic report records
+  `9` reportable findings (`2 high`, `5 medium`, `2 low`) and honest partial
+  coverage of `96/787` tracked files. Eighteen informational rows preserve a
+  lossless suppressed-duplicate checkpoint audit trail and are excluded from
+  reportable projection. No runtime, RPC, wallet, signing, Preview,
+  deployment, push, or chain action occurred.
+- Current commit `33a090729f1aeb785c6ca8e42fc4e51740e36c55` fixes the
+  medium single-RPC pending-transaction repair finding. Exact nonce repair now
+  requires matching `latest` and `pending` values from two distinct canonical
+  RPC hosts and fails before silent send on missing, duplicate, invalid, or
+  divergent evidence. Receipt confirmation uses that independent pair instead
+  of `[publicClient, publicClient]`. Post-fix focused behavior passed twice at
+  `22` cases; wallet-transfer intent, business wallet boundaries, TypeScript,
+  syntax/diff hygiene, and protected DB identity pass. A fresh detached full
+  seal and supported scan are required because this commit postdates the
+  sealed `53846fe…` scan.
 - The current tested code baseline and parent of this documentation-only packet
   is `99666ae20`. Exact SHA `75881579d` passed P1 hardening in the full
   prelaunch report but failed the later business row because the trusted-npm
