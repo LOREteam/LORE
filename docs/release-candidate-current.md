@@ -1,7 +1,7 @@
 # Current release-candidate permission manifest
 
 Snapshot date: 2026-08-26. Base `HEAD`:
-`b7a678970e90ecef8011926b255561f06d895e93` on `codex/repo-cleanup`.
+`409402d39b36fc0415dbb4eacfc4dc4ce144688f` on `codex/repo-cleanup`.
 
 Status: the user has granted authority for local commits. This manifest is the
 exact staging boundary for the documentation packet that records the sealed
@@ -12,14 +12,17 @@ chat-auth RPC admission fix at `697f03537`, plus bounded chat-profile storage at
 `6d9f60411`, actor-scoped transfer-history rendering at `ff376d2fa`, and the
 four-commit exact claim-lease remediation ending at `b7a678970`. All five
 medium and both low scan findings now have local fixes; this documentation does
-not substitute for the required detached post-fix seal and supported scan. That
-authority does not authorize push, deployment, hosting changes, signing,
-wallet/RPC use, Preview generation, approval, or a chain transaction.
+not substitute for the required detached post-fix seal and supported scan.
+Diagnostic candidate `37c6fa56a` additionally exposed three stale business
+contracts, fixed locally at `409402d39`; the next docs child, not the failed
+diagnostic candidate, must receive the fresh detached seal. That authority does
+not authorize push, deployment, hosting changes, signing, wallet/RPC use,
+Preview generation, approval, or a chain transaction.
 
 ## Exact current scope
 
 The path set below is the exact proposed index relative to
-`b7a678970e90ecef8011926b255561f06d895e93`. It contains only the durable
+`409402d39b36fc0415dbb4eacfc4dc4ce144688f`. It contains only the durable
 state/progress/worklist update and this self-excluded manifest.
 
 - Proposed child: `3` other tracked paths plus this manifest.
@@ -34,7 +37,7 @@ state/progress/worklist update and this self-excluded manifest.
 - Canonical current content-set SHA-256 for the other `3` candidate files (this
   self-referential manifest excluded; sorted
   `path + NUL + file SHA-256 + LF`):
-  `324d1e9c4c43498234f16d38fe50071134a90ebb17a881451a3b4ee4a329348d`.
+  `53d7157d315c9bf823f4669b26be0d5483e58291240d1f4a43a14c45627c0077`.
 
 ```text
 docs/agent-progress.md

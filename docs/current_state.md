@@ -27,6 +27,21 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   that run. Protected SQLite identity remains exact. All five medium and both
   low findings now have local fixes; both high contract findings and a fresh
   detached post-fix seal/supported scan remain open.
+- Exact candidate `37c6fa56a70eccb219eb60fdf7cf6ca8cc68d2d1`
+  then completed a genuinely empty detached checkout and fresh `npm ci`.
+  Direct exact-runtime dependency policy passed with `0` production
+  high/critical and `5` allowlisted dev-toolchain high advisories (`0`
+  blocking); direct V9 and V10 invariants passed. Its first `check-local` run
+  correctly stopped in isolated business logic on three stale integration
+  contracts left behind by the claim remediation: the old single-client nonce
+  source shape, the old `22`-case wallet marker, and the old untracked Safety
+  Pool receipt helper. Local commit `409402d39` updates only those three guards
+  to the two-origin nonce evidence, `23`-case behavior suite, and tracked
+  terminal receipt helper. Each focused guard passed twice; the complete
+  isolated business suite then passed with every wallet/claim safety proof
+  field true, followed by audit x2, self-test `17/17`, syntax/diff, and exact
+  protected-DB identity. Because `409402d39` postdates the detached candidate,
+  a new immutable docs child and fresh detached full gate remain required.
 - Exact immutable SHA `53846fe1635fea0e15c131afa5dc8020d48c0975`
   passed fresh detached `npm ci`, dependency policy, the full local/prelaunch
   package, hermetic build, TypeScript, HTTP/browser smoke, V9/V10 invariants,

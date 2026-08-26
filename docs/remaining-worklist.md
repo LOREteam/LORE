@@ -33,6 +33,13 @@ under [`docs/archive/`](archive/).
       `npm ci`; run dependency gates, full local/prelaunch gates, hermetic
       build, typecheck, supported browser/HTTP smoke, V10 properties, and DB
       invariants when disk permits.
+- [x] Use candidate `37c6fa56a` to expose and fix the three remaining stale
+      business contracts from the durable claim packet. Commit `409402d39`
+      binds the nonce source guard to two-origin evidence/disagreement, expects
+      the real `23`-case wallet runner, and requires tracked terminal Safety
+      Pool confirmation. Focused x2, full isolated business, audit x2/self-test,
+      syntax/diff, and protected-DB identity pass. The candidate itself remains
+      a failed diagnostic and must not be reused as the final seal.
 - [x] Diagnose the trusted-npm release-operations failure from exact SHA
       `75881579d`: P1 hardening passed, while the later business row failed
       because its Windows campaign fixture invoked bare `git` and nested bare

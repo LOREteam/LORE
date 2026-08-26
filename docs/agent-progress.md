@@ -96,6 +96,21 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   Protected DB base/WAL/SHM identity is exact. All five medium and both low scan
   findings now have local fixes, but remediation is not sealed until a new
   immutable SHA passes detached reproduction and a supported Standard scan.
+- Exact candidate `37c6fa56a70eccb219eb60fdf7cf6ca8cc68d2d1`
+  received a new detached checkout with no `node_modules`, followed by fresh
+  `npm ci` (`1315` installed packages). Direct Node `24.5.0` / npm `11.5.1`
+  dependency policy passed: production has `0` high/critical; the all-dependency
+  view has `5` allowlisted dev-toolchain high and `0` blocking. Direct V9/V10
+  invariants passed. The first full `check-local` correctly exposed three stale
+  business source contracts created by the claim packet rather than declaring
+  a partial green. Commit `409402d39` aligns the nonce guard with the actual
+  two-origin evidence map/disagreement branch, updates the wallet behavior
+  marker from `22` to `23`, and requires the Safety Pool tracked terminal
+  helper. Focused checks passed twice, then the full isolated business suite
+  passed with every published wallet/claim proof true. Audit x2 remains
+  `5836/6360` (`91.76%`), self-test is `17/17`, syntax/diff and protected DB
+  identity pass. The exact final detached seal must restart from the next docs
+  child; `37c6fa56a` is diagnostic failed-gate evidence, not final SHA.
 - The current tested code baseline and parent of this documentation-only packet
   is `99666ae20`. Exact SHA `75881579d` passed P1 hardening in the full
   prelaunch report but failed the later business row because the trusted-npm
