@@ -71,6 +71,16 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   hardening passed `41/41` in `271848ms`. Protected SQLite identity is exact.
   All five medium scan findings now have local fixes, but a fresh detached seal
   and supported post-fix scan are still required before claiming remediation.
+- Current child `ff376d2fa` closes the scan's low one-paint transfer-history
+  disclosure. Transfer summaries now carry the exact normalized embedded/
+  external actor cache key, and render-time selection returns data only when
+  that key matches the current wallet pair; address switch, disconnect, invalid
+  identity, stale async completion, and error fallback cannot render the prior
+  actor's rows while waiting for effects. Wallet-model behavior passed twice,
+  TypeScript passed, audit x2 reports `5836/6360` behavioral assertions
+  (`91.76%`) with self-test `17/17`, and exact final-source P1 hardening passed
+  `41/41` in `271410ms`. Protected SQLite identity is exact and no wallet,
+  provider, RPC, signature, or transaction was used.
 - Current tested code baseline `99666ae20` closes the trusted-npm
   release-operations fixture failure exposed by the full prelaunch run at exact
   SHA `75881579d`. P1 hardening passed in that report, but the business row

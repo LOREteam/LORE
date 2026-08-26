@@ -144,6 +144,11 @@ under [`docs/archive/`](archive/).
       and explicit `503`. Route-matrix x2 at exact capacity, isolated storage
       x2, TypeScript, audit x2/self-test, full P1 hardening `41/41`, diff, and
       protected-DB checks pass without deleting any profile.
+- [x] Fix the low stale transfer-history paint finding in local commit
+      `ff376d2fa`: render-time actor cache-key matching immediately hides the
+      previous wallet pair's rows on switch/disconnect and blocks stale async or
+      error fallback publication. Wallet-model x2, TypeScript, audit x2/self-test,
+      full P1 hardening `41/41`, diff, and protected-DB checks pass.
 - [ ] Run and seal a new supported Standard scan on the eventual post-fix final
       SHA. The `53846fe…` scan does not prove later source revisions.
 - [ ] Obtain green hosted Linux/Windows CI for the exact final commit.

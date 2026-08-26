@@ -69,6 +69,15 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   `41/41` in `271848ms` pass. This completes local fixes for the scan's five
   medium findings only; post-fix detached reproduction and supported scan remain
   required, and both high contract findings plus two low findings stay open.
+- Current child `ff376d2fa676c741aea6ec5f47a20f26c5c6a09e` fixes the low
+  stale transfer-history paint finding. Every summary is paired with its exact
+  normalized embedded/external actor cache key, and render-time selection hides
+  it immediately when the current wallet pair differs, including disconnect,
+  malformed identity, async completion, and stale/error fallback paths. Focused
+  wallet-model behavior x2, TypeScript, audit x2 (`5836/6360`, `91.76%`),
+  self-test `17/17`, diff hygiene, protected DB identity, and final-source P1
+  hardening `41/41` in `271410ms` pass. No wallet/provider/RPC/signing action
+  occurred. One low claim-lease finding and both high contract findings remain.
 - The current tested code baseline and parent of this documentation-only packet
   is `99666ae20`. Exact SHA `75881579d` passed P1 hardening in the full
   prelaunch report but failed the later business row because the trusted-npm
