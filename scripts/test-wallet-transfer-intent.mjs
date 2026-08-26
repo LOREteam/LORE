@@ -225,27 +225,31 @@ const transactionClients = (first, second = first, receiptStatus = "success") =>
 ];
 
 function transactionForIntent(intent, hash, nonce, overrides = {}) {
-  const tokenInput = intent.asset === "native"
+  const input = intent.asset === "native"
     ? "0x"
-    : encodeFunctionData({
-        abi: [{
-          type: "function",
-          name: "transfer",
-          stateMutability: "nonpayable",
-          inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }],
-          outputs: [{ name: "", type: "bool" }],
-        }],
-        functionName: "transfer",
-        args: [intent.destination, intent.amountWei],
-      });
+    : intent.asset === "contract-call"
+      ? intent.calldata
+      : encodeFunctionData({
+          abi: [{
+            type: "function",
+            name: "transfer",
+            stateMutability: "nonpayable",
+            inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }],
+            outputs: [{ name: "", type: "bool" }],
+          }],
+          functionName: "transfer",
+          args: [intent.destination, intent.amountWei],
+        });
   return {
     hash,
     chainId: intent.chainId,
     from: intent.actor,
     nonce,
-    to: intent.asset === "native" ? intent.destination : intent.asset,
+    to: intent.asset === "native" || intent.asset === "contract-call"
+      ? intent.destination
+      : intent.asset,
     value: intent.asset === "native" ? intent.amountWei : 0n,
-    input: tokenInput,
+    input,
     type: "eip1559",
     ...overrides,
   };
@@ -348,6 +352,129 @@ const afterConfirmed = await transferIntent.acquireWalletTransferIntentLease(
   Date.now(),
 );
 assert.equal(afterConfirmed.status, "acquired", "a confirmed intent must not block a later deliberate transfer");
+
+storage.clear();
+const contractCalldata = `0x${"12".repeat(32)}`;
+const contractIntent = transferIntent.createWalletContractIntent({
+  actor,
+  chainId: 59144,
+  contract: destination,
+  calldata: contractCalldata,
+});
+assert.doesNotThrow(() => transferIntent.assertWalletTransferIntentMatchesTransaction(
+  contractIntent,
+  { to: destination, data: contractCalldata },
+));
+assert.throws(
+  () => transferIntent.assertWalletTransferIntentMatchesTransaction(
+    contractIntent,
+    { to: destination, data: `0x${"34".repeat(32)}` },
+  ),
+  /wallet_contract_intent_transaction_mismatch/,
+  "a durable contract intent must bind the exact calldata rather than only the destination",
+);
+
+let resolveLateContractSend;
+const rawLateContractSend = new Promise((resolve) => {
+  resolveLateContractSend = resolve;
+});
+let retainedLateContractSend;
+let contractProviderSends = 0;
+await assert.rejects(
+  transferIntent.withWalletTransferIntentLease(
+    contractIntent,
+    stableNonceClients,
+    async (acquisition, retainResult) => {
+      assert.equal(acquisition.status, "acquired");
+      contractProviderSends += 1;
+      retainedLateContractSend = retainResult(rawLateContractSend, acquisition.lease);
+      return utils.withTimeout(retainedLateContractSend, 1, "test contract claim send");
+    },
+  ),
+  /timed out/,
+);
+await assert.rejects(
+  transferIntent.withWalletTransferIntentLease(
+    contractIntent,
+    stableNonceClients,
+    async () => {
+      contractProviderSends += 1;
+      throw new Error("second contract send must stay unreachable");
+    },
+  ),
+  /wallet_transfer_intent_unresolved/,
+  "a hashless contract-call timeout must block a second provider send",
+);
+await assert.rejects(
+  transferIntent.acquireWalletTransferIntentLease(baseIntent, stableNonceClients, Date.now()),
+  /wallet_transfer_actor_unresolved/,
+  "a pending contract-call intent must also block a different transfer at the shared actor nonce",
+);
+const lateContractHash = `0x${"cd".repeat(32)}`;
+resolveLateContractSend({ hash: lateContractHash });
+await retainedLateContractSend;
+const reloadedContractIntentModule = await import(
+  new URL(`../app/lib/walletTransferIntent.ts?contract-reload=${Date.now()}`, import.meta.url).href
+);
+assert.deepEqual(
+  await reloadedContractIntentModule.acquireWalletTransferIntentLease(
+    contractIntent,
+    stableNonceClients,
+    Date.now(),
+  ),
+  { status: "known-hash", hash: lateContractHash },
+  "a late contract-call hash must survive reload and be returned instead of resubmitting",
+);
+assert.equal(contractProviderSends, 1, "the timeout/reload path must reach the contract provider sink exactly once");
+assert.equal(
+  await transferIntent.resolveWalletTransferIntent(
+    contractIntent,
+    lateContractHash,
+    "confirmed",
+    transactionClients(transactionForIntent(contractIntent, lateContractHash, 7)),
+  ),
+  true,
+  "two exact canonical transaction observations must release a confirmed contract intent",
+);
+assert.equal(
+  (await transferIntent.acquireWalletTransferIntentLease(
+    contractIntent,
+    stableNonceClients,
+    Date.now(),
+  )).status,
+  "acquired",
+  "terminal resolution must preserve a later legitimate identical contract claim",
+);
+
+storage.clear();
+const lostProviderPromiseStartedAt = Date.now();
+assert.equal(
+  (await transferIntent.acquireWalletTransferIntentLease(
+    contractIntent,
+    stableNonceClients,
+    lostProviderPromiseStartedAt,
+  )).status,
+  "acquired",
+);
+const reloadedWithoutProviderPromise = await import(
+  new URL(`../app/lib/walletTransferIntent.ts?contract-real-reload=${Date.now()}`, import.meta.url).href
+);
+let reloadRetrySends = 0;
+await assert.rejects(
+  reloadedWithoutProviderPromise.withWalletTransferIntentLease(
+    contractIntent,
+    stableNonceClients,
+    async () => {
+      reloadRetrySends += 1;
+      throw new Error("a post-reload contract claim must not reach a second provider sink");
+    },
+    undefined,
+    lostProviderPromiseStartedAt + transferIntent.HASHLESS_TRANSFER_RECONCILIATION_GRACE_MS + 1,
+  ),
+  /wallet_transfer_intent_unresolved/,
+  "a real reload with no surviving provider promise must remain blocked even after the nonce grace period",
+);
+assert.equal(reloadRetrySends, 0, "nonce equality alone must never reauthorize a hashless contract call");
 
 storage.clear();
 const rejectedError = Object.assign(new Error("User rejected the request"), { code: 4001 });
@@ -1877,12 +2004,77 @@ assert.match(
 );
 assert.match(
   privyWalletSource,
+  /tx\.contractIntent[\s\S]*createWalletContractIntent\([\s\S]*const transactionIntent = transferIntent \?\? contractIntent[\s\S]*assertWalletTransferIntentMatchesTransaction\(transactionIntent, tx\)[\s\S]*withWalletTransferIntentLease\([\s\S]*transactionIntent/,
+  "explicit zero-value contract calls must enter the same exact-envelope durable late-hash boundary",
+);
+assert.match(
+  privyWalletSource,
   /sendTransactionFromExternal[\s\S]*wallet_switchEthereumChain[\s\S]*assertExternalWalletProviderContext\([\s\S]*submitExternalTransaction[\s\S]*expectedActor: providerAccount[\s\S]*eth_sendTransaction[\s\S]*withWalletTransferIntentLease\([\s\S]*submitExternalTransaction\(acquisition\.lease, retainResult\)[\s\S]*isSafeExternalWalletProviderContextError/,
   "external transfers must revalidate the selected account and chain directly before their explicit wallet prompt while sharing the durable late-hash lease",
 );
 
 const walletActionsSource = readFileSync("app/hooks/useWalletActions.ts", "utf8");
+const rewardScannerSource = readFileSync("app/hooks/useRewardScanner.ts", "utf8");
+const deepRewardScanSource = readFileSync("app/hooks/useDeepRewardScan.ts", "utf8");
+const rebateSource = readFileSync("app/hooks/useRebate.ts", "utf8");
 const walletTransferIntentSource = readFileSync("app/lib/walletTransferIntent.ts", "utf8");
+for (const [source, label] of [
+  [rewardScannerSource, "reward scanner"],
+  [deepRewardScanSource, "deep reward scanner"],
+  [rebateSource, "Safety Pool"],
+  [walletActionsSource, "embedded resolver rewards"],
+]) {
+  assert.match(
+    source,
+    /contractIntent: \{ contract: CONTRACT_ADDRESS, calldata: data \}/,
+    `${label} silent claims must bind their exact calldata before the provider sink`,
+  );
+}
+assert.doesNotMatch(
+  rewardScannerSource + deepRewardScanSource,
+  /acquireEoaNonceLockLease/,
+  "reward claim hooks must not deadlock by nesting an outer actor lock around the durable sender lock",
+);
+assert.doesNotMatch(
+  rebateSource,
+  /acquireEoaNonceLockLease/,
+  "Safety Pool must not nest an outer actor lock around either durable claim sender",
+);
+assert.match(
+  rebateSource,
+  /createClaimTransactionNonceClients\(\)[\s\S]*withClaimTransactionIntentLease\([\s\S]*account: sender[\s\S]*nonce: acquisition\.lease\.nonce/,
+  "Safety Pool Wagmi claims must reserve the exact actor nonce and retain late hashes",
+);
+assert.match(
+  rebateSource,
+  /const confirmation = await waitForTrackedClaimTransactionReceiptAgreement\([\s\S]*actor: sender[\s\S]*calldata/,
+  "Safety Pool claims must terminally reconcile the exact calldata for both wallet senders",
+);
+assert.match(
+  rebateSource,
+  /actorChangedError: claimActorChangedError[\s\S]*abandonOnError: \(error\) =>[\s\S]*isUserRejection\(error\) \|\| error === claimActorChangedError/,
+  "Safety Pool may abandon only the exact pre-sink actor-change sentinel, not an ambiguous provider error observed after an address switch",
+);
+assert.doesNotMatch(
+  rebateSource,
+  /abandonOnError: \(error\) =>[\s\S]{0,120}isActorChangedError\(error\)/,
+  "Safety Pool must not reinterpret an arbitrary provider failure as a proven pre-broadcast actor change",
+);
+assert.match(
+  walletActionsSource,
+  /handleClaimEmbeddedResolverRewards[\s\S]*createWalletContractIntent\([\s\S]*waitForTransferReceipt\(claimIntent, hash\)[\s\S]*resolveTransferIntent\(claimIntent, receiptState\.hash, "confirmed"\)/,
+  "embedded resolver claims must validate and terminally resolve the exact durable contract intent",
+);
+assert.match(
+  walletActionsSource,
+  /handleClaimConnectedResolverRewards[\s\S]*withClaimTransactionIntentLease\([\s\S]*account: normalizedConnectedWalletAddress[\s\S]*nonce: acquisition\.lease\.nonce[\s\S]*waitForTransferReceipt\(claimIntent, hash\)[\s\S]*resolveTransferIntent\(claimIntent, receiptState\.hash, "confirmed"\)/,
+  "connected resolver claims must use the same durable exact-envelope lifecycle as embedded claims",
+);
+assert.match(
+  walletTransferIntentSource,
+  /if \(state\.asset === "contract-call"\) return false/,
+  "hashless contract calls must never be retried from unchanged nonce evidence alone",
+);
 assert.match(
   walletTransferIntentSource,
   /async function readWalletTransferTransactionQuorum[\s\S]*Promise\.allSettled\([\s\S]*getTransaction\(\{ hash \}\)[\s\S]*walletTransferTransactionFingerprint\(first\)[\s\S]*walletTransferTransactionFingerprint\(second\)[\s\S]*async function assertWalletTransferTransactionQuorum[\s\S]*assertWalletTransferTransactionMatchesIntent\(transaction, intent, hash, nonce\)[\s\S]*resolveWalletTransferIntent[\s\S]*const transaction = await assertWalletTransferTransactionQuorum[\s\S]*current\.transactionType[\s\S]*removeState\(intent\)/,

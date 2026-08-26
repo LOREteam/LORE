@@ -24,7 +24,9 @@ import { isUserRejection, normalizeDecimalInput } from "../lib/utils";
 import { parsePositiveLineaAmountWei } from "../lib/tokenAmountMath";
 import { getExplorerTxUrl } from "../lib/explorerLinks";
 import { withEoaNonceLock } from "../lib/eoaNonceLock";
+import { withClaimTransactionIntentLease } from "../lib/claimTransactionIntent";
 import {
+  createWalletContractIntent,
   createWalletTransferIntent,
   getWalletTransferIntentErrorHash,
   isWalletTransferIntentError,
@@ -35,6 +37,7 @@ import {
   waitForWalletTransferIntentReceipt,
   WalletTransferIntentError,
   WalletTransactionRevertedError,
+  type WalletContractIntentDetails,
   type WalletTransferIntent,
   type WalletTransferIntentDetails,
   type WalletTransferReceiptClient,
@@ -52,10 +55,10 @@ import {
 
 type NotifyFn = (message: string, tone?: "info" | "success" | "warning" | "danger") => void;
 type SilentSendFn = (
-  tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; nonce?: number; feeMode?: "normal" | "keeper"; transferIntent?: WalletTransferIntentDetails },
+  tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; nonce?: number; feeMode?: "normal" | "keeper"; transferIntent?: WalletTransferIntentDetails; contractIntent?: WalletContractIntentDetails },
   gasOverrides?: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint },
 ) => Promise<`0x${string}`>;
-type ExternalSendFn = (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; expectedActor?: `0x${string}`; transferIntent?: WalletTransferIntentDetails }) => Promise<`0x${string}`>;
+type ExternalSendFn = (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; expectedActor?: `0x${string}`; transferIntent?: WalletTransferIntentDetails; contractIntent?: WalletContractIntentDetails }) => Promise<`0x${string}`>;
 type WriteContractAsyncFn = ReturnType<typeof useWriteContract>["writeContractAsync"];
 type BalanceData = { value: bigint } | null | undefined;
 type ReceiptState = "confirmed" | "pending";
@@ -778,30 +781,96 @@ export function useWalletActions({
     resolverClaimInFlightRef.current = true;
     const claimActor = normalizedConnectedWalletAddress.toLowerCase();
     let claimTxHash: `0x${string}` | null = null;
+    let claimIntent: WalletTransferIntent | null = null;
 
     setIsClaimingConnectedResolverRewards(true);
     try {
       notify("Preparing resolver reward claim. Confirm the wallet prompt if it appears.", "info");
-      const gas = await estimateResolverRewardClaimGas(normalizedConnectedWalletAddress);
-      if (activeConnectedResolverAddressRef.current !== claimActor) return;
-      const hash = await writeContractAsync({
-        address: CONTRACT_ADDRESS,
+      const data = encodeFunctionData({
         abi: GAME_ABI,
         functionName: "claimResolverRewards",
-        chainId: APP_CHAIN_ID,
-        gas,
       });
-      claimTxHash = hash;
-      const receiptState = await waitForReceipt(hash);
+      const claimDescriptor = {
+        actor: normalizedConnectedWalletAddress,
+        chainId: APP_CHAIN_ID,
+        contract: CONTRACT_ADDRESS,
+        calldata: data,
+      };
+      claimIntent = createWalletContractIntent(claimDescriptor);
+      const gas = await estimateResolverRewardClaimGas(normalizedConnectedWalletAddress);
       if (activeConnectedResolverAddressRef.current !== claimActor) return;
-      if (receiptState === "pending") {
+      const nonceClients = getIndependentPendingTransactionNonceClients(
+        walletTransferReceiptClients,
+      );
+      if (!nonceClients) {
+        throw new WalletTransferIntentError(
+          "wallet_transfer_receipt_independent_rpc_required",
+        );
+      }
+      const hash = await withClaimTransactionIntentLease(
+        claimDescriptor,
+        nonceClients,
+        async (acquisition, retainResult) => {
+          if (acquisition.status === "known-hash") return acquisition.hash;
+          if (activeConnectedResolverAddressRef.current !== claimActor) {
+            throw new WalletTransferIntentError("wallet_transfer_intent_actor_changed");
+          }
+          const retained = await retainResult(
+            writeContractAsync({
+              address: CONTRACT_ADDRESS,
+              abi: GAME_ABI,
+              functionName: "claimResolverRewards",
+              chainId: APP_CHAIN_ID,
+              account: normalizedConnectedWalletAddress,
+              nonce: acquisition.lease.nonce,
+              gas,
+            }).then((walletHash) => ({ hash: walletHash })),
+            acquisition.lease,
+          );
+          return retained.hash;
+        },
+        {
+          abandonOnError: (error) =>
+            isUserRejection(error) ||
+            (error instanceof WalletTransferIntentError &&
+              error.message === "wallet_transfer_intent_actor_changed"),
+        },
+      );
+      claimTxHash = hash;
+      const receiptState = await waitForTransferReceipt(claimIntent, hash);
+      if (receiptState.status === "pending") {
+        if (activeConnectedResolverAddressRef.current !== claimActor) return;
         notify(formatTxStatusMessage("Resolver reward claim submitted and is still pending confirmation.", hash), "info");
         refreshResolverRewardReads();
         return;
       }
+      if (!await resolveTransferIntent(claimIntent, receiptState.hash, "confirmed")) {
+        throw new WalletTransferIntentError(
+          "wallet_transfer_intent_resolution_mismatch",
+          receiptState.hash,
+        );
+      }
+      if (activeConnectedResolverAddressRef.current !== claimActor) return;
       refreshResolverRewardReads();
       notify(formatTxStatusMessage("Resolver rewards claimed to the connected wallet.", hash), "success");
     } catch (err) {
+      if (
+        claimIntent &&
+        claimTxHash &&
+        err instanceof WalletTransactionRevertedError &&
+        err.transactionHash === claimTxHash
+      ) {
+        try {
+          if (!await resolveTransferIntent(claimIntent, claimTxHash, "reverted")) {
+            throw new WalletTransferIntentError(
+              "wallet_transfer_intent_resolution_mismatch",
+              claimTxHash,
+            );
+          }
+        } catch (resolutionError) {
+          log.warn("ResolverRewards", "reverted connected claim intent remains conservatively blocked", resolutionError);
+        }
+      }
       if (activeConnectedResolverAddressRef.current !== claimActor) return;
       if (isAmbiguousPendingTxError(err)) {
         notify(
@@ -830,7 +899,9 @@ export function useWalletActions({
     normalizedConnectedWalletAddress,
     notify,
     refreshResolverRewardReads,
-    waitForReceipt,
+    resolveTransferIntent,
+    waitForTransferReceipt,
+    walletTransferReceiptClients,
     writeContractAsync,
   ]);
 
@@ -852,6 +923,7 @@ export function useWalletActions({
     resolverClaimInFlightRef.current = true;
     const claimActor = normalizedEmbeddedWalletAddress.toLowerCase();
     let claimTxHash: `0x${string}` | null = null;
+    let claimIntent: WalletTransferIntent | null = null;
 
     setIsClaimingEmbeddedResolverRewards(true);
     try {
@@ -860,24 +932,55 @@ export function useWalletActions({
         abi: GAME_ABI,
         functionName: "claimResolverRewards",
       });
+      claimIntent = createWalletContractIntent({
+        actor: normalizedEmbeddedWalletAddress,
+        chainId: APP_CHAIN_ID,
+        contract: CONTRACT_ADDRESS,
+        calldata: data,
+      });
       const gas = await estimateResolverRewardClaimGas(normalizedEmbeddedWalletAddress);
       if (activeEmbeddedResolverAddressRef.current !== claimActor) return;
       const hash = await sendTransactionSilent({
         to: CONTRACT_ADDRESS,
         data,
         gas,
+        contractIntent: { contract: CONTRACT_ADDRESS, calldata: data },
       });
       claimTxHash = hash;
-      const receiptState = await waitForReceipt(hash);
-      if (activeEmbeddedResolverAddressRef.current !== claimActor) return;
-      if (receiptState === "pending") {
+      const receiptState = await waitForTransferReceipt(claimIntent, hash);
+      if (receiptState.status === "pending") {
+        if (activeEmbeddedResolverAddressRef.current !== claimActor) return;
         notify(formatTxStatusMessage("Resolver reward claim submitted and is still pending confirmation.", hash), "info");
         refreshResolverRewardReads();
         return;
       }
+      if (!await resolveTransferIntent(claimIntent, receiptState.hash, "confirmed")) {
+        throw new WalletTransferIntentError(
+          "wallet_transfer_intent_resolution_mismatch",
+          receiptState.hash,
+        );
+      }
+      if (activeEmbeddedResolverAddressRef.current !== claimActor) return;
       refreshResolverRewardReads();
       notify(formatTxStatusMessage("Resolver rewards claimed to the Privy wallet.", hash), "success");
     } catch (err) {
+      if (
+        claimIntent &&
+        claimTxHash &&
+        err instanceof WalletTransactionRevertedError &&
+        err.transactionHash === claimTxHash
+      ) {
+        try {
+          if (!await resolveTransferIntent(claimIntent, claimTxHash, "reverted")) {
+            throw new WalletTransferIntentError(
+              "wallet_transfer_intent_resolution_mismatch",
+              claimTxHash,
+            );
+          }
+        } catch (resolutionError) {
+          log.warn("ResolverRewards", "reverted embedded claim intent remains conservatively blocked", resolutionError);
+        }
+      }
       if (activeEmbeddedResolverAddressRef.current !== claimActor) return;
       if (isAmbiguousPendingTxError(err)) {
         notify(
@@ -908,7 +1011,8 @@ export function useWalletActions({
     onOpenWalletSettings,
     refreshResolverRewardReads,
     sendTransactionSilent,
-    waitForReceipt,
+    resolveTransferIntent,
+    waitForTransferReceipt,
   ]);
 
   const handleWithdrawToExternal = useCallback(async () => {

@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { mock } from "node:test";
-import { APP_CHAIN_ID, CONTRACT_ADDRESS, EXPLORER_TX_BASE_URL } from "../app/lib/constants";
+import { encodeFunctionData } from "viem";
+import { APP_CHAIN_ID, CONTRACT_ADDRESS, EXPLORER_TX_BASE_URL, GAME_ABI } from "../app/lib/constants";
 import {
+  createWalletContractIntent,
   waitForStableWalletTransferReceipt,
+  withWalletTransferIntentLease,
   WalletTransactionRevertedError,
 } from "../app/lib/walletTransferIntent";
 
@@ -19,9 +22,13 @@ type TransactionRequest = {
   nonce?: number;
   expectedActor?: `0x${string}`;
   transferIntent?: {
-    asset: "native" | `0x${string}`;
+    asset: "native" | "contract-call" | `0x${string}`;
     destination: `0x${string}`;
     amountWei: bigint;
+  };
+  contractIntent?: {
+    contract: `0x${string}`;
+    calldata: `0x${string}`;
   };
 };
 
@@ -195,7 +202,16 @@ process.env.NEXT_PUBLIC_LINEA_RPCS = "https://rpc-one.example.com,https://rpc-tw
 process.env.NEXT_PUBLIC_LINEA_SEPOLIA_RPCS = "https://rpc-one.example.com,https://rpc-two.example.net";
 
 let transferReceiptMode: ReceiptMode = "pending";
-let transferTransaction = createNativeTransaction({
+let transferTransaction: {
+  hash: `0x${string}`;
+  chainId: number;
+  from: string;
+  nonce: number;
+  to: string;
+  value: bigint;
+  input: `0x${string}`;
+  type: "eip1559";
+} = createNativeTransaction({
   actor: EXTERNAL_ACTOR,
   destination: EMBEDDED_ACTOR,
   amountWei: DEFAULT_ETH_DEPOSIT_WEI,
@@ -425,6 +441,63 @@ function createHookRenderer(initialOptions: RenderOptions) {
         return receiptFor(resolverReceiptMode);
       },
     };
+    const rawSilentSend = options.sendTransactionSilent ?? (async () => HASH);
+    const rawWriteContract = options.writeContractAsync ?? (async () => HASH);
+    const durableSilentSend = async (transaction: TransactionRequest) => {
+      if (!transaction.contractIntent) return rawSilentSend(transaction);
+      const actor = (options.embeddedWalletAddress ?? EMBEDDED_ACTOR).toLowerCase() as `0x${string}`;
+      const intent = createWalletContractIntent({
+        actor,
+        chainId: APP_CHAIN_ID,
+        ...transaction.contractIntent,
+      });
+      const nonceClients = [
+        { getTransactionCount: firstNonceReader },
+        { getTransactionCount: secondNonceReader },
+      ] as const;
+      return withWalletTransferIntentLease(intent, nonceClients, async (acquisition, retainResult) => {
+        if (acquisition.status === "known-hash") return acquisition.hash;
+        transferTransaction = {
+          hash: HASH,
+          chainId: APP_CHAIN_ID,
+          from: actor,
+          nonce: acquisition.lease.nonce,
+          to: transaction.contractIntent!.contract.toLowerCase(),
+          value: 0n,
+          input: transaction.contractIntent!.calldata.toLowerCase() as `0x${string}`,
+          type: "eip1559",
+        };
+        const retained = await retainResult(
+          rawSilentSend(transaction).then((hash) => ({ hash })),
+          acquisition.lease,
+        );
+        return retained.hash;
+      }, { abandonOnError: (error) => (error as { code?: unknown })?.code === 4001 });
+    };
+    const durableWriteContract = async (input: Record<string, unknown>) => {
+      const actor = input.account;
+      const nonce = input.nonce;
+      if (
+        input.functionName === "claimResolverRewards" &&
+        typeof actor === "string" &&
+        typeof nonce === "number"
+      ) {
+        transferTransaction = {
+          hash: HASH,
+          chainId: APP_CHAIN_ID,
+          from: actor.toLowerCase(),
+          nonce,
+          to: CONTRACT_ADDRESS.toLowerCase(),
+          value: 0n,
+          input: encodeFunctionData({
+            abi: GAME_ABI,
+            functionName: "claimResolverRewards",
+          }).toLowerCase() as `0x${string}`,
+          type: "eip1559",
+        };
+      }
+      return rawWriteContract(input);
+    };
 
     result = machine.render(() => useWalletActions({
       connectedWalletAddress: options.connectedWalletAddress ?? null,
@@ -432,8 +505,8 @@ function createHookRenderer(initialOptions: RenderOptions) {
       externalWalletAddress: options.externalWalletAddress ?? EXTERNAL_ACTOR,
       embeddedTokenBalance: { value: 10n ** 30n },
       embeddedEthBalance: { value: 10n ** 30n },
-      writeContractAsync: options.writeContractAsync ?? (async () => HASH),
-      sendTransactionSilent: options.sendTransactionSilent ?? (async () => HASH),
+      writeContractAsync: durableWriteContract,
+      sendTransactionSilent: durableSilentSend,
       sendTransactionFromExternal: options.sendTransactionFromExternal ?? (async () => HASH),
       publicClient,
       refetchEmbeddedEthBalance: () => {
@@ -1033,10 +1106,13 @@ async function testResolverSuccessWiring() {
   assert.deepEqual(order, ["simulate", "write"], "resolver claim simulation must precede wallet submission");
   assert.equal(writeInput?.functionName, "claimResolverRewards");
   assert.equal(writeInput?.chainId, APP_CHAIN_ID);
+  assert.equal(writeInput?.account, EXTERNAL_ACTOR);
+  assert.equal(writeInput?.nonce, TRACKED_NONCE + 1);
   assert.equal(writeInput?.gas, 120_000n);
   assert.equal(resolverRefetches, 2, "successful claims must refresh both resolver reward reads");
   assert.ok(hasNotification(notifications, "success", "Resolver rewards claimed"));
   assert.ok(notifications.at(-1)?.message.includes(HASH));
+  assert.equal(storageData.size, 0, "a confirmed connected resolver claim must release its durable intent");
 }
 
 async function testResolverPendingAndRevertedStates() {
@@ -1052,6 +1128,8 @@ async function testResolverPendingAndRevertedStates() {
       assert.equal(tx.to.toLowerCase(), CONTRACT_ADDRESS.toLowerCase());
       assert.equal(tx.gas, 120_000n);
       assert.ok(tx.data?.startsWith("0x"));
+      assert.equal(tx.contractIntent?.contract.toLowerCase(), CONTRACT_ADDRESS.toLowerCase());
+      assert.equal(tx.contractIntent?.calldata, tx.data);
       return HASH;
     },
   });
@@ -1062,6 +1140,45 @@ async function testResolverPendingAndRevertedStates() {
       tone === "info" && message.includes("still pending confirmation") && message.includes(HASH)
     ),
   );
+  assert.equal(storageData.size, 1, "a pending embedded resolver claim must retain its durable intent");
+
+  resetRuntimeState();
+  resolverRewardsByActor.set(EXTERNAL_ACTOR.toLowerCase(), 5n);
+  const connectedPendingNotifications: Notification[] = [];
+  const connectedPendingHook = createHookRenderer({
+    connectedWalletAddress: EXTERNAL_ACTOR,
+    notifications: connectedPendingNotifications,
+    resolverReceiptMode: "pending",
+  });
+  await connectedPendingHook.result.handleClaimConnectedResolverRewards();
+  assert.ok(
+    connectedPendingNotifications.some(({ message, tone }) =>
+      tone === "info" && message.includes("still pending confirmation") && message.includes(HASH)
+    ),
+  );
+  assert.equal(storageData.size, 1, "a pending connected resolver claim must retain its durable intent");
+
+  resetRuntimeState();
+  resolverRewardsByActor.set(EMBEDDED_ACTOR.toLowerCase(), 5n);
+  const embeddedSuccessNotifications: Notification[] = [];
+  const embeddedSuccessHook = createHookRenderer({
+    notifications: embeddedSuccessNotifications,
+    resolverReceiptMode: "success",
+  });
+  await embeddedSuccessHook.result.handleClaimEmbeddedResolverRewards();
+  assert.ok(hasNotification(embeddedSuccessNotifications, "success", "Resolver rewards claimed"));
+  assert.equal(storageData.size, 0, "a confirmed exact embedded resolver claim must release its durable intent");
+
+  resetRuntimeState();
+  resolverRewardsByActor.set(EMBEDDED_ACTOR.toLowerCase(), 5n);
+  const embeddedRevertedNotifications: Notification[] = [];
+  const embeddedRevertedHook = createHookRenderer({
+    notifications: embeddedRevertedNotifications,
+    resolverReceiptMode: "reverted",
+  });
+  await embeddedRevertedHook.result.handleClaimEmbeddedResolverRewards();
+  assert.ok(hasNotification(embeddedRevertedNotifications, "danger", "reverted"));
+  assert.equal(storageData.size, 0, "a stably reverted exact embedded resolver claim must release its durable intent");
 
   resetRuntimeState();
   resolverRewardsByActor.set(EXTERNAL_ACTOR.toLowerCase(), 5n);
@@ -1074,6 +1191,45 @@ async function testResolverPendingAndRevertedStates() {
   await revertedHook.result.handleClaimConnectedResolverRewards();
   assert.ok(hasNotification(revertedNotifications, "danger", "reverted on-chain"));
   assert.ok(revertedNotifications.some(({ message }) => message.includes("No funds were moved")));
+  assert.equal(storageData.size, 0, "a stably reverted connected resolver claim must release its durable intent");
+}
+
+async function testEmbeddedResolverActorSwitchStillResolvesTerminalIntent() {
+  resetRuntimeState();
+  resolverRewardsByActor.set(EMBEDDED_ACTOR.toLowerCase(), 5n);
+  resolverRewardsByActor.set(OTHER_ACTOR.toLowerCase(), 5n);
+  const notifications: Notification[] = [];
+  const receiptGate = deferred<StableReceipt>();
+  const firstNonceReader: TestNonceReader = async ({ blockTag }) =>
+    blockTag === "latest" ? TRACKED_NONCE : TRACKED_NONCE + 1;
+  const receiptClients = [
+    {
+      ...createReceiptClient("rpc-one.example.com", firstNonceReader, () => "success"),
+      waitForTransactionReceipt: async () => receiptGate.promise,
+    },
+    {
+      ...createReceiptClient("rpc-two.example.net", firstNonceReader, () => "success"),
+      waitForTransactionReceipt: async () => receiptGate.promise,
+    },
+  ] as const;
+  const hook = createHookRenderer({
+    notifications,
+    resolverReceiptMode: "success",
+    walletTransferReceiptClients: receiptClients,
+  });
+
+  const claim = hook.result.handleClaimEmbeddedResolverRewards();
+  await flushMicrotasks();
+  await flushMicrotasks();
+  assert.equal(storageData.size, 1, "the submitted claim must be durable while finality is pending");
+  hook.rerender({ embeddedWalletAddress: OTHER_ACTOR });
+  receiptGate.resolve(receiptFor("success"));
+  await claim;
+  assert.equal(
+    storageData.size,
+    0,
+    "terminal exact evidence must clear the original actor intent even after the UI actor changes",
+  );
 }
 
 async function testResolverRejectionAndProviderRedaction() {
@@ -1092,6 +1248,7 @@ async function testResolverRejectionAndProviderRedaction() {
     message: "Resolver reward claim rejected in wallet.",
     tone: "info",
   });
+  assert.equal(storageData.size, 0, "a proven pre-broadcast connected rejection must release its lease");
 
   resetRuntimeState();
   resolverRewardsByActor.set(EXTERNAL_ACTOR.toLowerCase(), 5n);
@@ -1107,6 +1264,7 @@ async function testResolverRejectionAndProviderRedaction() {
   await providerHook.result.handleClaimConnectedResolverRewards();
   assert.ok(hasNotification(providerNotifications, "danger", "wallet provider"));
   assertNoRawNeedle(providerNotifications, rawNeedle);
+  assert.equal(storageData.size, 1, "an ambiguous connected provider failure must retain the duplicate-send block");
 }
 
 async function main() {
@@ -1139,9 +1297,10 @@ async function main() {
   await testEmbeddedResolverStaleActorStopsSink();
   await testResolverSuccessWiring();
   await testResolverPendingAndRevertedStates();
+  await testEmbeddedResolverActorSwitchStillResolvesTerminalIntent();
   await testResolverRejectionAndProviderRedaction();
 
-  console.log("wallet actions hook behavior tests passed (22 cases)");
+  console.log("wallet actions hook behavior tests passed (23 cases)");
 }
 
 void main().catch((error) => {
