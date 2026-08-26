@@ -138,6 +138,12 @@ under [`docs/archive/`](archive/).
       Budget/concurrency denial occurs before witness calls. Focused quorum and
       shared-limiter x2, TypeScript, audit x2/self-test, full P1 hardening
       `41/41`, diff, and protected-DB checks pass with mocked providers/Valkey.
+- [x] Fix the medium durable chat-profile growth finding in local commit
+      `6d9f60411`: the table is atomically capped at `2000`; existing wallets
+      may update at capacity, while a new wallet gets no insert/revision bump
+      and explicit `503`. Route-matrix x2 at exact capacity, isolated storage
+      x2, TypeScript, audit x2/self-test, full P1 hardening `41/41`, diff, and
+      protected-DB checks pass without deleting any profile.
 - [ ] Run and seal a new supported Standard scan on the eventual post-fix final
       SHA. The `53846fe…` scan does not prove later source revisions.
 - [ ] Obtain green hosted Linux/Windows CI for the exact final commit.

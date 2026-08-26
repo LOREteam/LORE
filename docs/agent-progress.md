@@ -58,6 +58,17 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   diff hygiene, protected DB identity, and final-source P1 hardening `41/41` in
   `271199ms` pass. Provider and Valkey calls were mocked; deployed topology proof
   and the next detached supported scan remain open.
+- Current child `6d9f60411729adb6aecce94bcd33d8e9503752c4` fixes the
+  medium durable chat-profile growth finding. The shared table has an atomic
+  `2000`-row ceiling: an existing authenticated wallet can still update at the
+  ceiling, while a new wallet gets no insert/revision change and an explicit
+  no-store `503`; no profile is evicted. Route-matrix x2 filled isolated SQLite
+  exactly to capacity and passed `85` black-box requests each; isolated public
+  read-model/storage x2, TypeScript, audit x2 (`5833/6357`, `91.76%`), self-test
+  `17/17`, diff hygiene, protected DB identity, and final-source P1 hardening
+  `41/41` in `271848ms` pass. This completes local fixes for the scan's five
+  medium findings only; post-fix detached reproduction and supported scan remain
+  required, and both high contract findings plus two low findings stay open.
 - The current tested code baseline and parent of this documentation-only packet
   is `99666ae20`. Exact SHA `75881579d` passed P1 hardening in the full
   prelaunch report but failed the later business row because the trusted-npm

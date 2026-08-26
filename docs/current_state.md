@@ -59,6 +59,18 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   self-test `17/17`, and exact final-source P1 hardening passed `41/41` in
   `271199ms`. Protected SQLite identity is exact. Tests used only mocked RPC and
   Valkey responses; real deployed multi-replica runtime proof remains open.
+- Current child `6d9f60411` closes the scan's unbounded durable chat-profile
+  growth finding without deleting user data. `chat_profiles` is capped at
+  `2000` rows inside the existing `BEGIN IMMEDIATE` storage transaction:
+  authenticated updates to an existing wallet remain allowed at capacity,
+  while a new wallet receives explicit `503` before insert or revision bump.
+  Route-matrix behavior passed twice with a temporary DB filled exactly to the
+  cap (`85` black-box requests each), isolated public read-model/storage behavior
+  passed twice, TypeScript passed, audit x2 reports `5833/6357` behavioral
+  assertions (`91.76%`) with self-test `17/17`, and exact final-source P1
+  hardening passed `41/41` in `271848ms`. Protected SQLite identity is exact.
+  All five medium scan findings now have local fixes, but a fresh detached seal
+  and supported post-fix scan are still required before claiming remediation.
 - Current tested code baseline `99666ae20` closes the trusted-npm
   release-operations fixture failure exposed by the full prelaunch run at exact
   SHA `75881579d`. P1 hardening passed in that report, but the business row
