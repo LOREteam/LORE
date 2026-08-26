@@ -1025,8 +1025,8 @@ export function runJackpotAndRebateSecurityTests() {
   );
   assert.match(
     rebateSource,
-    /const confirmClaimBatch = useCallback[\s\S]*waitForClaimTransactionReceiptAgreement\([\s\S]*if \(confirmation === "confirmed"\) return;/,
-    "Safety Pool confirmation must require shared quorum and finality before reporting success",
+    /const confirmClaimBatch = useCallback[\s\S]*waitForTrackedClaimTransactionReceiptAgreement\([\s\S]*if \(confirmation === "confirmed"\) return;/,
+    "Safety Pool confirmation must require shared quorum, finality, and terminal durable-intent resolution before reporting success",
   );
   assert.match(
     rebateSource,

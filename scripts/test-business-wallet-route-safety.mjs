@@ -310,8 +310,8 @@ export async function runWalletAndRouteSafetyTests() {
   const walletActionsNonceRecoverySource = readFileSync("app/hooks/useWalletActions.ts", "utf8");
   assert.match(
     walletActionsNonceRecoverySource,
-    /function normalizePendingTransactionNonce[\s\S]*typeof value === "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*const latestNonce = normalizePendingTransactionNonce\(latestNonceRaw\)[\s\S]*const pendingNonce = normalizePendingTransactionNonce\(pendingNonceRaw\)[\s\S]*Pending transaction nonce evidence is unavailable or unsafe/,
-    "wallet settings pending-tx recovery must reject unsafe latest/pending nonce evidence before exposing a nonce gap",
+    /function normalizePendingTransactionNonce[\s\S]*typeof value === "bigint"[\s\S]*value > BigInt\(Number\.MAX_SAFE_INTEGER\)[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*const normalizedEvidence = nonceEvidence\.map\(\(\[latest, pending\]\) => \(\{[\s\S]*latest: normalizePendingTransactionNonce\(latest\)[\s\S]*pending: normalizePendingTransactionNonce\(pending\)[\s\S]*firstEvidence\.latest === null[\s\S]*secondEvidence\.pending === null[\s\S]*firstEvidence\.pending < firstEvidence\.latest[\s\S]*secondEvidence\.pending < secondEvidence\.latest[\s\S]*Pending transaction nonce evidence is unavailable or unsafe[\s\S]*firstEvidence\.latest !== secondEvidence\.latest[\s\S]*firstEvidence\.pending !== secondEvidence\.pending[\s\S]*independent RPCs disagree/,
+    "wallet settings pending-tx recovery must reject unsafe or disagreeing two-origin nonce evidence before exposing a nonce gap",
   );
   assert.doesNotMatch(
     walletActionsNonceRecoverySource,
