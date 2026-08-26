@@ -110,6 +110,18 @@ export async function executeReservedMiningWalletSink<T extends ReservedMiningWa
   }
 }
 
+export function buildReservedMiningWriteRequest(
+  args: Record<string, unknown>,
+  actor: `0x${string}`,
+  nonce: number,
+) {
+  return {
+    ...args,
+    account: actor,
+    nonce,
+  };
+}
+
 export function settleRecoveredMiningAttempt(
   recovery: PendingMiningTxRecovery,
   clear: () => void,
@@ -327,7 +339,7 @@ export function useMiningStandardBetPath({
         }
         throw new Error("Requested mining nonce does not match verified pending nonce evidence.");
       }
-      return pendingState;
+      return { ...pendingState, nonce: pendingState.nonce };
     },
     [agreementClients],
   );
@@ -371,8 +383,9 @@ export function useMiningStandardBetPath({
         await epochWriteGuard.assertBeforeWalletWrite();
         const actor = getActorAddress();
         if (!actor) throw new Error("Wallet actor is unavailable before mining submission.");
+        const reservedActor = actor as `0x${string}`;
         const pendingState = await reserveSubmission(
-          actor as `0x${string}`,
+          reservedActor,
           calldata,
           targetEpoch,
           normalizedTiles,
@@ -382,10 +395,9 @@ export function useMiningStandardBetPath({
         const hash = await executeReservedMiningWalletSink(
           pendingState,
           epochWriteGuard.assertBeforeWalletWrite,
-          () => writeContractAsync({
-            ...args,
-            nonce: pendingState.nonce,
-          }),
+          () => writeContractAsync(
+            buildReservedMiningWriteRequest(args, reservedActor, pendingState.nonce),
+          ),
         );
         return { hash, pendingState };
       };

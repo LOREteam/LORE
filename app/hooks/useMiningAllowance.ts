@@ -82,6 +82,7 @@ export function buildDirectApprovalWriteRequest(
   approvalNonce: number,
   requiredAmount: bigint,
   approveOverrides: GasOverrides | undefined,
+  actor: `0x${string}`,
 ) {
   assertKeeperFeeBudget(approveOverrides, MIN_GAS_APPROVE, APP_CHAIN_ID, "approval");
   return {
@@ -90,6 +91,7 @@ export function buildDirectApprovalWriteRequest(
     abi: TOKEN_ABI,
     functionName: "approve" as const,
     args: [CONTRACT_ADDRESS, assertExactApprovalAmount(requiredAmount)] as const,
+    account: actor,
     chainId: APP_CHAIN_ID,
     nonce: approvalNonce,
     gas: MIN_GAS_APPROVE,
@@ -337,7 +339,7 @@ export function useMiningAllowance({
                 reservation,
                 async () => assertBeforeSend?.(),
                 async () => readWriteContractAsync()(
-                  buildDirectApprovalWriteRequest(approvalNonce, requiredAmount, approveOverrides),
+                  buildDirectApprovalWriteRequest(approvalNonce, requiredAmount, approveOverrides, actor),
                 ) as Promise<`0x${string}`>,
               );
             }

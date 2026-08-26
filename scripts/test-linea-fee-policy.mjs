@@ -12,6 +12,7 @@ const lineaFees = lineaFeesModule.default ?? lineaFeesModule;
 const miningAllowance = miningAllowanceModule.default ?? miningAllowanceModule;
 const miningRuntimeHelpers = miningRuntimeHelpersModule.default ?? miningRuntimeHelpersModule;
 const miningShared = miningSharedModule.default ?? miningSharedModule;
+const DIRECT_APPROVAL_ACTOR = "0x1111111111111111111111111111111111111111";
 
 assert.equal(
   lineaFees.assertNormalFeeBudget(
@@ -281,7 +282,7 @@ assert.equal(
 const miningAllowanceSource = readFileSync("app/hooks/useMiningAllowance.ts", "utf8");
   assert.match(
     miningAllowanceSource,
-    /\} else \{\s*approveHash = await executeReservedMiningApprovalWalletSink\(\s*reservation,\s*async \(\) => assertBeforeSend\?\.\(\),\s*async \(\) => readWriteContractAsync\(\)\(\s*buildDirectApprovalWriteRequest\(approvalNonce, requiredAmount, approveOverrides\)/,
+    /\} else \{\s*approveHash = await executeReservedMiningApprovalWalletSink\(\s*reservation,\s*async \(\) => assertBeforeSend\?\.\(\),\s*async \(\) => readWriteContractAsync\(\)\(\s*buildDirectApprovalWriteRequest\(approvalNonce, requiredAmount, approveOverrides, actor\)/,
     "the guarded approval request must be built inside the reserved direct wallet sink",
   );
 
@@ -289,8 +290,10 @@ const directLegacyApproval = miningAllowance.buildDirectApprovalWriteRequest(
   7,
   123_456n,
   { gasPrice: 100_000_000n },
+  DIRECT_APPROVAL_ACTOR,
 );
 assert.equal(directLegacyApproval.args[1], 123_456n, "direct approval must grant exactly the required mining amount");
+assert.equal(directLegacyApproval.account, DIRECT_APPROVAL_ACTOR, "direct approval must bind the reserved actor at the wallet request");
 const silentApproval = decodeFunctionData({
   abi: directLegacyApproval.abi,
   data: miningAllowance.buildMiningApprovalCalldata(654_321n),
@@ -313,6 +316,7 @@ const attemptedGasOverride = miningAllowance.buildDirectApprovalWriteRequest(
   7,
   42n,
   { gasPrice: 100_000_000n, gas: 9_000_000n },
+  DIRECT_APPROVAL_ACTOR,
 );
 assert.equal(
   attemptedGasOverride.gas,
@@ -324,18 +328,19 @@ const directEip1559Approval = miningAllowance.buildDirectApprovalWriteRequest(
   8,
   900n,
   { maxFeePerGas: 1_000_000_000n, maxPriorityFeePerGas: 20_000_000n },
+  DIRECT_APPROVAL_ACTOR,
 );
 assert.equal(directEip1559Approval.args[1], 900n, "exact approval must be preserved with EIP-1559 fees");
 assert.equal(directEip1559Approval.gas, 90_000n, "EIP-1559 approval must carry the same fixed gas limit");
 assert.equal(directEip1559Approval.maxFeePerGas, 1_000_000_000n);
 assert.equal(directEip1559Approval.maxPriorityFeePerGas, 20_000_000n);
 assert.throws(
-  () => miningAllowance.buildDirectApprovalWriteRequest(9, 1n, { gasPrice: 2_000_000_001n }),
+  () => miningAllowance.buildDirectApprovalWriteRequest(9, 1n, { gasPrice: 2_000_000_001n }, DIRECT_APPROVAL_ACTOR),
   /linea_fee_field_cap_exceeded field=gasPrice/,
   "an adversarial legacy approval fee must fail before the wallet prompt",
 );
 assert.throws(
-  () => miningAllowance.buildDirectApprovalWriteRequest(10, 1n, undefined),
+  () => miningAllowance.buildDirectApprovalWriteRequest(10, 1n, undefined, DIRECT_APPROVAL_ACTOR),
   /linea_fee_policy_missing_overrides/,
   "direct approval must fail closed rather than let the wallet choose unbounded fees",
 );

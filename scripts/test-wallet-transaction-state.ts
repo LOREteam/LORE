@@ -5,6 +5,7 @@ import { assertPendingTxRepairNonceIsUntracked } from "../app/hooks/useWalletAct
 import { didPreferredMiningActorChange } from "../app/hooks/useMiningRuntimeState";
 import {
   createMiningEpochWriteGuard,
+  buildReservedMiningWriteRequest,
   executeReservedMiningWalletSink,
   settleRecoveredMiningAttempt,
   shouldClearDefinitelyUnsentMiningReservation,
@@ -75,6 +76,13 @@ async function main() {
   const boundaryContract = "0x6666666666666666666666666666666666666666" as const;
   const boundarySpender = "0x7777777777777777777777777777777777777777" as const;
   const boundaryHash = `0x${"e".repeat(64)}` as `0x${string}`;
+  const reservedWrite = buildReservedMiningWriteRequest(
+    { address: boundaryContract, functionName: "placeBatchBetsBitmapForEpoch" },
+    boundaryActor,
+    17,
+  );
+  assert.equal(reservedWrite.account, boundaryActor, "the wallet request must bind the actor whose nonce was reserved");
+  assert.equal(reservedWrite.nonce, 17, "the wallet request must bind the exact reserved nonce");
   const priorWindow = globalThis.window;
   const priorNavigator = globalThis.navigator;
   const boundaryStorage = new Map<string, string>();
