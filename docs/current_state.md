@@ -10,7 +10,21 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
-- Current tested code baseline `20ae744f2` extends the bounded prelaunch policy
+- Current tested code baseline `99666ae20` closes the trusted-npm
+  release-operations fixture failure exposed by the full prelaunch run at exact
+  SHA `75881579d`. P1 hardening passed in that report, but the business row
+  failed because the hardened minimal `PATH` correctly could not resolve bare
+  `git` and then bare `powershell.exe` inside the Windows campaign fixture. The
+  test-only fixture now resolves the existing allowlisted absolute Git and
+  fixed System32 PowerShell paths before launching its nested child; production
+  trusted-tool boundaries are unchanged. Minimal-`PATH` focused execution
+  passed twice, and the actual trusted-npm full business summary passed in
+  `407004ms` with every proof group true, zero assertion failures, and no
+  timeout. Syntax, focused ESLint, audit x2, self-test `17/17`, diff hygiene,
+  exact manifest/digests, protected DB identity, and independent review with no
+  P0--P3 finding pass. A new detached clean-SHA full prelaunch/local seal is
+  still required; this commit is not final-SHA evidence.
+- Parent tested code baseline `20ae744f2` extends the bounded prelaunch policy
   after exact SHA `964284caa` exposed a second real watchdog defect. Its full
   report killed `test:p1-hardening:all:summary` at exactly `300000ms`; the same
   runner then passed standalone `42/42` in `296463ms`, proving that the generic

@@ -9,7 +9,23 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Continuation point
 
 - The current tested code baseline and parent of this documentation-only packet
-  is `20ae744f2`. Exact SHA `964284caa` passed fresh `npm ci`, dependency policy,
+  is `99666ae20`. Exact SHA `75881579d` passed P1 hardening in the full
+  prelaunch report but failed the later business row because the trusted-npm
+  minimal `PATH` could not resolve bare `git`, then bare `powershell.exe`, in
+  the Windows release-operations campaign fixture. The test-only fixture now
+  resolves the existing allowlisted absolute Git executable and fixed
+  System32 PowerShell directory before launching its nested child; the shared
+  production trusted `PATH` remains unchanged. Minimal-`PATH` focused runs
+  passed twice, and the complete business summary through the actual hardened
+  trusted-npm runner passed in `407004ms`, with every API/wallet/state-machine
+  proof true, zero assertion failures, `childExitCode=0`, and no timeout.
+  Syntax, focused ESLint, audit x2 (`5821/6345`, `524` source operands,
+  `91.74%`), self-test `17/17`, diff hygiene, protected DB identity, exact
+  manifest/digests, and independent review with no P0--P3 finding pass. The
+  next step is a new immutable SHA and a complete detached fresh-`npm ci`
+  prelaunch/local seal.
+- Parent tested code baseline `20ae744f2` is the bounded prelaunch policy
+  correction. Exact SHA `964284caa` passed fresh `npm ci`, dependency policy,
   full `check-local`, V9, V10 offline identity, and L1--L17, but its full
   prelaunch report exposed a second watchdog defect: P1 hardening was killed at
   exactly `300000ms`. The same runner passed standalone `42/42` in `296463ms`,

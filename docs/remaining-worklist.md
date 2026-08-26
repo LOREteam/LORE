@@ -33,6 +33,18 @@ under [`docs/archive/`](archive/).
       `npm ci`; run dependency gates, full local/prelaunch gates, hermetic
       build, typecheck, supported browser/HTTP smoke, V10 properties, and DB
       invariants when disk permits.
+- [x] Diagnose the trusted-npm release-operations failure from exact SHA
+      `75881579d`: P1 hardening passed, while the later business row failed
+      because its Windows campaign fixture invoked bare `git` and nested bare
+      `powershell.exe` under the intentionally minimal trusted `PATH`. Commit
+      `99666ae20` resolves the existing allowlisted absolute Git and fixed
+      System32 PowerShell paths only for that test child; production trusted
+      execution remains unchanged. Minimal-`PATH` focused runs x2 and the full
+      business summary through trusted npm pass in `407004ms` with every proof
+      true, zero failures, and no timeout. Syntax, ESLint, audit x2, self-test,
+      protected DB identity, exact manifest/digests, and independent review
+      with no P0--P3 finding pass. A new clean-SHA full prelaunch/local rerun is
+      still required.
 - [x] Diagnose the current final-SHA prelaunch failure. The full isolated
       business suite passed on exact clean SHA `7918fba2a` in `387897ms` when
       given a diagnostic `600000ms` child limit, proving the former equal
