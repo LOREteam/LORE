@@ -15,10 +15,10 @@ import { getExplorerTxUrl } from "../lib/explorerLinks";
 import { readJsonResponse } from "../lib/readJsonResponse";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 import {
-  waitForClaimTransactionReceiptAgreement,
+  waitForTrackedClaimTransactionReceiptAgreement,
   type ClaimTransactionIntent,
 } from "../lib/claimTransactionIntent";
-import { acquireEoaNonceLockLease } from "../lib/eoaNonceLock";
+import type { WalletContractIntentDetails } from "../lib/walletTransferIntent";
 import { isAmbiguousPendingTxError } from "./useMining.shared";
 
 type EpochTuple = readonly [bigint, bigint, bigint, boolean];
@@ -75,7 +75,7 @@ function getPostSendClaimVerificationHash(error: unknown): `0x${string}` | null 
 }
 
 export function useDeepRewardScan(
-  sendTransactionSilent?: (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint }) => Promise<`0x${string}`>,
+  sendTransactionSilent?: (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; contractIntent?: WalletContractIntentDetails }) => Promise<`0x${string}`>,
   onNotify?: (message: string, tone?: "info" | "success" | "warning" | "danger") => void,
   preferredAddress?: string | null,
 ) {
@@ -115,7 +115,7 @@ export function useDeepRewardScan(
 
   const waitReceipt = useCallback(
     async (hash: `0x${string}`, intent: ClaimTransactionIntent): Promise<ReceiptState> => {
-      return waitForClaimTransactionReceiptAgreement(intent, hash, TX_RECEIPT_TIMEOUT_MS);
+      return waitForTrackedClaimTransactionReceiptAgreement(intent, hash, TX_RECEIPT_TIMEOUT_MS);
     },
     [],
   );
@@ -392,12 +392,15 @@ export function useDeepRewardScan(
     if (mountedRef.current) {
       setClaiming(true);
     }
-    let claimLease: { release: () => void } | null = null;
     try {
-      claimLease = await acquireEoaNonceLockLease({ chainId: APP_CHAIN_ID, actor: claimActor });
       const { data, gas } = await prepareClaimTx(epochId);
       if (activeClaimAddressRef.current !== claimActor) return;
-      const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
+      const hash = await sendTransactionSilent({
+        to: CONTRACT_ADDRESS,
+        data,
+        gas,
+        contractIntent: { contract: CONTRACT_ADDRESS, calldata: data },
+      });
       let receiptState: ReceiptState;
       try {
         receiptState = await waitReceipt(hash, {
@@ -440,7 +443,6 @@ export function useDeepRewardScan(
         onNotify?.("Reward claim rejected in wallet.", "info");
       }
     } finally {
-      claimLease?.release();
       claimInFlightRef.current = false;
       if (mountedRef.current) {
         setClaiming(false);
@@ -455,9 +457,7 @@ export function useDeepRewardScan(
     if (mountedRef.current) {
       setClaiming(true);
     }
-    let claimLease: { release: () => void } | null = null;
     try {
-      claimLease = await acquireEoaNonceLockLease({ chainId: APP_CHAIN_ID, actor: claimActor });
       const all = [...wins];
       const claimedEpochs = new Set<string>();
       let skippedEpochs = 0;
@@ -476,7 +476,12 @@ export function useDeepRewardScan(
           claimActorChanged = true;
           return null;
         }
-        const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
+        const hash = await sendTransactionSilent({
+          to: CONTRACT_ADDRESS,
+          data,
+          gas,
+          contractIntent: { contract: CONTRACT_ADDRESS, calldata: data },
+        });
         lastRewardClaimTxHash = hash;
         claimTxCount += 1;
         let receiptState: ReceiptState;
@@ -510,7 +515,12 @@ export function useDeepRewardScan(
           claimActorChanged = true;
           return null;
         }
-        const hash = await sendTransactionSilent({ to: CONTRACT_ADDRESS, data, gas });
+        const hash = await sendTransactionSilent({
+          to: CONTRACT_ADDRESS,
+          data,
+          gas,
+          contractIntent: { contract: CONTRACT_ADDRESS, calldata: data },
+        });
         lastRewardClaimTxHash = hash;
         claimTxCount += 1;
         let receiptState: ReceiptState;
@@ -633,7 +643,6 @@ export function useDeepRewardScan(
         onNotify?.("Reward claim rejected in wallet.", "info");
       }
     } finally {
-      claimLease?.release();
       claimInFlightRef.current = false;
       if (mountedRef.current) {
         setClaiming(false);

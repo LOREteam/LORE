@@ -19,9 +19,9 @@ import {
 import {
   ClaimTransactionIntentError,
   type ClaimTransactionIntent,
-  waitForClaimTransactionReceiptAgreement,
+  waitForTrackedClaimTransactionReceiptAgreement,
 } from "../lib/claimTransactionIntent";
-import { acquireEoaNonceLockLease } from "../lib/eoaNonceLock";
+import type { WalletContractIntentDetails } from "../lib/walletTransferIntent";
 import { isAmbiguousPendingTxError } from "./useMining.shared";
 
 export { isRewardClaimWindowOpen } from "../lib/rewardScanPolicy";
@@ -30,7 +30,7 @@ interface UseRewardScannerOptions {
   enabled?: boolean;
   isPageVisible?: boolean;
   preferredAddress?: `0x${string}` | string | null;
-  sendTransactionSilent?: (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint }) => Promise<`0x${string}`>;
+  sendTransactionSilent?: (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; contractIntent?: WalletContractIntentDetails }) => Promise<`0x${string}`>;
   onNotify?: (message: string, tone?: "info" | "success" | "warning" | "danger") => void;
 }
 
@@ -526,7 +526,7 @@ export function useRewardScanner(
 
   const waitReceipt = useCallback(
     async (hash: `0x${string}`, intent: ClaimTransactionIntent): Promise<ReceiptState> => {
-      return waitForClaimTransactionReceiptAgreement(intent, hash, TX_RECEIPT_TIMEOUT_MS);
+      return waitForTrackedClaimTransactionReceiptAgreement(intent, hash, TX_RECEIPT_TIMEOUT_MS);
     },
     [],
   );
@@ -971,13 +971,16 @@ export function useRewardScanner(
         setIsClaiming(true);
       }
       let submittedHash: `0x${string}` | null = null;
-      let claimLease: { release: () => void } | null = null;
       try {
-        claimLease = await acquireEoaNonceLockLease({ chainId: APP_CHAIN_ID, actor: claimActor });
         notify?.("Preparing reward claim.", "info");
         const { data, gas } = await prepareClaimTx(epochId);
         if (activeClaimAddressRef.current !== claimActor) return;
-        const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
+        const hash = await silentSend({
+          to: CONTRACT_ADDRESS,
+          data,
+          gas,
+          contractIntent: { contract: CONTRACT_ADDRESS, calldata: data },
+        });
         submittedHash = hash;
         invalidateVerifiedRewardScanCache(claimActor, unclaimedWinsRef.current);
         if (mountedRef.current) {
@@ -1029,7 +1032,6 @@ export function useRewardScanner(
           notify?.("Reward claim rejected in wallet.", "info");
         }
       } finally {
-        claimLease?.release();
         claimInFlightRef.current = false;
         if (mountedRef.current) {
           setIsClaiming(false);
@@ -1046,10 +1048,7 @@ export function useRewardScanner(
     if (mountedRef.current) {
       setIsClaiming(true);
     }
-    let claimLease: { release: () => void } | null = null;
-
     try {
-      claimLease = await acquireEoaNonceLockLease({ chainId: APP_CHAIN_ID, actor: claimActor });
       const all = [...unclaimedWins];
       const claimedEpochs = new Set<string>();
       let skippedEpochs = 0;
@@ -1069,7 +1068,12 @@ export function useRewardScanner(
           claimActorChanged = true;
           return null;
         }
-        const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
+        const hash = await silentSend({
+          to: CONTRACT_ADDRESS,
+          data,
+          gas,
+          contractIntent: { contract: CONTRACT_ADDRESS, calldata: data },
+        });
         lastRewardClaimTxHash = hash;
         claimTxCount += 1;
         invalidateVerifiedRewardScanCache(claimActor, unclaimedWinsRef.current);
@@ -1103,7 +1107,12 @@ export function useRewardScanner(
           claimActorChanged = true;
           return null;
         }
-        const hash = await silentSend({ to: CONTRACT_ADDRESS, data, gas });
+        const hash = await silentSend({
+          to: CONTRACT_ADDRESS,
+          data,
+          gas,
+          contractIntent: { contract: CONTRACT_ADDRESS, calldata: data },
+        });
         lastRewardClaimTxHash = hash;
         claimTxCount += 1;
         invalidateVerifiedRewardScanCache(claimActor, unclaimedWinsRef.current);
@@ -1228,7 +1237,6 @@ export function useRewardScanner(
         notify?.("Reward claim rejected in wallet.", "info");
       }
     } finally {
-      claimLease?.release();
       claimInFlightRef.current = false;
       if (mountedRef.current) {
         setIsClaiming(false);

@@ -484,7 +484,7 @@ mock.module(moduleUrl("app/lib/eoaNonceLock.ts"), { namedExports: {
 mock.module(moduleUrl("app/hooks/useMining.shared.ts"), { namedExports: { isAmbiguousPendingTxError: () => false } });
 mock.module(moduleUrl("app/lib/claimTransactionIntent.ts"), { namedExports: {
   ClaimTransactionIntentError,
-  waitForClaimTransactionReceiptAgreement: async (intent, hash, timeout) => {
+  waitForTrackedClaimTransactionReceiptAgreement: async (intent, hash, timeout) => {
     receiptCalls.push({ intent, hash, timeout, storage: storageValues.get("lore:reward-scan:v3:" + actor) ?? null });
     if (receiptMode === "pending") return "pending";
     return "confirmed";
@@ -516,6 +516,7 @@ const render = () => hookMachine.render(() => useRewardScanner(100n, {
       data: transaction.data ?? null,
       value: transaction.value?.toString() ?? null,
       gas: transaction.gas?.toString() ?? null,
+      contractIntent: transaction.contractIntent ?? null,
     });
     if (${JSON.stringify(scenario)} === "single-lock") await sendGate;
     return sendCount === 1 ? HASH : OTHER_HASH;
@@ -894,6 +895,8 @@ export async function runRewardScannerTests() {
       contract: receiptIntentCall?.intent?.contract,
       contractMatchesSent: receiptIntentCall?.intent?.contract === receiptIntentProbe.sentTransactions[0]?.to,
       calldataMatchesSent: receiptIntentCall?.intent?.calldata === receiptIntentProbe.sentTransactions[0]?.data,
+      durableContractMatchesSent: receiptIntentProbe.sentTransactions[0]?.contractIntent?.contract === receiptIntentProbe.sentTransactions[0]?.to,
+      durableCalldataMatchesSent: receiptIntentProbe.sentTransactions[0]?.contractIntent?.calldata === receiptIntentProbe.sentTransactions[0]?.data,
       pendingNotification: receiptIntentProbe.notifications.some(
         ({ message, tone }) => tone === "info" && message.includes("still pending") && message.includes(primaryHash),
       ),
@@ -909,6 +912,8 @@ export async function runRewardScannerTests() {
       contract: CONTRACT_ADDRESS,
       contractMatchesSent: true,
       calldataMatchesSent: true,
+      durableContractMatchesSent: true,
+      durableCalldataMatchesSent: true,
       pendingNotification: true,
     },
     "reward claims must pass the exact sent intent to shared receipt agreement and preserve uncertain confirmation as pending",
@@ -945,7 +950,7 @@ export async function runRewardScannerTests() {
   );
   assert.match(
     rewardScannerSource,
-    /const claimReward[\s\S]*let submittedHash: `0x\$\{string\}` \| null = null;[\s\S]*const hash = await silentSend\(\{ to: CONTRACT_ADDRESS, data, gas \}\);[\s\S]*submittedHash = hash;[\s\S]*submittedHash && err instanceof ClaimTransactionIntentError[\s\S]*Claim transaction submitted and is still pending\. Rewards will refresh after confirmation\.[\s\S]*submittedHash/,
+    /const claimReward[\s\S]*let submittedHash: `0x\$\{string\}` \| null = null;[\s\S]*const hash = await silentSend\(\{[\s\S]*to: CONTRACT_ADDRESS,[\s\S]*contractIntent: \{ contract: CONTRACT_ADDRESS, calldata: data \}[\s\S]*\}\);[\s\S]*submittedHash = hash;[\s\S]*submittedHash && err instanceof ClaimTransactionIntentError[\s\S]*Claim transaction submitted and is still pending\. Rewards will refresh after confirmation\.[\s\S]*submittedHash/,
     "single reward claims must preserve the submitted hash as pending when post-send intent verification cannot be confirmed",
   );
   assertRewardScannerPresentation();
@@ -1043,7 +1048,7 @@ export async function runRewardScannerTests() {
   assert.match(deepRewardScanSource, /getExplorerTxUrl/, "deep reward claim notifications must include explorer links when a tx hash is available");
   assert.match(
     deepRewardScanSource,
-    /const waitReceipt = useCallback[\s\S]*waitForClaimTransactionReceiptAgreement\(intent, hash, TX_RECEIPT_TIMEOUT_MS\)/,
+    /const waitReceipt = useCallback[\s\S]*waitForTrackedClaimTransactionReceiptAgreement\(intent, hash, TX_RECEIPT_TIMEOUT_MS\)/,
     "deep reward claims must remain pending until shared quorum and finality confirmation succeeds",
   );
   assert.match(deepRewardScanSource, /readJsonResponse<ClaimCandidatePage>/, "deep reward candidate scans must use the bounded JSON response helper");
@@ -1051,9 +1056,9 @@ export async function runRewardScannerTests() {
   assert.doesNotMatch(deepRewardScanSource, /response\.json\(\)/, "deep reward candidate scans must not use unbounded response.json");
   assert.match(deepRewardScanSource, /const claimInFlightRef = useRef\(false\)[\s\S]*claimOne[\s\S]*claimInFlightRef\.current\) return;[\s\S]*claimInFlightRef\.current = true;[\s\S]*claimAllDeep[\s\S]*claimInFlightRef\.current\) return;[\s\S]*claimInFlightRef\.current = true;/, "deep reward claims must share a synchronous submission lock");
   assert.match(deepRewardScanSource, /claimOne[\s\S]*isAmbiguousPendingTxError\(err\)[\s\S]*!isUserRejection\(err\)[\s\S]*Reward claim rejected in wallet\./, "deep single reward claim must surface wallet rejection instead of silently clearing the claim state");
-  assert.match(deepRewardScanSource, /claimOne[\s\S]*const hash = await sendTransactionSilent\(\{ to: CONTRACT_ADDRESS, data, gas \}\);[\s\S]*try \{[\s\S]*receiptState = await waitReceipt\(hash, \{[\s\S]*actor: claimActor,[\s\S]*chainId: APP_CHAIN_ID,[\s\S]*contract: CONTRACT_ADDRESS,[\s\S]*calldata: data,[\s\S]*\}\);[\s\S]*isDefinitiveClaimRevertError\(err\)[\s\S]*markPostSendClaimVerificationError\(err, hash\)[\s\S]*const postSendHash = getPostSendClaimVerificationHash\(err\);[\s\S]*Claim transaction submitted and is still pending\. Rewards will refresh after confirmation\.[\s\S]*formatRewardClaimError\(err\)/, "deep single reward claim must bind receipt confirmation to its exact transaction intent and treat unknown post-send verification as pending before generic errors");
+  assert.match(deepRewardScanSource, /claimOne[\s\S]*const hash = await sendTransactionSilent\(\{[\s\S]*to: CONTRACT_ADDRESS,[\s\S]*contractIntent: \{ contract: CONTRACT_ADDRESS, calldata: data \}[\s\S]*\}\);[\s\S]*try \{[\s\S]*receiptState = await waitReceipt\(hash, \{[\s\S]*actor: claimActor,[\s\S]*chainId: APP_CHAIN_ID,[\s\S]*contract: CONTRACT_ADDRESS,[\s\S]*calldata: data,[\s\S]*\}\);[\s\S]*isDefinitiveClaimRevertError\(err\)[\s\S]*markPostSendClaimVerificationError\(err, hash\)[\s\S]*const postSendHash = getPostSendClaimVerificationHash\(err\);[\s\S]*Claim transaction submitted and is still pending\. Rewards will refresh after confirmation\.[\s\S]*formatRewardClaimError\(err\)/, "deep single reward claim must bind receipt confirmation to its exact durable transaction intent and treat unknown post-send verification as pending before generic errors");
   assert.match(deepRewardScanSource, /let claimRejected = false[\s\S]*if \(isUserRejection\(err\)\) \{[\s\S]*claimRejected = true[\s\S]*if \(claimRejected && claimedEpochs\.size === 0 && !pendingClaimTx\)[\s\S]*Reward claim rejected in wallet\./, "deep batch reward claim must surface wallet rejection when no prior claim transaction succeeded or remains pending");
   assert.match(deepRewardScanSource, /function isDefinitiveClaimRevertError\(error: unknown\)[\s\S]*startsWith\("transaction reverted"\)[\s\S]*function markPostSendClaimVerificationError\(error: unknown, hash: `0x\$\{string\}`\)[\s\S]*claimTxSubmitted = true[\s\S]*function getPostSendClaimVerificationHash\(error: unknown\)[\s\S]*claimTxSubmitted === true/, "deep reward post-send receipt verification errors must carry tx hashes unless the receipt is a definitive revert");
-  assert.match(deepRewardScanSource, /const hash = await sendTransactionSilent\(\{ to: CONTRACT_ADDRESS, data, gas \}\);[\s\S]*try \{[\s\S]*receiptState = await waitReceipt\(hash, \{[\s\S]*actor: claimActor,[\s\S]*chainId: APP_CHAIN_ID,[\s\S]*contract: CONTRACT_ADDRESS,[\s\S]*calldata: data,[\s\S]*\}\);[\s\S]*isDefinitiveClaimRevertError\(err\)[\s\S]*markPostSendClaimVerificationError\(err, hash\)[\s\S]*const postSendHash = getPostSendClaimVerificationHash\(err\);[\s\S]*pendingClaimTx = true;[\s\S]*break;/, "deep reward claim-all must bind receipt confirmation to its exact transaction intent and stop further sends after an unknown post-send verification state");
+  assert.match(deepRewardScanSource, /const hash = await sendTransactionSilent\(\{[\s\S]*to: CONTRACT_ADDRESS,[\s\S]*contractIntent: \{ contract: CONTRACT_ADDRESS, calldata: data \}[\s\S]*\}\);[\s\S]*try \{[\s\S]*receiptState = await waitReceipt\(hash, \{[\s\S]*actor: claimActor,[\s\S]*chainId: APP_CHAIN_ID,[\s\S]*contract: CONTRACT_ADDRESS,[\s\S]*calldata: data,[\s\S]*\}\);[\s\S]*isDefinitiveClaimRevertError\(err\)[\s\S]*markPostSendClaimVerificationError\(err, hash\)[\s\S]*const postSendHash = getPostSendClaimVerificationHash\(err\);[\s\S]*pendingClaimTx = true;[\s\S]*break;/, "deep reward claim-all must bind receipt confirmation to its exact durable transaction intent and stop further sends after an unknown post-send verification state");
   assert.match(deepRewardScanSource, /activeClaimAddressRef\.current = address\?\.toLowerCase\(\) \?\? null[\s\S]*const claimActor = address\.toLowerCase\(\)[\s\S]*activeClaimAddressRef\.current !== claimActor[\s\S]*claimActorChanged/, "deep reward claims must stop batches and stale state updates when the active wallet changes");
 }
