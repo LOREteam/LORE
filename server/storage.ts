@@ -16,6 +16,7 @@ import {
 import { db, dbPath, isDbShuttingDown } from "./db";
 
 const MAX_CHAT_MESSAGES = 100;
+export const MAX_CHAT_PROFILES = 2_000;
 const CURRENT_STORAGE_SCOPE = [
   getConfiguredLineaNetwork(),
   getConfiguredContractAddress(
@@ -2935,7 +2936,18 @@ export function getChatProfiles(wallets?: string[]) {
 }
 
 export function upsertChatProfile(wallet: string, profile: ChatProfileRow) {
-  runInTransaction(() => {
+  return runInTransaction(() => {
+    const normalizedWallet = normalizeWallet(wallet);
+    const existing = db.prepare(`
+      SELECT 1
+      FROM chat_profiles
+      WHERE wallet = ?
+    `).get(normalizedWallet);
+    if (!existing) {
+      const row = db.prepare("SELECT COUNT(*) AS count FROM chat_profiles").get();
+      if (Number(row?.count ?? 0) >= MAX_CHAT_PROFILES) return false;
+    }
+
     const result = db.prepare(`
       INSERT INTO chat_profiles(wallet, name, avatar, custom_avatar, updated_at)
       VALUES(?, ?, ?, ?, ?)
@@ -2945,13 +2957,14 @@ export function upsertChatProfile(wallet: string, profile: ChatProfileRow) {
         custom_avatar = excluded.custom_avatar,
         updated_at = excluded.updated_at
     `).run(
-      normalizeWallet(wallet),
+      normalizedWallet,
       profile.name,
       profile.avatar,
       profile.customAvatar,
       profile.updatedAt,
     );
     if (didStatementChangeRow(result)) bumpPublicReadModelRevision();
+    return true;
   }, "chat_profile");
 }
 

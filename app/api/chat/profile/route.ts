@@ -112,12 +112,18 @@ export async function PUT(request: NextRequest) {
       updatedAt: Date.now(),
     };
 
-    upsertChatProfile(walletAddress, {
+    const stored = upsertChatProfile(walletAddress, {
       name: payload.name,
       avatar: payload.avatar,
       customAvatar: payload.customAvatar,
       updatedAt: payload.updatedAt,
     });
+    if (!stored) {
+      return applyNoStoreHeaders(
+        NextResponse.json({ error: "Chat profile capacity reached" }, { status: 503 }),
+        { varyCookie: true },
+      );
+    }
     clearProfileCacheForWallet(walletAddress);
 
     return applyNoStoreHeaders(NextResponse.json({ ok: true }), { varyCookie: true });

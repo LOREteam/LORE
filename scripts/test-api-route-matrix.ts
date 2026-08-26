@@ -169,16 +169,17 @@ function assertNoProtectedPersistenceChanges(
   result: WorkerResult,
   label: string,
   allowedMockedFetchUrls: string[] = [],
-) {
-  const before = asRecord(result.before, `${label} persistence before`);
-  const after = asRecord(result.after, `${label} persistence after`);
-  assert.deepEqual(after, before, `${label} invalid/unauthenticated requests must not persist protected state`);
-  assert.deepEqual(before, {
+  expectedBefore: Record<string, number> = {
     adminSessions: 0,
     authProofLocks: 0,
     chatMessages: 0,
     chatProfiles: 0,
-  }, `${label} fixture must start empty`);
+  },
+) {
+  const before = asRecord(result.before, `${label} persistence before`);
+  const after = asRecord(result.after, `${label} persistence after`);
+  assert.deepEqual(after, before, `${label} invalid/unauthenticated requests must not persist protected state`);
+  assert.deepEqual(before, expectedBefore, `${label} fixture must start at its declared persistence boundary`);
   const mockedFetchUrls = Array.isArray(result.mockedFetchUrls)
     ? result.mockedFetchUrls.map(String)
     : [];
@@ -783,6 +784,19 @@ function validateChatProfile(result: WorkerResult) {
   assertErrorResponse(result.oversized, 413, "Profile payload too large", "chat profile oversized", true);
   assertErrorResponse(result.nameTooLong, 400, "Profile name is too long", "chat profile name limit", true);
   assertErrorResponse(result.unauthenticated, 401, "Chat auth required", "chat profile unauthenticated", true);
+  const existingAtCapacity = asSnapshot(result.existingAtCapacity, "chat profile existing at capacity");
+  assertJsonStatus(existingAtCapacity, 200, "chat profile existing at capacity");
+  assertNoStore(existingAtCapacity, "chat profile existing at capacity", true);
+  assertNoCors(existingAtCapacity, "chat profile existing at capacity");
+  assert.deepEqual(existingAtCapacity.json, { ok: true });
+  assertNoIssuedSessionCookie(existingAtCapacity, "chat profile existing at capacity");
+  assertErrorResponse(
+    result.newAtCapacity,
+    503,
+    "Chat profile capacity reached",
+    "chat profile new at capacity",
+    true,
+  );
   assertErrorResponse(
     result.getMissing,
     400,
@@ -802,7 +816,12 @@ function validateChatProfile(result: WorkerResult) {
     ["GET", "HEAD", "OPTIONS", "PUT"],
     "chat profile",
   );
-  assertNoProtectedPersistenceChanges(result, "chat profile");
+  assertNoProtectedPersistenceChanges(result, "chat profile", [], {
+    adminSessions: 0,
+    authProofLocks: 0,
+    chatMessages: 0,
+    chatProfiles: Number(result.maxChatProfiles),
+  });
   assertLogsRedacted(result, "chat profile", ["hostile.invalid.value", "must-not-persist"]);
 }
 

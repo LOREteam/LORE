@@ -1073,9 +1073,26 @@ async function runChatMessagesScenario() {
 
 async function runChatProfileScenario() {
   const readNetworkFetchUrls = installForbiddenNetworkFetch();
+  const { db } = await import("../../server/db");
+  const { MAX_CHAT_PROFILES } = await import("../../server/storage");
   const route = await loadRoute("chat-profile");
   const baseUrl = "https://playlore.xyz/api/chat/profile";
   const sessionCookie = chatSessionCookie(TEST_WALLET);
+  const newWalletCookie = chatSessionCookie(OTHER_WALLET);
+  const seed = db.prepare(`
+    INSERT INTO chat_profiles(wallet, name, avatar, custom_avatar, updated_at)
+    VALUES(?, NULL, NULL, NULL, 0)
+  `);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (let index = 0; index < MAX_CHAT_PROFILES; index += 1) {
+      seed.run(index === 0 ? TEST_WALLET : `capacity:${index}`);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
   const before = await persistenceState();
   const captured = await captureRouteLogs(async () => ({
     unsupportedType: await snapshotResponse(await dispatch(route, "PUT", baseUrl, {
@@ -1098,6 +1115,14 @@ async function runChatProfileScenario() {
       headers: jsonHeaders({ cookie: "lore_chat_session=hostile.invalid.value" }),
       body: JSON.stringify({ walletAddress: TEST_WALLET, name: "must-not-persist" }),
     })),
+    existingAtCapacity: await snapshotResponse(await dispatch(route, "PUT", baseUrl, {
+      headers: jsonHeaders({ cookie: sessionCookie }),
+      body: JSON.stringify({ walletAddress: TEST_WALLET, name: "Updated Miner" }),
+    })),
+    newAtCapacity: await snapshotResponse(await dispatch(route, "PUT", baseUrl, {
+      headers: jsonHeaders({ cookie: newWalletCookie }),
+      body: JSON.stringify({ walletAddress: OTHER_WALLET, name: "New Miner" }),
+    })),
     getMissing: await snapshotResponse(await dispatch(route, "GET", baseUrl, {
       headers: requestHeaders(),
     })),
@@ -1111,6 +1136,7 @@ async function runChatProfileScenario() {
   }));
   return {
     scenario: "chat-profile",
+    maxChatProfiles: MAX_CHAT_PROFILES,
     ...captured.value,
     before,
     after: await persistenceState(),
