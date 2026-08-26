@@ -475,6 +475,21 @@ export async function runClientIdentityAndRateLimitTests() {
             assert.match(redisKey, /^lore:rate-limit:api-shared-identity-probe:[a-f0-9]{32}:120000$/);
             assert.doesNotMatch(redisKey, /203\.0\.113\.(?:41|42)|behavior-proxy-secret|behavior-store-token/);
           }
+          const globalOptions = { bucket: "api-shared-global-probe", limit: 1, windowMs: 60_000 };
+          const firstGlobal = await sharedRateLimit.enforceSharedGlobalRateLimit(globalOptions);
+          const secondGlobal = await sharedRateLimit.enforceSharedGlobalRateLimit(globalOptions);
+          assert.equal(firstGlobal, null, "the first shared global admission must pass");
+          await assertRateLimitError(
+            secondGlobal,
+            429,
+            { error: "Too many requests", retryAfter: 60 },
+            "shared global admission across replicas",
+          );
+          assert.equal(counts.size, 3, "the global budget must add exactly one shared Redis key");
+          assert.equal(redisKeys.length, 5);
+          assert.equal(redisKeys[3], redisKeys[4], "all replicas must derive the same global budget key");
+          assert.match(redisKeys[3], /^lore:rate-limit:api-shared-global-probe:[a-f0-9]{32}:120000$/);
+          assert.doesNotMatch(redisKeys[3], /203\.0\.113\.|behavior-proxy-secret|behavior-store-token/);
         });
       });
     },

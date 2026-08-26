@@ -11,12 +11,16 @@ import {
 import { getStableLineaReadRpcs } from "../../../../config/publicConfig";
 import { APP_CHAIN, APP_NETWORK } from "../../_lib/dataBridge";
 import {
+  ChatSignatureRpcBusyError,
   createChatSignatureRpcWitnesses,
   verifyChatWalletMessage,
 } from "../../_lib/chatSignatureVerification";
 import { applyNoStoreHeaders } from "../../_lib/responseHeaders";
 import { logRouteError } from "../../_lib/routeError";
-import { enforceSharedRateLimit } from "../../_lib/sharedRateLimit";
+import {
+  enforceSharedGlobalRateLimit,
+  enforceSharedRateLimit,
+} from "../../_lib/sharedRateLimit";
 import { acquireExternalExpiringLock, requiresExternalSharedLock } from "../../_lib/externalRateLimit";
 import { clearChatSession, issueChatSession, readChatSession } from "../../_lib/chatSession";
 import { acquireExpiringLock } from "../../../../server/storage";
@@ -24,6 +28,15 @@ import { readBoundedJsonBody } from "../../_lib/boundedJsonBody";
 import { getTrustedAuthOrigin, isTrustedAuthUri } from "../../_lib/trustedAuthOrigin";
 
 const MAX_REQUEST_BODY_BYTES = 8_192;
+export const CHAT_AUTH_RPC_GLOBAL_LIMIT = 8;
+export const CHAT_AUTH_RPC_GLOBAL_WINDOW_MS = 60_000;
+
+class ChatAuthRpcAdmissionError extends Error {
+  constructor(readonly response: NextResponse) {
+    super("chat_auth_rpc_admission_denied");
+    this.name = "ChatAuthRpcAdmissionError";
+  }
+}
 
 const CHAT_AUTH_RPC_INPUT = [
   process.env.KEEPER_RPC_URL,
@@ -60,6 +73,14 @@ async function verifyChatSignature(address: `0x${string}`, message: string, sign
     message,
     signature,
     rpcWitnesses: CHAT_AUTH_RPC_WITNESSES,
+    beforeRpcVerification: async () => {
+      const limited = await enforceSharedGlobalRateLimit({
+        bucket: "api-chat-auth-rpc-outbound",
+        limit: CHAT_AUTH_RPC_GLOBAL_LIMIT,
+        windowMs: CHAT_AUTH_RPC_GLOBAL_WINDOW_MS,
+      });
+      if (limited) throw new ChatAuthRpcAdmissionError(limited);
+    },
   });
 }
 
@@ -149,6 +170,18 @@ export async function POST(request: NextRequest) {
     response.headers.set("x-chat-session-expires-at", String(expiresAt));
     return response;
   } catch (error) {
+    if (error instanceof ChatAuthRpcAdmissionError) {
+      return applyNoStoreHeaders(error.response, { varyCookie: true });
+    }
+    if (error instanceof ChatSignatureRpcBusyError) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { error: "Signature verification busy", retryAfter: 1 },
+          { status: 429, headers: { "Retry-After": "1" } },
+        ),
+        { varyCookie: true },
+      );
+    }
     logRouteError("api/chat/auth", error);
     const response = applyNoStoreHeaders(NextResponse.json({ error: "Internal error" }, { status: 500 }), { varyCookie: true });
     clearChatSession(response);

@@ -10,6 +10,8 @@ import {
 } from "viem";
 
 const REQUIRED_CHAT_SIGNATURE_RPC_WITNESSES = 2;
+const MAX_CONCURRENT_CHAT_SIGNATURE_RPC_VERIFICATIONS = 2;
+let activeChatSignatureRpcVerifications = 0;
 
 export type ChatSignatureRpcWitness = {
   canonicalHost: string;
@@ -27,6 +29,29 @@ export class ChatSignatureRpcQuorumError extends Error {
     super("chat_signature_independent_rpc_required count=2");
     this.name = "ChatSignatureRpcQuorumError";
   }
+}
+
+export class ChatSignatureRpcBusyError extends Error {
+  constructor() {
+    super("chat_signature_rpc_busy");
+    this.name = "ChatSignatureRpcBusyError";
+  }
+}
+
+function acquireChatSignatureRpcSlot() {
+  if (
+    activeChatSignatureRpcVerifications >=
+    MAX_CONCURRENT_CHAT_SIGNATURE_RPC_VERIFICATIONS
+  ) {
+    throw new ChatSignatureRpcBusyError();
+  }
+  activeChatSignatureRpcVerifications += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    activeChatSignatureRpcVerifications -= 1;
+  };
 }
 
 function parseCanonicalRpcHost(endpoint: string): string | null {
@@ -84,6 +109,7 @@ export async function verifyChatWalletMessage(options: {
   message: string;
   signature: Hex;
   rpcWitnesses: readonly ChatSignatureRpcWitness[];
+  beforeRpcVerification: () => void | Promise<void>;
 }) {
   try {
     const recoveredAddress = await recoverMessageAddress({
@@ -106,12 +132,18 @@ export async function verifyChatWalletMessage(options: {
     throw new ChatSignatureRpcQuorumError();
   }
 
-  const verdicts = await Promise.all(
-    rpcWitnesses.map((witness) => witness.verifyMessage({
-      address: options.address,
-      message: options.message,
-      signature: options.signature,
-    })),
-  );
-  return verdicts[0] === verdicts[1] && verdicts[0] === true;
+  const releaseRpcSlot = acquireChatSignatureRpcSlot();
+  try {
+    await options.beforeRpcVerification();
+    const verdicts = await Promise.all(
+      rpcWitnesses.map((witness) => witness.verifyMessage({
+        address: options.address,
+        message: options.message,
+        signature: options.signature,
+      })),
+    );
+    return verdicts[0] === verdicts[1] && verdicts[0] === true;
+  } finally {
+    releaseRpcSlot();
+  }
 }

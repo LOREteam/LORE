@@ -6,6 +6,7 @@ import { custom, encodeAbiParameters } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 const chatSignatureModule = await import("../app/api/_lib/chatSignatureVerification.ts");
 const {
+  ChatSignatureRpcBusyError,
   ChatSignatureRpcQuorumError,
   createChatSignatureRpcWitnesses,
   verifyChatWalletMessage,
@@ -42,6 +43,7 @@ assert.equal(
     message,
     signature: attackerSignature,
     rpcWitnesses: splitVerdictWitnesses,
+    beforeRpcVerification: async () => undefined,
   }),
   false,
   "one forged RPC verdict must not authenticate a signature for another address",
@@ -60,6 +62,7 @@ assert.equal(
     message,
     signature: victimSignature,
     rpcWitnesses: localEoaWitnesses,
+    beforeRpcVerification: async () => undefined,
   }),
   true,
   "a legitimate EOA signature must remain valid",
@@ -77,6 +80,7 @@ assert.equal(
     message,
     signature: attackerSignature,
     rpcWitnesses: agreeingWitnesses,
+    beforeRpcVerification: async () => undefined,
   }),
   true,
   "two independent agreeing RPCs must preserve supported contract-wallet verification",
@@ -97,10 +101,66 @@ await assert.rejects(
     message,
     signature: attackerSignature,
     rpcWitnesses: aliasedWitnesses,
+    beforeRpcVerification: async () => undefined,
   }),
   ChatSignatureRpcQuorumError,
   "one canonical hostname must not satisfy contract-wallet quorum",
 );
+
+let deniedWitnessCalls = 0;
+await assert.rejects(
+  verifyChatWalletMessage({
+    address: victim.address,
+    message,
+    signature: attackerSignature,
+    rpcWitnesses: [
+      { canonicalHost: "rpc-a.invalid", verifyMessage: async () => (deniedWitnessCalls += 1, true) },
+      { canonicalHost: "rpc-b.invalid", verifyMessage: async () => (deniedWitnessCalls += 1, true) },
+    ],
+    beforeRpcVerification: async () => {
+      throw new Error("rpc admission denied");
+    },
+  }),
+  /rpc admission denied/,
+  "shared admission denial must fail before either RPC witness",
+);
+assert.equal(deniedWitnessCalls, 0);
+
+const blockingResolvers = [];
+let blockingAdmissions = 0;
+const blockingWitnesses = [
+  {
+    canonicalHost: "rpc-a.invalid",
+    verifyMessage: () => new Promise((resolve) => blockingResolvers.push(resolve)),
+  },
+  {
+    canonicalHost: "rpc-b.invalid",
+    verifyMessage: () => new Promise((resolve) => blockingResolvers.push(resolve)),
+  },
+];
+const startBlockingVerification = () => verifyChatWalletMessage({
+  address: victim.address,
+  message,
+  signature: attackerSignature,
+  rpcWitnesses: blockingWitnesses,
+  beforeRpcVerification: async () => {
+    blockingAdmissions += 1;
+  },
+});
+const firstBlocking = startBlockingVerification();
+const secondBlocking = startBlockingVerification();
+while (blockingResolvers.length < 4) {
+  await new Promise((resolve) => setImmediate(resolve));
+}
+await assert.rejects(
+  startBlockingVerification(),
+  ChatSignatureRpcBusyError,
+  "a third concurrent contract-wallet verification must fail before admission or RPC",
+);
+assert.equal(blockingAdmissions, 2);
+assert.equal(blockingResolvers.length, 4);
+for (const resolve of blockingResolvers) resolve(true);
+assert.deepEqual(await Promise.all([firstBlocking, secondBlocking]), [true, true]);
 
 const testRunDir = mkdtempSync(join(tmpdir(), "lore-chat-auth-rpc-quorum-"));
 const originalFetch = globalThis.fetch;
@@ -147,9 +207,11 @@ try {
   const { NextRequest } = await import("next/server");
   const chatAuthModule = await import("../app/lib/chatAuth.ts");
   const routeModule = await import("../app/api/chat/auth/route.ts");
+  const sharedRateLimitModule = await import("../app/api/_lib/sharedRateLimit.ts");
   dbModule = await import("../server/db.ts");
   const chatAuth = chatAuthModule.default ?? chatAuthModule;
   const route = routeModule.default ?? routeModule;
+  const sharedRateLimit = sharedRateLimitModule.default ?? sharedRateLimitModule;
 
   function buildRouteMessage(nonce) {
     return chatAuth.buildChatAuthMessage({
@@ -206,6 +268,29 @@ try {
     "rpc-a.invalid",
     "rpc-b.invalid",
   ]);
+
+  for (let index = 2; index < route.CHAT_AUTH_RPC_GLOBAL_LIMIT; index += 1) {
+    assert.equal(
+      await sharedRateLimit.enforceSharedGlobalRateLimit({
+        bucket: "api-chat-auth-rpc-outbound",
+        limit: route.CHAT_AUTH_RPC_GLOBAL_LIMIT,
+        windowMs: route.CHAT_AUTH_RPC_GLOBAL_WINDOW_MS,
+      }),
+      null,
+      `global RPC admission ${index + 1} must fill the remaining bounded budget`,
+    );
+  }
+  const rateLimitedRouteMessage = buildRouteMessage("d".repeat(32));
+  const rateLimitedRouteSignature = await attacker.signMessage({ message: rateLimitedRouteMessage });
+  const rpcCallsBeforeRateLimit = routeRpcCalls.length;
+  const rateLimited = await route.POST(
+    createRouteRequest(rateLimitedRouteMessage, rateLimitedRouteSignature),
+  );
+  assert.equal(rateLimited.status, 429, "exhausted global RPC budget must reject before provider calls");
+  const retryAfter = Number(rateLimited.headers.get("Retry-After"));
+  assert.ok(Number.isSafeInteger(retryAfter) && retryAfter >= 1 && retryAfter <= 60);
+  assert.deepEqual(await rateLimited.json(), { error: "Too many requests", retryAfter });
+  assert.equal(routeRpcCalls.length, rpcCallsBeforeRateLimit);
 } finally {
   globalThis.fetch = originalFetch;
   dbModule?.db.close();

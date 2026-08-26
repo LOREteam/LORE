@@ -238,8 +238,8 @@ function enforceWeakIdentityFallback(
   return decision.allowed ? null : rateLimitExceededResponse(decision.retryAfterSeconds);
 }
 
-export async function enforceSharedRateLimit(
-  request: Request,
+async function enforceSharedRateLimitForIdentity(
+  identity: ReturnType<typeof getClientIdentity>,
   options: RateLimitOptions,
 ): Promise<NextResponse | null> {
   if (!hasValidRateLimitOptions(options)) {
@@ -247,7 +247,6 @@ export async function enforceSharedRateLimit(
   }
 
   const { bucket, limit, windowMs } = options;
-  const identity = getClientIdentity(request);
   const key = hashIdentity(identity.key);
   const now = Date.now();
 
@@ -317,4 +316,20 @@ export async function enforceSharedRateLimit(
     }
     return enforceLocalFallback(bucket, key, limit, windowMs, now);
   }
+}
+
+export async function enforceSharedRateLimit(
+  request: Request,
+  options: RateLimitOptions,
+): Promise<NextResponse | null> {
+  return enforceSharedRateLimitForIdentity(getClientIdentity(request), options);
+}
+
+export async function enforceSharedGlobalRateLimit(
+  options: RateLimitOptions,
+): Promise<NextResponse | null> {
+  return enforceSharedRateLimitForIdentity(
+    { key: "global-outbound-budget", weak: false },
+    options,
+  );
 }
