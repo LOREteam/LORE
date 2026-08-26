@@ -11,6 +11,8 @@ import {
 import { getStableLineaReadRpcs } from "../../../../config/publicConfig";
 import { APP_CHAIN, APP_NETWORK } from "../../_lib/dataBridge";
 import {
+  CHAT_AUTH_RPC_GLOBAL_LIMIT,
+  CHAT_AUTH_RPC_GLOBAL_WINDOW_MS,
   ChatSignatureRpcBusyError,
   createChatSignatureRpcWitnesses,
   verifyChatWalletMessage,
@@ -28,8 +30,6 @@ import { readBoundedJsonBody } from "../../_lib/boundedJsonBody";
 import { getTrustedAuthOrigin, isTrustedAuthUri } from "../../_lib/trustedAuthOrigin";
 
 const MAX_REQUEST_BODY_BYTES = 8_192;
-export const CHAT_AUTH_RPC_GLOBAL_LIMIT = 8;
-export const CHAT_AUTH_RPC_GLOBAL_WINDOW_MS = 60_000;
 
 class ChatAuthRpcAdmissionError extends Error {
   constructor(readonly response: NextResponse) {

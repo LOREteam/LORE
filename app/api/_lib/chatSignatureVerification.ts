@@ -11,6 +11,8 @@ import {
 
 const REQUIRED_CHAT_SIGNATURE_RPC_WITNESSES = 2;
 const MAX_CONCURRENT_CHAT_SIGNATURE_RPC_VERIFICATIONS = 2;
+export const CHAT_AUTH_RPC_GLOBAL_LIMIT = 8;
+export const CHAT_AUTH_RPC_GLOBAL_WINDOW_MS = 60_000;
 let activeChatSignatureRpcVerifications = 0;
 
 export type ChatSignatureRpcWitness = {

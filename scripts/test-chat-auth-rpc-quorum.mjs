@@ -207,10 +207,12 @@ try {
   const { NextRequest } = await import("next/server");
   const chatAuthModule = await import("../app/lib/chatAuth.ts");
   const routeModule = await import("../app/api/chat/auth/route.ts");
+  const chatSignatureModule = await import("../app/api/_lib/chatSignatureVerification.ts");
   const sharedRateLimitModule = await import("../app/api/_lib/sharedRateLimit.ts");
   dbModule = await import("../server/db.ts");
   const chatAuth = chatAuthModule.default ?? chatAuthModule;
   const route = routeModule.default ?? routeModule;
+  const chatSignature = chatSignatureModule.default ?? chatSignatureModule;
   const sharedRateLimit = sharedRateLimitModule.default ?? sharedRateLimitModule;
 
   function buildRouteMessage(nonce) {
@@ -269,12 +271,12 @@ try {
     "rpc-b.invalid",
   ]);
 
-  for (let index = 2; index < route.CHAT_AUTH_RPC_GLOBAL_LIMIT; index += 1) {
+  for (let index = 2; index < chatSignature.CHAT_AUTH_RPC_GLOBAL_LIMIT; index += 1) {
     assert.equal(
       await sharedRateLimit.enforceSharedGlobalRateLimit({
         bucket: "api-chat-auth-rpc-outbound",
-        limit: route.CHAT_AUTH_RPC_GLOBAL_LIMIT,
-        windowMs: route.CHAT_AUTH_RPC_GLOBAL_WINDOW_MS,
+        limit: chatSignature.CHAT_AUTH_RPC_GLOBAL_LIMIT,
+        windowMs: chatSignature.CHAT_AUTH_RPC_GLOBAL_WINDOW_MS,
       }),
       null,
       `global RPC admission ${index + 1} must fill the remaining bounded budget`,
