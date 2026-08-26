@@ -28,10 +28,12 @@ import { log } from "../lib/logger";
 import { withTimeout, isUserRejection } from "../lib/utils";
 import {
   assertWalletTransferIntentMatchesTransaction,
+  createWalletContractIntent,
   createWalletTransferIntent,
   selectWalletTransferAgreementRpcUrls,
   withWalletTransferIntentLease,
   WalletTransferIntentError,
+  type WalletContractIntentDetails,
   type WalletTransferIntentDetails,
   type WalletTransferIntentLease,
   type WalletTransferNonceClients,
@@ -73,6 +75,7 @@ type TransferAwareTransaction = {
   gas?: bigint;
   expectedActor?: `0x${string}`;
   transferIntent?: WalletTransferIntentDetails;
+  contractIntent?: WalletContractIntentDetails;
 };
 
 type Eip1193Provider = ExternalWalletEip1193Provider & {
@@ -277,13 +280,24 @@ export function usePrivyWallet() {
             ...transferDetails,
           })
         : null;
-      if (transferIntent) {
+      const contractIntent = tx.contractIntent
+        ? createWalletContractIntent({
+            actor: embeddedWalletAddress,
+            chainId: APP_CHAIN_ID,
+            ...tx.contractIntent,
+          })
+        : null;
+      if (transferIntent && contractIntent) {
+        throw new WalletTransferIntentError("wallet_transaction_intent_ambiguous");
+      }
+      const transactionIntent = transferIntent ?? contractIntent;
+      if (transactionIntent) {
         if (feeMode !== "normal" || tx.nonce !== undefined) {
           throw new WalletTransferIntentError("wallet_transfer_intent_unsafe_mode");
         }
-        assertWalletTransferIntentMatchesTransaction(transferIntent, tx);
+        assertWalletTransferIntentMatchesTransaction(transactionIntent, tx);
       }
-      if (transferIntent && !WALLET_TRANSFER_NONCE_CLIENTS) {
+      if (transactionIntent && !WALLET_TRANSFER_NONCE_CLIENTS) {
         throw new WalletTransferIntentError("wallet_transfer_intent_nonce_reconciliation_unavailable");
       }
       type SendReceipt = Awaited<ReturnType<typeof sendTransaction>>;
@@ -315,9 +329,9 @@ export function usePrivyWallet() {
         return receipt.hash as `0x${string}`;
       };
 
-      if (transferIntent && WALLET_TRANSFER_NONCE_CLIENTS) {
+      if (transactionIntent && WALLET_TRANSFER_NONCE_CLIENTS) {
         return withWalletTransferIntentLease(
-          transferIntent,
+          transactionIntent,
           WALLET_TRANSFER_NONCE_CLIENTS,
           async (acquisition, retainResult) => {
             if (acquisition.status === "known-hash") return acquisition.hash;
@@ -398,8 +412,19 @@ export function usePrivyWallet() {
             ...transferDetails,
           })
         : null;
-      if (transferIntent) {
-        assertWalletTransferIntentMatchesTransaction(transferIntent, tx);
+      const contractIntent = tx.contractIntent
+        ? createWalletContractIntent({
+            actor: providerAccount,
+            chainId: APP_CHAIN_ID,
+            ...tx.contractIntent,
+          })
+        : null;
+      if (transferIntent && contractIntent) {
+        throw new WalletTransferIntentError("wallet_transaction_intent_ambiguous");
+      }
+      const transactionIntent = transferIntent ?? contractIntent;
+      if (transactionIntent) {
+        assertWalletTransferIntentMatchesTransaction(transactionIntent, tx);
         if (!WALLET_TRANSFER_NONCE_CLIENTS) {
           throw new WalletTransferIntentError("wallet_transfer_intent_nonce_reconciliation_unavailable");
         }
@@ -437,9 +462,9 @@ export function usePrivyWallet() {
         return result.hash as `0x${string}`;
       };
 
-      if (transferIntent && WALLET_TRANSFER_NONCE_CLIENTS) {
+      if (transactionIntent && WALLET_TRANSFER_NONCE_CLIENTS) {
         return withWalletTransferIntentLease(
-          transferIntent,
+          transactionIntent,
           WALLET_TRANSFER_NONCE_CLIENTS,
           async (acquisition, retainResult) => {
             if (acquisition.status === "known-hash") return acquisition.hash;

@@ -1,9 +1,9 @@
 "use client";
 
-import { encodeFunctionData, getAddress } from "viem";
+import { encodeFunctionData, getAddress, keccak256 } from "viem";
 import { withEoaNonceLock, type EoaNonceLockFailure } from "./eoaNonceLock";
 
-export type WalletTransferAsset = "native" | `0x${string}`;
+export type WalletTransferAsset = "native" | "contract-call" | `0x${string}`;
 
 export interface WalletTransferIntent {
   actor: `0x${string}`;
@@ -11,12 +11,20 @@ export interface WalletTransferIntent {
   asset: WalletTransferAsset;
   destination: `0x${string}`;
   amountWei: bigint;
+  calldata?: `0x${string}`;
 }
 
 export type WalletTransferIntentDetails = Pick<
   WalletTransferIntent,
-  "asset" | "destination" | "amountWei"
->;
+  "destination" | "amountWei"
+> & {
+  asset: Exclude<WalletTransferAsset, "contract-call">;
+};
+
+export type WalletContractIntentDetails = {
+  contract: `0x${string}`;
+  calldata: `0x${string}`;
+};
 
 export interface WalletTransferIntentLease {
   id: string;
@@ -35,6 +43,7 @@ type WalletTransferIntentState = {
   asset: WalletTransferAsset;
   destination: `0x${string}`;
   amountWei: string;
+  calldata?: `0x${string}`;
   nonce: number;
   latestNonce: number;
   pendingNonce: number;
@@ -118,6 +127,7 @@ const MAX_FUTURE_SKEW_MS = 5_000;
 export const HASHLESS_TRANSFER_RECONCILIATION_GRACE_MS = 15 * 60_000;
 export const WALLET_TRANSFER_FINALITY_CONFIRMATIONS = 2;
 const HASH_RE = /^0x[0-9a-fA-F]{64}$/;
+const HEX_RE = /^0x(?:[0-9a-fA-F]{2})+$/;
 const LEASE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ERC20_TRANSFER_ABI = [
   {
@@ -172,7 +182,14 @@ function normalizeAddress(value: string): `0x${string}` {
 }
 
 function normalizeAsset(value: WalletTransferAsset): WalletTransferAsset {
-  return value === "native" ? value : normalizeAddress(value);
+  return value === "native" || value === "contract-call" ? value : normalizeAddress(value);
+}
+
+function normalizeCalldata(value: unknown): `0x${string}` {
+  if (typeof value !== "string" || !HEX_RE.test(value)) {
+    throw intentError("wallet_contract_intent_invalid_calldata");
+  }
+  return value.toLowerCase() as `0x${string}`;
 }
 
 function normalizeSafeNonce(value: unknown): number | null {
@@ -211,20 +228,49 @@ export function createWalletTransferIntent(input: {
   asset: WalletTransferAsset;
   destination: string;
   amountWei: bigint;
+  calldata?: `0x${string}`;
 }): WalletTransferIntent {
   if (!Number.isSafeInteger(input.chainId) || input.chainId <= 0) {
     throw intentError("wallet_transfer_intent_invalid_chain");
   }
-  if (input.amountWei <= 0n) {
+  const asset = normalizeAsset(input.asset);
+  const isContractCall = asset === "contract-call";
+  if (
+    (isContractCall && input.amountWei !== 0n) ||
+    (!isContractCall && input.amountWei <= 0n)
+  ) {
     throw intentError("wallet_transfer_intent_invalid_amount");
+  }
+  const calldata = isContractCall
+    ? normalizeCalldata(input.calldata)
+    : undefined;
+  if (!isContractCall && input.calldata !== undefined) {
+    throw intentError("wallet_transfer_intent_unexpected_calldata");
   }
   return {
     actor: normalizeAddress(input.actor),
     chainId: input.chainId,
-    asset: normalizeAsset(input.asset),
+    asset,
     destination: normalizeAddress(input.destination),
     amountWei: input.amountWei,
+    ...(calldata ? { calldata } : {}),
   };
+}
+
+export function createWalletContractIntent(input: {
+  actor: string;
+  chainId: number;
+  contract: string;
+  calldata: `0x${string}`;
+}): WalletTransferIntent {
+  return createWalletTransferIntent({
+    actor: input.actor,
+    chainId: input.chainId,
+    asset: "contract-call",
+    destination: input.contract,
+    amountWei: 0n,
+    calldata: input.calldata,
+  });
 }
 
 export function assertWalletTransferIntentMatchesTransaction(
@@ -236,6 +282,16 @@ export function assertWalletTransferIntentMatchesTransaction(
   },
 ) {
   const normalizedTo = normalizeAddress(tx.to);
+  if (intent.asset === "contract-call") {
+    if (
+      normalizedTo !== intent.destination ||
+      (tx.value !== undefined && tx.value !== 0n) ||
+      tx.data?.toLowerCase() !== intent.calldata
+    ) {
+      throw intentError("wallet_contract_intent_transaction_mismatch");
+    }
+    return;
+  }
   if (intent.asset === "native") {
     if (
       normalizedTo !== intent.destination ||
@@ -297,13 +353,17 @@ export function selectWalletTransferAgreementRpcUrls(
 }
 
 function intentKeySuffix(intent: WalletTransferIntent) {
-  return [
+  const parts = [
     intent.chainId,
     intent.actor,
     intent.asset,
     intent.destination,
     intent.amountWei.toString(),
-  ].join(":");
+  ];
+  if (intent.asset === "contract-call" && intent.calldata) {
+    parts.push(keccak256(intent.calldata));
+  }
+  return parts.join(":");
 }
 
 function storageKey(intent: WalletTransferIntent) {
@@ -330,8 +390,8 @@ function sanitizeState(value: unknown, now: number): WalletTransferIntentState |
   const raw = value as Record<string, unknown>;
   if (typeof raw.id !== "string" || !LEASE_ID_RE.test(raw.id)) return null;
   if (!Number.isSafeInteger(raw.chainId) || Number(raw.chainId) <= 0) return null;
-  if (raw.asset !== "native" && typeof raw.asset !== "string") return null;
-  if (typeof raw.amountWei !== "string" || !/^[1-9]\d*$/.test(raw.amountWei)) return null;
+  if (typeof raw.asset !== "string") return null;
+  if (typeof raw.amountWei !== "string" || !/^(?:0|[1-9]\d*)$/.test(raw.amountWei)) return null;
 
   let actor: `0x${string}`;
   let destination: `0x${string}`;
@@ -341,6 +401,21 @@ function sanitizeState(value: unknown, now: number): WalletTransferIntentState |
     destination = normalizeAddress(typeof raw.destination === "string" ? raw.destination : "");
     asset = normalizeAsset(raw.asset as WalletTransferAsset);
   } catch {
+    return null;
+  }
+  const calldata = asset === "contract-call"
+    ? (() => {
+        try {
+          return normalizeCalldata(raw.calldata);
+        } catch {
+          return null;
+        }
+      })()
+    : undefined;
+  if (
+    (asset === "contract-call" && (raw.amountWei !== "0" || !calldata)) ||
+    (asset !== "contract-call" && (raw.amountWei === "0" || raw.calldata !== undefined))
+  ) {
     return null;
   }
 
@@ -383,6 +458,7 @@ function sanitizeState(value: unknown, now: number): WalletTransferIntentState |
     asset,
     destination,
     amountWei: raw.amountWei,
+    ...(calldata ? { calldata } : {}),
     nonce,
     latestNonce,
     pendingNonce,
@@ -401,8 +477,20 @@ function stateMatchesIntent(state: WalletTransferIntentState, intent: WalletTran
     state.chainId === intent.chainId &&
     state.asset === intent.asset &&
     state.destination === intent.destination &&
-    state.amountWei === intent.amountWei.toString()
+    state.amountWei === intent.amountWei.toString() &&
+    state.calldata === intent.calldata
   );
+}
+
+function createIntentFromState(state: WalletTransferIntentState) {
+  return createWalletTransferIntent({
+    actor: state.actor,
+    chainId: state.chainId,
+    asset: state.asset,
+    destination: state.destination,
+    amountWei: BigInt(state.amountWei),
+    ...(state.calldata ? { calldata: state.calldata } : {}),
+  });
 }
 
 function readState(intent: WalletTransferIntent, now: number): WalletTransferIntentState | null {
@@ -460,9 +548,7 @@ export function hasTrackedWalletTransferNonce(
     if (raw === null) continue;
     try {
       const state = sanitizeState(JSON.parse(raw), now);
-      const canonicalKey = state
-        ? `${STORAGE_PREFIX}:${state.chainId}:${state.actor}:${state.asset}:${state.destination}:${state.amountWei}`
-        : null;
+      const canonicalKey = state ? storageKey(createIntentFromState(state)) : null;
       if (!state || canonicalKey !== key) {
         throw intentError("wallet_transfer_intent_state_invalid");
       }
@@ -503,9 +589,7 @@ function assertNoConflictingActorState(intent: WalletTransferIntent, now: number
 
     try {
       const state = sanitizeState(JSON.parse(raw), now);
-      const canonicalKey = state
-        ? `${STORAGE_PREFIX}:${state.chainId}:${state.actor}:${state.asset}:${state.destination}:${state.amountWei}`
-        : null;
+      const canonicalKey = state ? storageKey(createIntentFromState(state)) : null;
       if (!state || canonicalKey !== key) {
         throw intentError("wallet_transfer_intent_state_invalid");
       }
@@ -626,6 +710,11 @@ function canSafelyRetryIntent(
   snapshot: { latestNonce: number; pendingNonce: number },
   now: number,
 ) {
+  // A zero-value contract call cannot be distinguished from a dropped,
+  // never-broadcast call by nonce equality alone. After a real reload the
+  // original provider promise is gone, so only an observed hash followed by
+  // terminal reconciliation may release this exact call for another send.
+  if (state.asset === "contract-call") return false;
   const reconciliationStartedAt = state.hash ? state.updatedAt : state.createdAt;
   return (
     now - reconciliationStartedAt >= HASHLESS_TRANSFER_RECONCILIATION_GRACE_MS &&
@@ -697,6 +786,7 @@ async function acquireWalletTransferIntentLeaseLocked(
     asset: intent.asset,
     destination: intent.destination,
     amountWei: intent.amountWei.toString(),
+    ...(intent.calldata ? { calldata: intent.calldata } : {}),
     nonce: snapshot.pendingNonce,
     latestNonce: snapshot.latestNonce,
     pendingNonce: snapshot.pendingNonce,
@@ -1117,15 +1207,19 @@ function assertWalletTransferTransactionMatchesIntent(
   hash: `0x${string}`,
   nonce: number,
 ) {
-  const expectedTo = intent.asset === "native" ? intent.destination : intent.asset;
+  const expectedTo = intent.asset === "contract-call" || intent.asset === "native"
+    ? intent.destination
+    : intent.asset;
   const expectedValue = intent.asset === "native" ? intent.amountWei : 0n;
   const expectedInput = intent.asset === "native"
     ? "0x"
-    : encodeFunctionData({
-        abi: ERC20_TRANSFER_ABI,
-        functionName: "transfer",
-        args: [intent.destination, intent.amountWei],
-      }).toLowerCase();
+    : intent.asset === "contract-call"
+      ? intent.calldata
+      : encodeFunctionData({
+          abi: ERC20_TRANSFER_ABI,
+          functionName: "transfer",
+          args: [intent.destination, intent.amountWei],
+        }).toLowerCase();
   if (
     transaction.hash !== hash ||
     transaction.chainId !== intent.chainId ||
@@ -1808,6 +1902,7 @@ function readPendingWalletTransferStateForCandidate(
     asset: state.asset,
     destination: state.destination,
     amountWei: BigInt(state.amountWei),
+    ...(state.calldata ? { calldata: state.calldata } : {}),
   });
   if (
     keys[0] !== storageKey(intent) ||

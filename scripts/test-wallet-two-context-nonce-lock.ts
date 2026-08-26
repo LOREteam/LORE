@@ -482,6 +482,7 @@ const server = createServer((request, response) => {
       `export function createPublicClient() { throw new Error("createPublicClient unused in hermetic approval test"); }`,
       `export function encodeFunctionData() { throw new Error("encodeFunctionData unused in hermetic approval test"); }`,
       `export function http() { throw new Error("http unused in hermetic approval test"); }`,
+      `export function keccak256() { throw new Error("keccak256 unused in hermetic native-transfer test"); }`,
       `export const maxUint256 = (1n << 256n) - 1n;`,
     ].join("\n"));
     return;
