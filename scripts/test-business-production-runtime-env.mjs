@@ -275,6 +275,10 @@ export function runProductionRuntimeEnvTests() {
       },
     );
   };
+  assertMainnetWebIssue(
+    { WEB_REPLICA_COUNT: undefined },
+    /WEB_REPLICA_COUNT must be explicitly set for mainnet web\/server runtime/,
+  );
   for (const siteUrl of [
     "https://intranet",
     "https://localhost",

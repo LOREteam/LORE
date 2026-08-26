@@ -142,7 +142,7 @@ function parseExternalReplicaCount(value: string | undefined): number | null {
 
 function requiresExternalSharedLock() {
   if (process.env.NODE_ENV !== "production") return false;
-  if (!process.env.WEB_REPLICA_COUNT?.trim()) return false;
+  if (!process.env.WEB_REPLICA_COUNT?.trim()) return true;
   const replicaCount = parseExternalReplicaCount(process.env.WEB_REPLICA_COUNT);
   if (replicaCount === null) return true;
   return replicaCount > 1;

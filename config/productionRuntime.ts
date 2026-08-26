@@ -477,8 +477,11 @@ function validateMainnetProductionEnv(scope: ProductionRuntimeScope) {
     if (getEnv("TRUST_PROXY_SECRET").length < 32) {
       issues.push("TRUST_PROXY_SECRET must contain at least 32 characters on mainnet so direct clients cannot spoof trusted IP headers.");
     }
-    const replicaCount = Number(getEnv("WEB_REPLICA_COUNT") || "1");
-    if (!Number.isSafeInteger(replicaCount) || replicaCount < 1) {
+    const rawReplicaCount = getEnv("WEB_REPLICA_COUNT");
+    const replicaCount = Number(rawReplicaCount);
+    if (!rawReplicaCount) {
+      issues.push("WEB_REPLICA_COUNT must be explicitly set for mainnet web/server runtime.");
+    } else if (!Number.isSafeInteger(replicaCount) || replicaCount < 1) {
       issues.push("WEB_REPLICA_COUNT must be a positive integer when set.");
     } else if (replicaCount > 1) {
       if (

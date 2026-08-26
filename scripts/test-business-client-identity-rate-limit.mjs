@@ -716,6 +716,19 @@ export async function runClientIdentityAndRateLimitTests() {
       await withTemporaryEnvAsync(
         {
           NODE_ENV: "production",
+          WEB_REPLICA_COUNT: undefined,
+        },
+        async () => {
+          assert.equal(
+            externalRateLimit.requiresExternalSharedLock(),
+            true,
+            "an undeclared production topology must fail closed by requiring shared state",
+          );
+        },
+      );
+      await withTemporaryEnvAsync(
+        {
+          NODE_ENV: "production",
           WEB_REPLICA_COUNT: "not-a-number",
         },
         async () => {
