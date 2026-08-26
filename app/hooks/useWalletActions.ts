@@ -37,7 +37,7 @@ import {
   WalletTransactionRevertedError,
   type WalletTransferIntent,
   type WalletTransferIntentDetails,
-  type WalletTransferReceiptClients,
+  type WalletTransferReceiptClient,
   hasTrackedWalletTransferNonce,
 } from "../lib/walletTransferIntent";
 import { isSafeExternalWalletProviderContextError } from "../lib/externalWalletProviderContext";
@@ -59,11 +59,29 @@ type ExternalSendFn = (tx: { to: `0x${string}`; data?: `0x${string}`; value?: bi
 type WriteContractAsyncFn = ReturnType<typeof useWriteContract>["writeContractAsync"];
 type BalanceData = { value: bigint } | null | undefined;
 type ReceiptState = "confirmed" | "pending";
+type PendingTransactionNonceClient = {
+  getTransactionCount: (args: {
+    address: `0x${string}`;
+    blockTag: "latest" | "pending";
+  }) => Promise<unknown>;
+};
+type PendingTransactionNonceClients = readonly [
+  PendingTransactionNonceClient,
+  PendingTransactionNonceClient,
+];
+type WalletTransferAgreementClient = WalletTransferReceiptClient &
+  PendingTransactionNonceClient & {
+    canonicalHost: string;
+  };
+type WalletTransferAgreementClients = readonly [
+  WalletTransferAgreementClient,
+  WalletTransferAgreementClient,
+];
 
 const RESOLVER_REWARD_LARGE_DISPLAY_WEI = 100n * 10n ** 18n;
 const TOKEN_TRANSFER_GAS_LIMIT = 120_000n;
 
-function createWalletTransferReceiptClients(): WalletTransferReceiptClients | null {
+function createWalletTransferReceiptClients(): WalletTransferAgreementClients | null {
   const configuredRpcs = APP_NETWORK === "mainnet"
     ? process.env.NEXT_PUBLIC_LINEA_RPCS
     : process.env.NEXT_PUBLIC_LINEA_SEPOLIA_RPCS;
@@ -72,8 +90,14 @@ function createWalletTransferReceiptClients(): WalletTransferReceiptClients | nu
       getStableLineaReadRpcs(configuredRpcs, APP_NETWORK),
     );
     return [
-      createPublicClient({ chain: APP_CHAIN, transport: http(urls[0]) }),
-      createPublicClient({ chain: APP_CHAIN, transport: http(urls[1]) }),
+      Object.assign(
+        createPublicClient({ chain: APP_CHAIN, transport: http(urls[0]) }),
+        { canonicalHost: new URL(urls[0]).host.toLowerCase() },
+      ),
+      Object.assign(
+        createPublicClient({ chain: APP_CHAIN, transport: http(urls[1]) }),
+        { canonicalHost: new URL(urls[1]).host.toLowerCase() },
+      ),
     ];
   } catch {
     return null;
@@ -183,6 +207,31 @@ function normalizePendingTransactionNonce(value: unknown): number | null {
   return value;
 }
 
+function getIndependentPendingTransactionNonceClients(
+  clients: WalletTransferAgreementClients | undefined,
+): PendingTransactionNonceClients | null {
+  if (
+    !clients ||
+    clients[0] === clients[1] ||
+    !clients[0].canonicalHost ||
+    clients[0].canonicalHost === clients[1].canonicalHost
+  ) {
+    return null;
+  }
+  const first = clients[0] as Partial<PendingTransactionNonceClient>;
+  const second = clients[1] as Partial<PendingTransactionNonceClient>;
+  if (
+    typeof first.getTransactionCount !== "function" ||
+    typeof second.getTransactionCount !== "function"
+  ) {
+    return null;
+  }
+  return [
+    first as PendingTransactionNonceClient,
+    second as PendingTransactionNonceClient,
+  ];
+}
+
 export function assertPendingTxRepairNonceIsUntracked(
   chainId: number,
   actor: string,
@@ -223,7 +272,7 @@ interface UseWalletActionsOptions {
   isPageVisible?: boolean;
   minEthForGas: number;
   minEthWithdrawReserveWei: bigint;
-  walletTransferReceiptClients?: WalletTransferReceiptClients;
+  walletTransferReceiptClients?: WalletTransferAgreementClients;
 }
 
 export function useWalletActions({
@@ -349,14 +398,19 @@ export function useWalletActions({
 
   const waitForReceipt = useCallback(
     async (hash: `0x${string}`): Promise<ReceiptState> => {
-      if (!publicClient) throw new Error("Transaction receipt verification is unavailable.");
+      if (!walletTransferReceiptClients) {
+        throw new WalletTransferIntentError(
+          "wallet_transfer_receipt_independent_rpc_required",
+          hash,
+        );
+      }
       return waitForStableWalletTransferReceipt(
-        [publicClient, publicClient],
+        walletTransferReceiptClients,
         hash,
         TX_RECEIPT_TIMEOUT_MS,
       );
     },
-    [publicClient],
+    [walletTransferReceiptClients],
   );
 
   const waitForTransferReceipt = useCallback(
@@ -447,32 +501,63 @@ export function useWalletActions({
         setIsRefreshingPendingTx(false);
       }
     }
-    if (!embeddedWalletAddress || !publicClient) {
+    const nonceClients = getIndependentPendingTransactionNonceClients(
+      walletTransferReceiptClients,
+    );
+    if (!embeddedWalletAddress || !nonceClients) {
       setPendingTransactionStatus(null);
-      notify("Pending transaction status is unavailable until the Privy wallet is ready.", "warning");
+      notify(
+        "Pending transaction repair requires the Privy wallet and two independent RPCs.",
+        "warning",
+      );
       return null;
     }
 
     setIsRefreshingPendingTx(true);
     try {
       const walletAddress = getAddress(embeddedWalletAddress);
-      const [latestNonceRaw, pendingNonceRaw] = await Promise.all([
-        withMiningRpcTimeout(
-          publicClient.getTransactionCount({ address: walletAddress, blockTag: "latest" }),
-          "settings.getTransactionCount.latest",
-        ),
-        withMiningRpcTimeout(
-          publicClient.getTransactionCount({ address: walletAddress, blockTag: "pending" }),
-          "settings.getTransactionCount.pending",
-        ),
-      ]);
-      const latestNonce = normalizePendingTransactionNonce(latestNonceRaw);
-      const pendingNonce = normalizePendingTransactionNonce(pendingNonceRaw);
-      if (latestNonce === null || pendingNonce === null || pendingNonce < latestNonce) {
+      const nonceEvidence = await Promise.all(
+        nonceClients.map(async (client, index) => Promise.all([
+          withMiningRpcTimeout(
+            client.getTransactionCount({ address: walletAddress, blockTag: "latest" }),
+            `settings.getTransactionCount.rpc${index + 1}.latest`,
+          ),
+          withMiningRpcTimeout(
+            client.getTransactionCount({ address: walletAddress, blockTag: "pending" }),
+            `settings.getTransactionCount.rpc${index + 1}.pending`,
+          ),
+        ])),
+      );
+      const normalizedEvidence = nonceEvidence.map(([latest, pending]) => ({
+        latest: normalizePendingTransactionNonce(latest),
+        pending: normalizePendingTransactionNonce(pending),
+      }));
+      const [firstEvidence, secondEvidence] = normalizedEvidence;
+      if (
+        firstEvidence.latest === null ||
+        firstEvidence.pending === null ||
+        secondEvidence.latest === null ||
+        secondEvidence.pending === null ||
+        firstEvidence.pending < firstEvidence.latest ||
+        secondEvidence.pending < secondEvidence.latest
+      ) {
         setPendingTransactionStatus(null);
         notify("Pending transaction nonce evidence is unavailable or unsafe. Wait for wallet/RPC recovery, then retry.", "warning");
         return null;
       }
+      if (
+        firstEvidence.latest !== secondEvidence.latest ||
+        firstEvidence.pending !== secondEvidence.pending
+      ) {
+        setPendingTransactionStatus(null);
+        notify(
+          "The independent RPCs disagree about the pending nonce. Repair is disabled until they agree.",
+          "warning",
+        );
+        return null;
+      }
+      const latestNonce = firstEvidence.latest;
+      const pendingNonce = firstEvidence.pending;
       const nonceGap = Math.max(0, pendingNonce - latestNonce);
       const nextStatus: PendingTransactionStatus = {
         latestNonce,
@@ -499,7 +584,7 @@ export function useWalletActions({
     } finally {
       setIsRefreshingPendingTx(false);
     }
-  }, [embeddedWalletAddress, externalWalletAddress, formatTxStatusMessage, notify, publicClient, walletTransferReceiptClients]);
+  }, [embeddedWalletAddress, externalWalletAddress, formatTxStatusMessage, notify, walletTransferReceiptClients]);
 
   const cancelPendingTransaction = useCallback(async () => {
     if (!embeddedWalletAddress) {

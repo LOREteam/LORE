@@ -223,22 +223,39 @@ function receiptNotFoundError() {
   return error;
 }
 
-function createReceiptClient() {
+type TestNonceReader = (args: {
+  address: `0x${string}`;
+  blockTag: "latest" | "pending";
+}) => Promise<number>;
+
+function createReceiptClient(
+  canonicalHost: string,
+  getTransactionCount: TestNonceReader = async ({ blockTag }) =>
+    blockTag === "latest" ? TRACKED_NONCE : TRACKED_NONCE + 1,
+  getReceiptMode: () => ReceiptMode = () => transferReceiptMode,
+) {
   return {
+    canonicalHost,
     getBlockNumber: async () => 200n,
     getTransaction: async () => ({ ...transferTransaction }),
     getTransactionReceipt: async () => {
-      if (transferReceiptMode === "pending") throw receiptNotFoundError();
-      return receiptFor(transferReceiptMode);
+      const receiptMode = getReceiptMode();
+      if (receiptMode === "pending") throw receiptNotFoundError();
+      return receiptFor(receiptMode);
     },
     waitForTransactionReceipt: async () => {
-      if (transferReceiptMode === "pending") throw timeoutError();
-      return receiptFor(transferReceiptMode);
+      const receiptMode = getReceiptMode();
+      if (receiptMode === "pending") throw timeoutError();
+      return receiptFor(receiptMode);
     },
+    getTransactionCount,
   };
 }
 
-const transferReceiptClients = [createReceiptClient(), createReceiptClient()];
+const transferReceiptClients = [
+  createReceiptClient("rpc-one.example.com"),
+  createReceiptClient("rpc-two.example.net"),
+];
 const resolverRewardsByActor = new Map<string, bigint>();
 let resolverRefetches = 0;
 
@@ -360,7 +377,12 @@ type RenderOptions = {
   connectedWalletAddress?: string | null;
   embeddedWalletAddress?: string | null;
   externalWalletAddress?: string | null;
-  getTransactionCount?: (args: { blockTag: "latest" | "pending" }) => Promise<number>;
+  getTransactionCount?: TestNonceReader;
+  secondGetTransactionCount?: TestNonceReader;
+  walletTransferReceiptClients?: readonly [
+    ReturnType<typeof createReceiptClient>,
+    ReturnType<typeof createReceiptClient>,
+  ];
   sendTransactionSilent?: (tx: TransactionRequest) => Promise<typeof HASH>;
   sendTransactionFromExternal?: (tx: TransactionRequest) => Promise<typeof HASH>;
   writeContractAsync?: (input: Record<string, unknown>) => Promise<typeof HASH>;
@@ -378,14 +400,20 @@ function createHookRenderer(initialOptions: RenderOptions) {
 
   const render = () => {
     const options = currentOptions;
-    const resolverReceiptMode = options.resolverReceiptMode ?? "pending";
+    const resolverReceiptMode = options.resolverReceiptMode ?? transferReceiptMode;
+    const firstNonceReader = options.getTransactionCount ?? (async ({ blockTag }) =>
+      blockTag === "latest" ? TRACKED_NONCE : TRACKED_NONCE + 1);
+    const secondNonceReader = options.secondGetTransactionCount ?? firstNonceReader;
+    const hookReceiptClients = options.walletTransferReceiptClients ?? [
+      createReceiptClient("rpc-one.example.com", firstNonceReader, () => resolverReceiptMode),
+      createReceiptClient("rpc-two.example.net", secondNonceReader, () => resolverReceiptMode),
+    ] as const;
     const publicClient = {
       estimateFeesPerGas: async () => ({ gasPrice: 1n }),
       estimateGas: async () => 100_000n,
       getBlockNumber: async () => 200n,
       getTransaction: async () => ({ hash: HASH }),
-      getTransactionCount: options.getTransactionCount ?? (async ({ blockTag }) =>
-        blockTag === "latest" ? TRACKED_NONCE : TRACKED_NONCE + 1),
+      getTransactionCount: firstNonceReader,
       getTransactionReceipt: async () => {
         if (resolverReceiptMode === "pending") throw receiptNotFoundError();
         return receiptFor(resolverReceiptMode);
@@ -421,7 +449,7 @@ function createHookRenderer(initialOptions: RenderOptions) {
       onOpenWalletSettings: () => undefined,
       minEthForGas: 0,
       minEthWithdrawReserveWei: 0n,
-      walletTransferReceiptClients: transferReceiptClients,
+      walletTransferReceiptClients: hookReceiptClients,
     }));
   };
 
@@ -524,6 +552,47 @@ async function testPendingRepair() {
     ),
     "a hash-known receipt timeout must transition to pending with an explorer link",
   );
+}
+
+async function testDivergentNonceEvidenceBlocksRepair() {
+  resetRuntimeState();
+  const notifications: Notification[] = [];
+  let sends = 0;
+  const hook = createHookRenderer({
+    notifications,
+    secondGetTransactionCount: async ({ blockTag }) =>
+      blockTag === "latest" ? TRACKED_NONCE : TRACKED_NONCE + 2,
+    sendTransactionSilent: async () => {
+      sends += 1;
+      return HASH;
+    },
+  });
+
+  await hook.result.cancelPendingTransaction();
+
+  assert.equal(sends, 0, "divergent nonce evidence must not reach the wallet send sink");
+  assert.ok(hasNotification(notifications, "warning", "independent RPCs disagree"));
+}
+
+async function testDuplicateNonceClientBlocksRepair() {
+  resetRuntimeState();
+  const notifications: Notification[] = [];
+  const firstClient = createReceiptClient("same-rpc.example.com");
+  const secondClient = createReceiptClient("same-rpc.example.com");
+  let sends = 0;
+  const hook = createHookRenderer({
+    notifications,
+    walletTransferReceiptClients: [firstClient, secondClient],
+    sendTransactionSilent: async () => {
+      sends += 1;
+      return HASH;
+    },
+  });
+
+  await hook.result.cancelPendingTransaction();
+
+  assert.equal(sends, 0, "duplicate RPC origins must not authorize repair");
+  assert.ok(hasNotification(notifications, "warning", "two independent RPCs"));
 }
 
 async function testManualReplacementReconciliationPresentation() {
@@ -1052,6 +1121,8 @@ async function main() {
   await testWrongNetworkRefresh();
   await testRejectedRepair();
   await testPendingRepair();
+  await testDivergentNonceEvidenceBlocksRepair();
+  await testDuplicateNonceClientBlocksRepair();
   await testManualReplacementReconciliationPresentation();
   await testDuplicateRepair();
   await testSinkAdjacentTrackedNonceRecheck();
@@ -1070,7 +1141,7 @@ async function main() {
   await testResolverPendingAndRevertedStates();
   await testResolverRejectionAndProviderRedaction();
 
-  console.log("wallet actions hook behavior tests passed (20 cases)");
+  console.log("wallet actions hook behavior tests passed (22 cases)");
 }
 
 void main().catch((error) => {
