@@ -77,7 +77,25 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   wallet-model behavior x2, TypeScript, audit x2 (`5836/6360`, `91.76%`),
   self-test `17/17`, diff hygiene, protected DB identity, and final-source P1
   hardening `41/41` in `271410ms` pass. No wallet/provider/RPC/signing action
-  occurred. One low claim-lease finding and both high contract findings remain.
+  occurred. Both high contract findings remain.
+- Current remediation head `b7a678970e90ecef8011926b255561f06d895e93`
+  fixes the final low hashless-claim lease finding through four review-bounded
+  commits: `0cb1381d2` adds exact zero-value contract-call intents and disables
+  nonce-only auto-retry after reload; `862e5daa0` binds reward/deep-reward
+  claims; `45a9063d3` binds connected Safety Pool Wagmi sends; and `b7a678970`
+  binds connected resolver sends while ensuring terminal cleanup survives an
+  actor switch. Every provider sink now receives the reserved actor/nonce and
+  exact calldata, late hashes remain durable, pending calls remain blocked, and
+  only exact two-origin confirmed/reverted evidence releases the intent. The
+  post-review focused packet passed twice, TypeScript passed, audit x2 is
+  `5836/6360` (`91.76%`) with self-test `17/17`, and P1 hardening passed `41/41`
+  in `273734ms`. Its initially repeatable `wallet-two-context` readiness timeout
+  was traced to the hermetic `viem` fixture missing the newly imported
+  `keccak256`; the exact fixture correction passes standalone and in P1 at
+  `2764ms`. Focused ESLint has zero errors and three pre-existing warnings.
+  Protected DB base/WAL/SHM identity is exact. All five medium and both low scan
+  findings now have local fixes, but remediation is not sealed until a new
+  immutable SHA passes detached reproduction and a supported Standard scan.
 - The current tested code baseline and parent of this documentation-only packet
   is `99666ae20`. Exact SHA `75881579d` passed P1 hardening in the full
   prelaunch report but failed the later business row because the trusted-npm

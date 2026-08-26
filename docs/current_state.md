@@ -10,6 +10,23 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 ## Release-candidate snapshot
 
 - Branch: `codex/repo-cleanup`.
+- Current remediation head `b7a678970e90ecef8011926b255561f06d895e93`
+  closes the scan's final low claim-lease finding in four bounded commits:
+  durable exact contract intents (`0cb1381d2`), reward/deep-reward callers
+  (`862e5daa0`), connected Safety Pool claims (`45a9063d3`), and connected plus
+  embedded resolver lifecycle reconciliation (`b7a678970`). Zero-value claim
+  calls now reserve the exact actor/nonce/calldata before every silent or Wagmi
+  provider sink, retain late hashes, remain blocked across a real reload when
+  no hash is known, and clear only after two exact terminal transaction/receipt
+  observations. A wallet actor switch cannot strand an already-terminal intent.
+  Focused claim/intent/reward/Safety-Pool/resolver behavior passed twice,
+  wallet-actions behavior passes `23` cases, TypeScript passes, audit x2 remains
+  `5836/6360` behavioral (`91.76%`) with self-test `17/17`, and P1 hardening
+  passes `41/41` in `273734ms`. The hermetic two-context browser fixture was
+  updated for the new `keccak256` module import and passes in `2764ms` inside
+  that run. Protected SQLite identity remains exact. All five medium and both
+  low findings now have local fixes; both high contract findings and a fresh
+  detached post-fix seal/supported scan remain open.
 - Exact immutable SHA `53846fe1635fea0e15c131afa5dc8020d48c0975`
   passed fresh detached `npm ci`, dependency policy, the full local/prelaunch
   package, hermetic build, TypeScript, HTTP/browser smoke, V9/V10 invariants,

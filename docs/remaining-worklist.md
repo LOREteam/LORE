@@ -149,6 +149,14 @@ under [`docs/archive/`](archive/).
       previous wallet pair's rows on switch/disconnect and blocks stale async or
       error fallback publication. Wallet-model x2, TypeScript, audit x2/self-test,
       full P1 hardening `41/41`, diff, and protected-DB checks pass.
+- [x] Fix the low hashless non-transfer claim finding in bounded commits
+      `0cb1381d2`, `862e5daa0`, `45a9063d3`, and `b7a678970`. Exact actor,
+      nonce, contract, and calldata are reserved before every silent or Wagmi
+      claim sink; late hashes persist, nonce equality cannot auto-retry a
+      contract call after reload, and two exact terminal observations are
+      required to release it. Focused behavior x2, wallet-actions `23` cases,
+      TypeScript, audit x2 (`5836/6360`, `91.76%`), self-test `17/17`, P1
+      hardening `41/41` in `273734ms`, syntax/diff, and protected-DB checks pass.
 - [ ] Run and seal a new supported Standard scan on the eventual post-fix final
       SHA. The `53846fe…` scan does not prove later source revisions.
 - [ ] Obtain green hosted Linux/Windows CI for the exact final commit.
