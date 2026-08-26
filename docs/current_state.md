@@ -48,6 +48,17 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   hardening passed `41/41` in `271792ms`. Protected SQLite identity remains
   exact; no network, wallet, provider, RPC, signature, or transaction was used.
   This commit postdates the sealed scan and requires the next detached seal/scan.
+- Current child `697f03537` closes the scan's unbounded chat-auth EIP-1271 RPC
+  admission finding. Locally recoverable EOA signatures stay RPC-free;
+  contract-wallet fallback now consumes a shared cross-replica budget of `8`
+  verifications per minute and holds one of only `2` process-local verification
+  slots, bounding provider fan-out to `4` concurrent calls per web process.
+  Admission denial and a third concurrent verification fail before any witness
+  call. Chat quorum and shared-limiter behavior passed twice, TypeScript passed,
+  P1 audit x2 reports `5832/6356` behavioral assertions (`91.76%`) with
+  self-test `17/17`, and exact final-source P1 hardening passed `41/41` in
+  `271199ms`. Protected SQLite identity is exact. Tests used only mocked RPC and
+  Valkey responses; real deployed multi-replica runtime proof remains open.
 - Current tested code baseline `99666ae20` closes the trusted-npm
   release-operations fixture failure exposed by the full prelaunch run at exact
   SHA `75881579d`. P1 hardening passed in that report, but the business row

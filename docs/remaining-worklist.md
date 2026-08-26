@@ -132,6 +132,12 @@ under [`docs/archive/`](archive/).
       named rows always show their wallet address. Route-matrix x2, rendered UI
       x2, TypeScript, audit x2/self-test, full P1 hardening `41/41`, diff, and
       protected-DB checks pass.
+- [x] Fix the medium chat-auth outbound RPC exhaustion finding in local commit
+      `697f03537`: EOA auth remains RPC-free; contract-wallet fallback has a
+      shared `8/minute` cross-replica budget and `2` local concurrent slots.
+      Budget/concurrency denial occurs before witness calls. Focused quorum and
+      shared-limiter x2, TypeScript, audit x2/self-test, full P1 hardening
+      `41/41`, diff, and protected-DB checks pass with mocked providers/Valkey.
 - [ ] Run and seal a new supported Standard scan on the eventual post-fix final
       SHA. The `53846fe…` scan does not prove later source revisions.
 - [ ] Obtain green hosted Linux/Windows CI for the exact final commit.

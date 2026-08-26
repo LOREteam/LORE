@@ -46,6 +46,18 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   in `271792ms` pass. Protected DB base/WAL/SHM identity is exact; the fixture
   forbids external fetch and no wallet, provider, RPC, signing, or transaction
   occurred. A fresh detached seal and supported scan remain required.
+- Current child `697f0353799a2c86038dfe49e208ca7b6ca1c9f6` fixes the
+  medium chat-auth outbound-resource finding. Only the contract-wallet fallback
+  enters admission: it consumes the shared `api-chat-auth-rpc-outbound` budget
+  (`8/minute`) and one of `2` local slots before invoking two independent RPC
+  witnesses. EOA recovery consumes neither resource; exhausted shared budget or
+  a third concurrent verification returns `429` before provider calls, while a
+  required unavailable shared store remains fail-closed `503`. Chat quorum x2,
+  shared limiter x2 (including one common Valkey key across replica/client
+  identities), TypeScript, audit x2 (`5832/6356`, `91.76%`), self-test `17/17`,
+  diff hygiene, protected DB identity, and final-source P1 hardening `41/41` in
+  `271199ms` pass. Provider and Valkey calls were mocked; deployed topology proof
+  and the next detached supported scan remain open.
 - The current tested code baseline and parent of this documentation-only packet
   is `99666ae20`. Exact SHA `75881579d` passed P1 hardening in the full
   prelaunch report but failed the later business row because the trusted-npm
