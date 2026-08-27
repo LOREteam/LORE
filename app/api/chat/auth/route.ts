@@ -197,7 +197,8 @@ export async function GET(request: NextRequest) {
   });
   if (rateLimited) return applyNoStoreHeaders(rateLimited, { varyCookie: true });
 
-  const session = readChatSession(request);
+  const now = Date.now();
+  const session = readChatSession(request, now);
   if (!session) {
     const response = applyNoStoreHeaders(
       NextResponse.json({ error: "Chat auth required" }, { status: 401 }),
@@ -208,7 +209,7 @@ export async function GET(request: NextRequest) {
   }
 
   const response = applyNoStoreHeaders(NextResponse.json({ ok: true }), { varyCookie: true });
-  const expiresAt = issueChatSession(response, session.address);
+  const expiresAt = issueChatSession(response, session.address, now);
   response.headers.set("x-chat-session-expires-at", String(expiresAt));
   return response;
 }

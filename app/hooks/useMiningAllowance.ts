@@ -24,7 +24,7 @@ import {
   withPendingMiningApprovalLock,
   writePendingMiningApprovalState,
 } from "../lib/miningTxPath";
-import type { GasOverrides, SilentSendFn } from "./useMining.types";
+import { bindMiningSilentSendActor, type GasOverrides, type SilentSendFn } from "./useMining.types";
 import type { PendingApproveState, ReceiptState } from "./useMining.stateTypes";
 import { withMiningRpcTimeout } from "./useMining.shared";
 
@@ -326,7 +326,10 @@ export function useMiningAllowance({
                 reservation,
                 async () => assertBeforeSend?.(),
                 () => silentSend(
-                  { to: LINEA_TOKEN_ADDRESS, data, gas: MIN_GAS_APPROVE, nonce: approvalNonce },
+                  bindMiningSilentSendActor(
+                    { to: LINEA_TOKEN_ADDRESS, data, gas: MIN_GAS_APPROVE, nonce: approvalNonce },
+                    reservation.actor,
+                  ),
                   approveOverrides,
                 ),
               );

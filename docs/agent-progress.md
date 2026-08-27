@@ -8,6 +8,21 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
+- Exact sealed SHA `cbf93b230476b8c823daebbc8e8f4707a53903e5` passed the
+  detached fresh-install local/prelaunch gates and supported Standard Security
+  Scan `81c3c75b-4553-4bf0-8096-06021e303cb7`. The scan reports `16` findings
+  (`5 high`, `10 medium`, `1 low`). The current bounded wallet packet carries
+  each manual approval/bet reservation actor through the silent sink, binds the
+  Auto-Miner fallback approval request to the reserved actor, and classifies an
+  actor-change rejection as terminal so the same manual action cannot rebind to
+  a newly active wallet through the direct fallback. Wallet-state, wallet-route,
+  Auto-Miner, and fee-policy focused checks pass twice; TypeScript, audit x2
+  (`5845/6371`, `91.74%`), self-test `17/17`, P1 hardening `41/41` in
+  `268789ms`, diff hygiene, protected-DB identity, and independent review all
+  pass. This packet requires a new immutable SHA, detached gates, and a new
+  supported scan. Protocol randomness/full-grid/V9/tokenomics findings are
+  intentionally not changed without separate approval. No wallet, RPC, signing,
+  transaction, deployment, push, or live action occurred.
 - Exact candidate `107de3734d4702113646a764e354d4f5a005c05d` received an
   empty detached checkout, fresh `npm ci`, dependency policy with zero blocking,
   and direct V9/V10 green invariants. Its full `check-local` passed lint,
@@ -1089,3 +1104,30 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 - No actual Preview or `authorizationReady` result exists. A clean immutable
   SHA, exact public configuration, fresh exact Preview, and separately bound
   consent are mandatory before any future chain write.
+
+- Admin-session logout now uses atomic compare-and-delete of the complete
+  server-side record in both SQLite and the external Redis-compatible store.
+  A rotated-out cookie is classified as `superseded`: it cannot revoke the
+  active successor and the logout response does not overwrite that successor's
+  browser cookie. Missing, invalid, and active-cookie logout remains
+  idempotent, while active logout still clears the cookie and revokes the
+  matching server record. Focused local and shared-store regressions plus
+  TypeScript pass; this mutable packet still needs a new immutable SHA and its
+  full clean-checkout evidence cycle.
+
+- Chat-session refresh now captures one safe clock value after rate-limit
+  admission and uses it for both session validation and reissuance. Thus a
+  cookie at its expiry boundary is rejected and cleared instead of receiving a
+  new rolling expiry, while a cookie at `expiresAt - 1` remains refreshable.
+  POST issuance and chat message/profile validation retain their default fresh
+  clocks. Focused boundary coverage and TypeScript pass; immutable-SHA and
+  clean-checkout evidence remain required.
+
+- The current mutable security/behavior packet passed the scope-aware P1
+  behavior audit twice: `5848/6374` behavioral assertions (`91.75%`) and `526`
+  conservative source operands, with zero coordinator operands. This is local
+  mutable-tree evidence only and does not replace the final-SHA audit cycle.
+- The isolated mutable-tree P1 hardening runner completed `42/42` steps in
+  `281181ms` with V10 EVM fuzz included and an empty stderr log. It used only
+  temporary test databases; the protected `data/lore-v10.sqlite` SHA-256
+  remained `4EA3ECB92D5EFD081030F1C10E84C444E75460E628BB216FD063E72941BF38F7`.

@@ -9,6 +9,23 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Release-candidate snapshot
 
+- Exact immutable SHA `cbf93b230476b8c823daebbc8e8f4707a53903e5`
+  completed detached fresh `npm ci`, dependency, V9/V10, complete local and
+  prelaunch, hermetic build, TypeScript, HTTP/browser, L1--L17, and protected-DB
+  gates. Supported Standard Security Scan
+  `81c3c75b-4553-4bf0-8096-06021e303cb7` completed for that exact SHA with
+  `16` findings (`5 high`, `10 medium`, `1 low`). The current bounded wallet
+  remediation carries the reserved actor through manual approval and bet silent
+  sinks, binds the Auto-Miner direct fallback approval to that same actor, and
+  makes actor-change terminal before the manual direct fallback. Focused suites
+  pass twice, TypeScript passes, audit x2 remains `5845/6371` (`91.74%`),
+  self-test is `17/17`, P1 hardening is `41/41` in `268789ms`, and independent
+  review reports all three actor-binding rows fixed. The protected SQLite base
+  remains exactly `319488` bytes with SHA-256
+  `4EA3ECB92D5EFD081030F1C10E84C444E75460E628BB216FD063E72941BF38F7`
+  and no WAL/SHM. These source changes postdate `cbf93b230`; a new immutable
+  commit, detached reproduction, and exact-SHA scan are required. The five high
+  protocol/tokenomics findings remain open and were not changed.
 - Branch: `codex/repo-cleanup`.
 - Exact candidate `107de3734d4702113646a764e354d4f5a005c05d` completed an
   empty detached checkout, fresh `npm ci`, both dependency policies with zero

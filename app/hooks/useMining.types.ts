@@ -2,8 +2,24 @@
 
 export type GasOverrides = { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | { gasPrice?: bigint };
 
+export type SilentSendTransaction = {
+  to: `0x${string}`;
+  data?: `0x${string}`;
+  value?: bigint;
+  gas?: bigint;
+  nonce?: number;
+  expectedActor?: `0x${string}`;
+};
+
+export function bindMiningSilentSendActor<T extends SilentSendTransaction>(
+  transaction: T,
+  expectedActor: `0x${string}`,
+): T & { expectedActor: `0x${string}` } {
+  return { ...transaction, expectedActor };
+}
+
 export type SilentSendFn = (
-  tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint; gas?: bigint; nonce?: number },
+  tx: SilentSendTransaction,
   gasOverrides?: GasOverrides,
 ) => Promise<`0x${string}`>;
 

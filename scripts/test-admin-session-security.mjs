@@ -165,6 +165,16 @@ function createRedisFetch() {
           const count = (rateLimitCounts.get(key) ?? 0) + 1;
           rateLimitCounts.set(key, count);
           result = [count, 60_000];
+        } else if (script.includes('redis.call("DEL", KEYS[1])')) {
+          const expected = command[4];
+          if (!records.has(key)) {
+            result = 0;
+          } else if (records.get(key) === expected) {
+            records.delete(key);
+            result = 1;
+          } else {
+            result = -1;
+          }
         } else {
           const previous = command[4];
           const next = command[5];
@@ -668,15 +678,31 @@ assert.ok(
   await adminSession.readAdminSession(requestWithCookie(ADMIN_COOKIE, rotatedCookie.value), baseNow + 1_000),
   "rotated cookie must match the active server-side version",
 );
+  assert.equal(
+    await adminSession.revokeAdminSession(
+      requestWithCookie(ADMIN_COOKIE, adminCookie.value),
+      baseNow + 1_000,
+    ),
+    "superseded",
+  "a rotated-out cookie must not revoke its active successor",
+);
+assert.ok(
+  await adminSession.readAdminSession(requestWithCookie(ADMIN_COOKIE, rotatedCookie.value), baseNow + 1_000),
+  "stale local logout must preserve the active rotated session",
+);
 assert.equal(
   await adminSession.rotateAdminSession(createCookieResponse().response, activeAdmin, baseNow + 2_000),
   null,
   "the same cookie version must not rotate twice",
 );
-await adminSession.revokeAdminSession(
-  requestWithCookie(ADMIN_COOKIE, rotatedCookie.value),
-  baseNow + 1_000,
-);
+  assert.equal(
+    await adminSession.revokeAdminSession(
+      requestWithCookie(ADMIN_COOKIE, rotatedCookie.value),
+      baseNow + 1_000,
+    ),
+    "revoked",
+    "an active local cookie must still revoke its own session",
+  );
 assert.equal(
   await adminSession.readAdminSession(requestWithCookie(ADMIN_COOKIE, rotatedCookie.value), baseNow + 1_000),
   null,
@@ -793,16 +819,32 @@ try {
     await adminSession.readAdminSession(requestWithCookie(ADMIN_COOKIE, sharedRotatedCookie.value), sharedNow + 1_000),
     "shared rotation must expose exactly the new version",
   );
-  await adminSession.revokeAdminSession(
-    requestWithCookie(ADMIN_COOKIE, sharedRotatedCookie.value),
-    sharedNow + 1_000,
+  assert.equal(
+    await adminSession.revokeAdminSession(
+      requestWithCookie(ADMIN_COOKIE, sharedCookie.value),
+      sharedNow + 1_000,
+    ),
+    "superseded",
+    "a shared rotated-out cookie must not revoke its active successor",
+  );
+  assert.ok(
+    await adminSession.readAdminSession(requestWithCookie(ADMIN_COOKIE, sharedRotatedCookie.value), sharedNow + 1_000),
+    "stale shared logout must preserve the active rotated session",
+  );
+  assert.equal(
+    await adminSession.revokeAdminSession(
+      requestWithCookie(ADMIN_COOKIE, sharedRotatedCookie.value),
+      sharedNow + 1_000,
+    ),
+    "revoked",
+    "an active shared cookie must still revoke its own session",
   );
   assert.equal(
     await adminSession.readAdminSession(requestWithCookie(ADMIN_COOKIE, sharedRotatedCookie.value), sharedNow + 1_000),
     null,
     "shared logout must revoke the session across replicas",
   );
-  for (const command of ["SET", "GET", "EVAL", "DEL"]) {
+  for (const command of ["SET", "GET", "EVAL"]) {
     assert.ok(redis.commands.includes(command), `shared lifecycle must exercise ${command}`);
   }
 
@@ -1160,16 +1202,44 @@ assert.deepEqual(
 );
 assertAdminRouteHeaders(nonFileOpsResponse, "non-file admin ops artifact");
 
-const logoutResponse = await authRoute.DELETE(createAdminRouteRequest("/api/admin/auth", {
+const routeActiveSession = await adminSession.readAdminSession(
+  requestWithCookie(ADMIN_COOKIE, routeSessionCookie.value),
+  Date.now(),
+);
+assert.ok(routeActiveSession, "route boundary session must remain active before refresh");
+const routeRotatedResponse = createCookieResponse();
+assert.ok(
+  await adminSession.rotateAdminSession(routeRotatedResponse.response, routeActiveSession, Date.now()),
+  "route boundary session must rotate before the stale logout regression",
+);
+const routeRotatedCookie = routeRotatedResponse.get(ADMIN_COOKIE);
+assert.ok(routeRotatedCookie, "route boundary refresh must produce a successor cookie");
+const staleLogoutResponse = await authRoute.DELETE(createAdminRouteRequest("/api/admin/auth", {
   method: "DELETE",
   cookie: routeSessionCookie.value,
+}));
+assert.equal(staleLogoutResponse.status, 200, "stale route logout remains idempotent");
+assert.deepEqual(await staleLogoutResponse.json(), { ok: true });
+assert.equal(
+  staleLogoutResponse.headers.get("set-cookie"),
+  null,
+  "stale route logout must not clear a newer browser cookie",
+);
+assert.ok(
+  await adminSession.readAdminSession(requestWithCookie(ADMIN_COOKIE, routeRotatedCookie.value), Date.now()),
+  "stale route logout must preserve its active server-side successor",
+);
+
+const logoutResponse = await authRoute.DELETE(createAdminRouteRequest("/api/admin/auth", {
+  method: "DELETE",
+  cookie: routeRotatedCookie.value,
 }));
 assert.equal(logoutResponse.status, 200, "admin logout must revoke through the real route");
 assert.deepEqual(await logoutResponse.json(), { ok: true });
 assert.match(logoutResponse.headers.get("set-cookie") ?? "", /lore_admin_session=/);
 assertAdminRouteHeaders(logoutResponse, "successful admin logout");
 assert.equal(
-  await adminSession.readAdminSession(requestWithCookie(ADMIN_COOKIE, routeSessionCookie.value), Date.now()),
+  await adminSession.readAdminSession(requestWithCookie(ADMIN_COOKIE, routeRotatedCookie.value), Date.now()),
   null,
   "successful route logout must revoke the prior cookie in server state",
 );

@@ -419,6 +419,9 @@ export function getBetErrorMessage(err: unknown): string {
   if (isWrongNetworkError(err)) {
     return `Bet failed: wallet is on the wrong network. Switch to ${APP_CHAIN_NAME} and retry.`;
   }
+  if (flattenErrorMessage(err).includes("wallet_transfer_intent_actor_changed")) {
+    return "Bet stopped because the active wallet changed. Review the wallet and start a new attempt.";
+  }
   if (isNetworkError(err)) {
     return "Bet failed: RPC unavailable. Check your connection and try again.";
   }
@@ -467,6 +470,7 @@ export function isDeterministicBetExecutionError(err: unknown): boolean {
   const msg = flattenErrorMessage(err);
   return (
     isLineaFeePolicyError(err) ||
+    msg.includes("wallet_transfer_intent_actor_changed") ||
     msg.includes("contractfunctionexecutionerror") ||
     msg.includes("execution reverted") ||
     msg.includes("the contract function") ||

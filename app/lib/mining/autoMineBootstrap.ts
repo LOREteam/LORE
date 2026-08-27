@@ -15,7 +15,7 @@ import {
   writePendingMiningApprovalState,
 } from "../miningTxPath";
 import { delay, isUserRejection } from "../utils";
-import type { GasOverrides, SilentSendFn } from "../../hooks/useMining.types";
+import { bindMiningSilentSendActor, type GasOverrides, type SilentSendFn } from "../../hooks/useMining.types";
 import type { PendingApproveState, ReceiptState } from "../../hooks/useMining.stateTypes";
 import { isNetworkError, isRetryableError, withMiningRpcTimeout } from "../../hooks/useMining.shared";
 import { readWithNetworkRetry } from "./networkRetry";
@@ -53,6 +53,23 @@ export function selectBootstrapApprovalSubmissionNonce(
 ): number | null {
   if (trackedNonce !== undefined && trackedNonce !== null) return null;
   return normalizeBootstrapApprovalNonce(freshPendingNonce);
+}
+
+export function buildAutoMineApprovalWriteRequest(
+  actor: `0x${string}`,
+  nonce: number,
+  gasOverrides?: GasOverrides,
+) {
+  return {
+    ...(gasOverrides ?? {}),
+    address: LINEA_TOKEN_ADDRESS,
+    abi: TOKEN_ABI,
+    functionName: "approve" as const,
+    args: [CONTRACT_ADDRESS, maxUint256] as const,
+    chainId: APP_CHAIN_ID,
+    nonce,
+    account: actor,
+  };
 }
 
 function formatLineaWeiOneDecimal(rawValue: bigint): string {
@@ -290,7 +307,10 @@ export async function prepareAutoMineBootstrap({
           approvalReservation,
           () => undefined,
           () => silentSend(
-            { to: LINEA_TOKEN_ADDRESS, data, gas: minGasApprove, nonce: approvalNonce! },
+            bindMiningSilentSendActor(
+              { to: LINEA_TOKEN_ADDRESS, data, gas: minGasApprove, nonce: approvalNonce! },
+              approvalReservation.actor,
+            ),
             approveOverrides,
           ),
         );
@@ -318,15 +338,11 @@ export async function prepareAutoMineBootstrap({
         approveHash = await executeReservedMiningApprovalWalletSink(
           approvalReservation,
           () => undefined,
-          () => writeApprove({
-            address: LINEA_TOKEN_ADDRESS,
-            abi: TOKEN_ABI,
-            functionName: "approve",
-            args: [CONTRACT_ADDRESS, maxUint256],
-            chainId: APP_CHAIN_ID,
-            nonce: approvalNonce,
-            ...writeApproveOverrides,
-          }),
+          () => writeApprove(buildAutoMineApprovalWriteRequest(
+            approvalReservation.actor,
+            approvalNonce!,
+            writeApproveOverrides,
+          )),
         );
         const submitted = writePendingMiningApprovalState({ ...approvalReservation, hash: approveHash });
         if (!submitted) {

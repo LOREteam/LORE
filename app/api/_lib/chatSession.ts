@@ -83,7 +83,7 @@ export function normalizeChatSessionExpiresAt(value: unknown, now = Date.now()) 
   return value;
 }
 
-function parse(raw: string): SessionPayload | null {
+function parse(raw: string, now: number): SessionPayload | null {
   const cookie = parseChatSessionCookie(raw);
   if (!cookie) return null;
   const [encoded, signature] = cookie;
@@ -94,7 +94,7 @@ function parse(raw: string): SessionPayload | null {
     const parsed = JSON.parse(fromBase64Url(encoded)) as Partial<SessionPayload>;
     if (parsed.aud !== SESSION_AUDIENCE || parsed.type !== SESSION_TYPE) return null;
     if (!parsed.address || typeof parsed.address !== "string") return null;
-    const expiresAt = normalizeChatSessionExpiresAt(parsed.expiresAt);
+    const expiresAt = normalizeChatSessionExpiresAt(parsed.expiresAt, now);
     if (expiresAt === null) return null;
     const address = normalizeChatAuthAddress(parsed.address);
     if (!address) return null;
@@ -109,8 +109,11 @@ function parse(raw: string): SessionPayload | null {
   }
 }
 
-export function issueChatSession(response: NextResponse, address: string) {
-  const expiresAt = Date.now() + CHAT_AUTH_SESSION_TTL_MS;
+export function issueChatSession(response: NextResponse, address: string, now = Date.now()) {
+  if (!Number.isSafeInteger(now) || now < 0 || now > Number.MAX_SAFE_INTEGER - CHAT_AUTH_SESSION_TTL_MS) {
+    throw new Error("Cannot issue chat session with an invalid clock.");
+  }
+  const expiresAt = now + CHAT_AUTH_SESSION_TTL_MS;
   const normalizedAddress = normalizeChatAuthAddress(address);
   if (!normalizedAddress) throw new Error("Cannot issue chat session for an invalid wallet address.");
   const token = serialize({
@@ -139,11 +142,8 @@ export function clearChatSession(response: NextResponse) {
   });
 }
 
-export function readChatSession(request: NextRequest): SessionPayload | null {
+export function readChatSession(request: NextRequest, now = Date.now()): SessionPayload | null {
   const raw = request.cookies.get(COOKIE_NAME)?.value;
   if (!raw) return null;
-  const payload = parse(raw);
-  if (!payload) return null;
-  if (payload.expiresAt <= Date.now()) return null;
-  return payload;
+  return parse(raw, now);
 }

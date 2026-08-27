@@ -3079,11 +3079,30 @@ export function rotateLocalAdminSessionRecord(
   return adminSessionStorageChangedOneRow(result);
 }
 
-export function deleteLocalAdminSessionRecord(sessionKey: string) {
-  db.prepare(`
-    DELETE FROM admin_sessions
-    WHERE scope = ? AND session_key = ?
-  `).run(CURRENT_STORAGE_SCOPE, sessionKey);
+export function deleteLocalAdminSessionRecordIfMatch(
+  sessionKey: string,
+  expectedValue: string,
+  now: number,
+): -1 | 0 | 1 {
+  assertAdminSessionStorageTimestamp(now, "admin session clock");
+  return runInTransaction(() => {
+    db.prepare("DELETE FROM admin_sessions WHERE expires_at <= ?").run(now);
+    const current = db.prepare(`
+      SELECT record_value
+      FROM admin_sessions
+      WHERE scope = ? AND session_key = ? AND expires_at > ?
+    `).get(CURRENT_STORAGE_SCOPE, sessionKey, now) as { record_value?: unknown } | undefined;
+    if (typeof current?.record_value !== "string") return 0;
+    if (current.record_value !== expectedValue) return -1;
+    const result = db.prepare(`
+      DELETE FROM admin_sessions
+      WHERE scope = ?
+        AND session_key = ?
+        AND record_value = ?
+        AND expires_at > ?
+    `).run(CURRENT_STORAGE_SCOPE, sessionKey, expectedValue, now);
+    return adminSessionStorageChangedOneRow(result) ? 1 : 0;
+  }, "admin_session_delete");
 }
 
 export function consumeRateLimit(bucket: string, key: string, limit: number, windowMs: number) {

@@ -42,6 +42,7 @@ import { tileIdsToMask } from "../app/lib/tileMask";
 import { getConfiguredLineaNetwork, getLineaChain, getPreferredLineaRpcs, getStableLineaReadRpcs } from "../config/publicConfig";
 import { estimateGasWithMethodRetry, isEstimateGasMethodUnsupported } from "./lib/estimate-gas-retry";
 import { classifyCanaryContractError } from "./lib/canary-contract-error";
+import { waitForNonceQueueSettlement } from "./lib/canary-nonce-settlement.mjs";
 import { assertTrustedHealthCredentialOrigin } from "./health-credential-origin.mjs";
 import { fetchCanaryHealthPayloadPair } from "./live-canary-health-policy.mjs";
 import { sanitizeSupportLogPayload } from "../app/lib/sentrySanitize";
@@ -78,8 +79,12 @@ const EPOCH_BOUND_BITMAP_SELECTOR = toFunctionSelector(
 );
 const V10_MATRIX_ONLY = process.argv.includes("--v10-matrix-only");
 const V10_MATRIX_EXECUTE = process.argv.includes("--execute");
+const REQUIRE_EPOCH_BOUND_BETS = process.argv.includes("--require-epoch-bound");
 if (V10_MATRIX_ONLY && !CONTRACT_REQUIRES_EPOCH_BOUND_BETS) {
   throw new Error("V10 matrix mode requires NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1");
+}
+if (REQUIRE_EPOCH_BOUND_BETS && !CONTRACT_REQUIRES_EPOCH_BOUND_BETS) {
+  throw new Error("Epoch-bound canary requires NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1");
 }
 const LIVE_EXECUTION_CONFIRMED =
   process.env.LIVE_TEST_EXECUTE === "1" && process.argv.includes("--execute-live");
@@ -1516,6 +1521,21 @@ async function resolveIfNeeded(params: {
       pendingHash = hash;
       const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: TX_RECEIPT_TIMEOUT_MS });
       if (emptyEpoch && receipt.status === "success") emptyResolveBootstrapUsed = true;
+      if (receipt.status !== "success" && !V10_MATRIX_ONLY) {
+        writeEvent(logPath, {
+          amount: "0",
+          epoch: epoch.toString(),
+          error: "resolver transaction reverted",
+          errorKind: "contract-revert",
+          mode: "resolver-candidate",
+          ok: false,
+          role: resolver.role,
+          round: -1,
+          secondsLeft,
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
       writeEvent(logPath, {
         amount: "0",
         durationMs: Date.now() - startedAt,
@@ -1542,6 +1562,7 @@ async function resolveIfNeeded(params: {
       return;
     } catch (error) {
       const classified = classifyError(error);
+      const resolverDiagnostic = !V10_MATRIX_ONLY;
       if (pendingHash && /timed out while waiting for transaction/i.test(classified.message)) pendingResolveEpochs.add(epochKey);
       if (!terminalFailureRecorded) {
         writeEvent(logPath, {
@@ -1550,7 +1571,7 @@ async function resolveIfNeeded(params: {
           epoch: epoch.toString(),
           error: classified.message,
           errorKind: classified.kind,
-          mode: "resolve",
+          mode: resolverDiagnostic ? "resolver-candidate" : "resolve",
           ok: false,
           role: resolver.role,
           round: -1,
@@ -1804,14 +1825,16 @@ async function placeRound(params: {
     throw new Error("bet has insufficient native balance for the fixed fee budget");
   }
   gas = budgetedGasLimit;
-  const [nonceLatest, noncePending] = await Promise.all([
-    publicClient.getTransactionCount({ address: wallet.account.address, blockTag: "latest" }),
-    publicClient.getTransactionCount({ address: wallet.account.address, blockTag: "pending" }),
-  ]);
+  const { latest: nonceLatest, pending: noncePending } = await waitForNonceQueueSettlement({
+    readNoncePair: async () => {
+      const [latest, pending] = await Promise.all([
+        publicClient.getTransactionCount({ address: wallet.account.address, blockTag: "latest" }),
+        publicClient.getTransactionCount({ address: wallet.account.address, blockTag: "pending" }),
+      ]);
+      return { latest, pending };
+    },
+  });
   const nonceReadAt = Date.now();
-  if (noncePending > nonceLatest) {
-    throw new Error(`Pending transaction blocked by nonce: latest=${nonceLatest} pending=${noncePending}`);
-  }
   reserveV10RuntimeTransaction("bet");
   const hash = await walletClient.writeContract({
     account: wallet.account,
@@ -2048,7 +2071,11 @@ async function main() {
   console.log(`[live-canary] token=${VERBOSE_TARGETS ? LINEA_TOKEN_ADDRESS : "configured"}`);
   console.log(`[live-canary] rpcLabel=${RPC_LABEL} readRpcCount=${readRpcUrls.length} broadcastRpcCount=${broadcastRpcUrls.length}`);
   console.log(`[live-canary] rpcFailoverInjection=${INJECT_RPC_FAILOVER ? "enabled" : "disabled"}`);
-  console.log(`[live-canary] v10Matrix=${V10_MATRIX_ONLY ? "bounded" : "disabled"} execution=${DRY_RUN ? "dry-run" : "enabled"}`);
+  console.log(
+    `[live-canary] v10Matrix=${V10_MATRIX_ONLY ? "bounded" : "disabled"} ` +
+      `epochBound=${CONTRACT_REQUIRES_EPOCH_BOUND_BETS ? "required" : "disabled"} ` +
+      `execution=${DRY_RUN ? "dry-run" : "enabled"}`,
+  );
   console.log(`[live-canary] walletSetSha256=${publicWalletConfig.walletSetSha256}`);
   console.log(`[live-canary] canaryPlanSha256=${CANARY_PLAN_SHA256}`);
   if (previewBinding) console.log(`[live-canary] previewSha256=${previewBinding.previewSha256}`);

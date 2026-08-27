@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { selectApprovalSubmissionNonce } from "../app/hooks/useMiningAllowance";
 import { assertPendingTxRepairNonceIsUntracked } from "../app/hooks/useWalletActions";
 import { didPreferredMiningActorChange } from "../app/hooks/useMiningRuntimeState";
+import { bindMiningSilentSendActor } from "../app/hooks/useMining.types";
+import { getBetErrorMessage, isDeterministicBetExecutionError } from "../app/hooks/useMining.shared";
 import {
   createMiningEpochWriteGuard,
   buildReservedMiningWriteRequest,
@@ -11,7 +13,10 @@ import {
   shouldClearDefinitelyUnsentMiningReservation,
   shouldRecoverSilentSendAsPending,
 } from "../app/hooks/useMiningStandardBetPath";
-import { selectBootstrapApprovalSubmissionNonce } from "../app/lib/mining/autoMineBootstrap";
+import {
+  buildAutoMineApprovalWriteRequest,
+  selectBootstrapApprovalSubmissionNonce,
+} from "../app/lib/mining/autoMineBootstrap";
 import {
   clearPendingMiningApprovalState,
   clearPendingMiningTxState,
@@ -73,9 +78,40 @@ async function main() {
   assert.equal(revertedRecoveryClears, 1);
 
   const boundaryActor = "0x5555555555555555555555555555555555555555" as const;
+  const switchedBoundaryActor = "0x9999999999999999999999999999999999999999" as const;
   const boundaryContract = "0x6666666666666666666666666666666666666666" as const;
   const boundarySpender = "0x7777777777777777777777777777777777777777" as const;
   const boundaryHash = `0x${"e".repeat(64)}` as `0x${string}`;
+  const actorBoundSilentRequest = bindMiningSilentSendActor(
+    { to: boundaryContract, nonce: 12, expectedActor: switchedBoundaryActor },
+    boundaryActor,
+  );
+  assert.equal(actorBoundSilentRequest.expectedActor, boundaryActor);
+  assert.equal(actorBoundSilentRequest.to, boundaryContract);
+  assert.equal(actorBoundSilentRequest.nonce, 12);
+  const actorChangedError = Object.assign(
+    new Error("wallet_transfer_intent_actor_changed"),
+    { name: "WalletTransferIntentError" },
+  );
+  assert.equal(
+    isDeterministicBetExecutionError(actorChangedError),
+    true,
+    "an actor switch must terminate the silent attempt instead of reaching the direct wallet fallback",
+  );
+  assert.match(getBetErrorMessage(actorChangedError), /active wallet changed/i);
+
+  const autoMineApprovalRequest = buildAutoMineApprovalWriteRequest(
+    boundaryActor,
+    13,
+    { maxFeePerGas: 20n, maxPriorityFeePerGas: 2n },
+  );
+  assert.equal(autoMineApprovalRequest.account, boundaryActor);
+  assert.equal(autoMineApprovalRequest.nonce, 13);
+  assert.ok("maxFeePerGas" in autoMineApprovalRequest);
+  assert.equal(autoMineApprovalRequest.maxFeePerGas, 20n);
+  assert.equal(autoMineApprovalRequest.maxPriorityFeePerGas, 2n);
+  assert.equal(autoMineApprovalRequest.args[1], (1n << 256n) - 1n);
+
   const reservedWrite = buildReservedMiningWriteRequest(
     { address: boundaryContract, functionName: "placeBatchBetsBitmapForEpoch" },
     boundaryActor,

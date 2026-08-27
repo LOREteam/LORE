@@ -29,7 +29,7 @@ import {
 } from "../lib/miningTxPath";
 import { tileIdsToMask } from "../lib/tileMask";
 import { isUserRejection } from "../lib/utils";
-import type { GasOverrides, SilentSendFn } from "./useMining.types";
+import { bindMiningSilentSendActor, type GasOverrides, type SilentSendFn } from "./useMining.types";
 import type { ReceiptState } from "./useMining.stateTypes";
 import {
   isAmbiguousPendingTxError,
@@ -692,12 +692,12 @@ export function useMiningStandardBetPath({
           try {
             return {
               hash: await silentSend(
-                {
+                bindMiningSilentSendActor({
                   to: CONTRACT_ADDRESS,
                   data,
                   gas,
                   nonce: pendingState.nonce,
-                },
+                }, pendingState.actor),
                 gasOverrides,
               ),
             };

@@ -5,6 +5,19 @@ under [`docs/archive/`](archive/).
 
 ## P0: trustworthy local release candidate
 
+- [x] Seal and scan exact SHA `cbf93b230476b8c823daebbc8e8f4707a53903e5`.
+      Detached fresh-install local/prelaunch gates passed; supported scan
+      `81c3c75b-4553-4bf0-8096-06021e303cb7` reports `16` findings (`5 high`,
+      `10 medium`, `1 low`).
+- [x] Fix the three source-remediable wallet actor-binding rows. Manual approval
+      and bet silent sinks now retain their reservation actor, actor change is
+      terminal before direct fallback, and Auto-Miner direct approval binds the
+      reserved actor. Focused x2, TypeScript, audit x2/self-test, P1 `41/41`,
+      independent review, diff hygiene, and protected DB identity pass.
+- [ ] Commit the exact wallet code/test/four-doc manifest packet, then repeat
+      detached fresh-install gates and a supported scan on the resulting SHA.
+      Do not change the five protocol/tokenomics findings without separate
+      approval.
 - [x] Use exact detached candidate `107de3734` to expose and correct the two
       stale post-remediation test contracts. The OG production fixture now
       declares its intentional single replica, while the wallet-transfer proof

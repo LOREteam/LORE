@@ -13,7 +13,7 @@ import {
 } from "./externalRateLimit";
 import {
   createLocalAdminSessionRecord,
-  deleteLocalAdminSessionRecord,
+  deleteLocalAdminSessionRecordIfMatch,
   readLocalAdminSessionRecord,
   rotateLocalAdminSessionRecord,
 } from "../../../server/storage";
@@ -35,6 +35,12 @@ if current ~= ARGV[1] then return 0 end
 redis.call("SET", KEYS[1], ARGV[2], "PX", ARGV[3])
 return 1
 `;
+const DELETE_SESSION_SCRIPT = `
+local current = redis.call("GET", KEYS[1])
+if not current then return 0 end
+if current ~= ARGV[1] then return -1 end
+return redis.call("DEL", KEYS[1])
+`;
 
 let missingSecretWarningShown = false;
 let developmentSessionSecret: string | null = null;
@@ -50,6 +56,8 @@ export type AdminSessionPayload = {
   expiresAt: number;
   absoluteExpiresAt: number;
 };
+
+export type AdminSessionRevocationOutcome = "invalid" | "missing" | "superseded" | "revoked";
 
 type ExternalSessionStorePayload = {
   result?: unknown;
@@ -351,19 +359,26 @@ async function rotateSessionRecord(
   );
 }
 
-async function deleteSessionRecord(payload: AdminSessionPayload) {
+async function deleteSessionRecord(payload: AdminSessionPayload, now: number) {
   const key = sessionStoreKey(payload.sessionId);
+  const expectedValue = serializeSessionRecord(payload);
   if (requiresExternalAdminSessionStore()) {
-    const result = await executeExternalSessionStoreCommand(["DEL", key]);
-    if (
-      result === 0 ||
-      result === 1 ||
-      result === "0" ||
-      result === "1"
-    ) return;
+    const result = await executeExternalSessionStoreCommand([
+      "EVAL",
+      DELETE_SESSION_SCRIPT,
+      "1",
+      key,
+      expectedValue,
+    ]);
+    if (result === 1 || result === "1") return "revoked" as const;
+    if (result === 0 || result === "0" || result === null) return "missing" as const;
+    if (result === -1 || result === "-1") return "superseded" as const;
     throw new Error("shared admin session store returned an invalid delete response");
   }
-  deleteLocalAdminSessionRecord(key);
+  const result = deleteLocalAdminSessionRecordIfMatch(key, expectedValue, now);
+  if (result === 1) return "revoked" as const;
+  if (result === 0) return "missing" as const;
+  return "superseded" as const;
 }
 
 function createSessionPayload(address: string, now: number): AdminSessionPayload {
@@ -486,11 +501,10 @@ export function readAdminSessionForRefresh(
 export async function revokeAdminSession(
   request: NextRequest,
   now = Date.now(),
-) {
+): Promise<AdminSessionRevocationOutcome> {
   const raw = request.cookies.get(COOKIE_NAME)?.value;
-  if (!raw || !ADMIN_AUTH_WALLET_CONFIGURED) return false;
+  if (!raw || !ADMIN_AUTH_WALLET_CONFIGURED) return "invalid";
   const payload = parse(raw, ADMIN_AUTH_WALLET, now);
-  if (!payload) return false;
-  await deleteSessionRecord(payload);
-  return true;
+  if (!payload) return "invalid";
+  return deleteSessionRecord(payload, now);
 }

@@ -60,6 +60,27 @@ function runInspection(extraEnvironment = {}) {
   );
 }
 
+function runEpochBoundGuardInspection(extraEnvironment = {}) {
+  return spawnSync(
+    process.execPath,
+    [
+      `--import=${FETCH_GUARD}`,
+      TSX_CLI,
+      LIVE_CANARY_SCRIPT,
+      "--require-epoch-bound",
+      "--inspect-runtime-enforcement",
+    ],
+    {
+      cwd: REPOSITORY_ROOT,
+      encoding: "utf8",
+      env: { ...sanitizedInspectionEnvironment(), ...extraEnvironment },
+      maxBuffer: 1024 * 1024,
+      timeout: 20_000,
+      windowsHide: true,
+    },
+  );
+}
+
 function sourceSection(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
   const end = source.indexOf(endMarker, start + startMarker.length);
@@ -175,6 +196,21 @@ test("offline V10 runtime enforcement inspection proves bounded behavior without
   assert.doesNotMatch(unsafeLabelOutput, /NETWORK_CALL_FORBIDDEN/);
 });
 
+test("explicit epoch-bound mode fails closed before runner side effects when the runtime flag is disabled", () => {
+  const rejected = runEpochBoundGuardInspection({
+    NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS: "0",
+  });
+  const rejectedOutput = `${rejected.stdout ?? ""}\n${rejected.stderr ?? ""}`;
+  assert.equal(rejected.error, undefined, rejected.error?.message);
+  assert.equal(rejected.signal, null, rejectedOutput);
+  assert.notEqual(rejected.status, 0, rejectedOutput);
+  assert.match(
+    rejectedOutput,
+    /Epoch-bound canary requires NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS=1/,
+  );
+  assert.doesNotMatch(rejectedOutput, /NETWORK_CALL_FORBIDDEN/);
+});
+
 test("V10 enforcement guards remain ordered before every affected write sink", () => {
   const source = readFileSync(LIVE_CANARY_SCRIPT, "utf8");
   const inspection = sourceSection(
@@ -255,8 +291,7 @@ test("V10 enforcement guards remain ordered before every affected write sink", (
     "async function runPreflight",
   );
   assertSourceOrder("bet pending nonce and transaction cap", bet, [
-    "if (noncePending > nonceLatest) {",
-    "throw new Error(`Pending transaction blocked by nonce:",
+    "const { latest: nonceLatest, pending: noncePending } = await waitForNonceQueueSettlement({",
     'reserveV10RuntimeTransaction("bet");',
     "const hash = await walletClient.writeContract({",
   ]);

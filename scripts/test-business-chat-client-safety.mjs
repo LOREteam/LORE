@@ -1375,6 +1375,28 @@ export async function runChatAndClientSafetyTests() {
     assert.equal(decoded.address, validChatAddress);
     assert.deepEqual(chatSession.readChatSession(jar.request), decoded);
 
+    const fixedNow = Date.parse("2026-08-13T12:05:00.000Z");
+    const fixedClockJar = createCookieJar();
+    const fixedClockExpiresAt = chatSession.issueChatSession(
+      fixedClockJar.response,
+      validChatAddress,
+      fixedNow,
+    );
+    assert.equal(
+      fixedClockExpiresAt,
+      fixedNow + chatAuth.CHAT_AUTH_SESSION_TTL_MS,
+      "chat-session issuance must bind its expiry to the supplied refresh clock",
+    );
+    assert.ok(
+      chatSession.readChatSession(fixedClockJar.request, fixedClockExpiresAt - 1),
+      "a session must remain valid immediately before its fixed expiry boundary",
+    );
+    assert.equal(
+      chatSession.readChatSession(fixedClockJar.request, fixedClockExpiresAt),
+      null,
+      "a session must not be refreshed once the shared refresh clock reaches its expiry",
+    );
+
     jar.values.set("lore_chat_session", `${issuedCookie.value.slice(0, -1)}${issuedCookie.value.endsWith("a") ? "b" : "a"}`);
     assert.equal(chatSession.readChatSession(jar.request), null, "tampered chat-session signature must fail closed");
     jar.values.set("lore_chat_session", mutateChatSessionToken(issuedCookie.value, (payload) => ({ ...payload, address: "0x2222222222222222222222222222222222222222" })));

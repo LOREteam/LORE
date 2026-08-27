@@ -104,12 +104,13 @@ evidence only; it is not the 50-epoch soak.
 $env:LIVE_CANARY_MIN_EPOCHS = "6"
 $env:LIVE_CANARY_MIN_ELAPSED_MS_PER_EPOCH = "45000"
 $env:LIVE_CANARY_RPC_LABEL = "<concrete-redacted-sepolia-provider-label>"
+$env:NEXT_PUBLIC_CONTRACT_REQUIRES_EPOCH_BOUND_BETS = "1"
 # This is read-only unless both execution confirmations below are present.
-npm.cmd run live:canary
+npm.cmd run live:canary -- --require-epoch-bound
 
 # Run only after a fresh, bounded authorization for this exact canary.
 $env:LIVE_TEST_EXECUTE = "1"
-npm.cmd run live:canary -- --execute-live
+npm.cmd run live:canary -- --execute-live --require-epoch-bound
 ```
 
 Only after the six-epoch canary has completed and its recovery/reconciliation

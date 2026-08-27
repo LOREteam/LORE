@@ -197,9 +197,9 @@ export async function GET(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
-    await revokeAdminSession(request);
+    const outcome = await revokeAdminSession(request);
     const response = applyNoStoreHeaders(NextResponse.json({ ok: true }), { varyCookie: true });
-    clearAdminSession(response);
+    if (outcome !== "superseded") clearAdminSession(response);
     return response;
   } catch (error) {
     logRouteError("api/admin/auth", error, { action: "logout" });
