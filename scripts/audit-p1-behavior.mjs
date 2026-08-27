@@ -29,6 +29,10 @@ const ASSERT_METHODS = new Set([
   "throws",
 ]);
 const ASSERT_CONSTRUCTORS = new Set(["AssertionError", "CallTracker"]);
+// Node 24.5 exposes the legacy Assert constructor as a function, while later
+// supported Node 24 releases do not. It is not an assertion method and must
+// not make the audit's supported assertion surface runtime-version-specific.
+const OPTIONAL_LEGACY_ASSERT_EXPORTS = new Set(["Assert"]);
 const ASSERT_MODULES = new Set(["assert", "assert/strict", "node:assert", "node:assert/strict"]);
 const FS_MODULES = new Set(["fs", "node:fs"]);
 const TRANSPARENT_INSTANCE_METHODS = new Set([
@@ -1180,7 +1184,11 @@ export function auditP1Behavior({
 
 export function runSelfTest() {
   const runtimeAssertMethods = Object.entries(assert)
-    .filter(([name, value]) => typeof value === "function" && name !== "AssertionError" && name !== "CallTracker")
+    .filter(([name, value]) => (
+      typeof value === "function"
+      && !ASSERT_CONSTRUCTORS.has(name)
+      && !OPTIONAL_LEGACY_ASSERT_EXPORTS.has(name)
+    ))
     .map(([name]) => name)
     .sort();
   assert.deepEqual([...ASSERT_METHODS].sort(), runtimeAssertMethods);
