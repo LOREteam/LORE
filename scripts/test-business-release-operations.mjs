@@ -3620,8 +3620,8 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     liveRoundCanarySource,
-    /noncePending > nonceLatest[\s\S]*Pending transaction blocked by nonce/,
-    "live canary must not dispatch another transaction while a wallet already has a pending nonce",
+    /waitForNonceQueueSettlement\(\{[\s\S]*readNoncePair: async \(\) => \{[\s\S]*blockTag: "latest"[\s\S]*blockTag: "pending"/,
+    "live canary must settle a wallet nonce queue before dispatching another transaction",
   );
   assert.match(
     liveRoundCanarySource,
