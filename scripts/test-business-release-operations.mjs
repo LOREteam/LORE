@@ -31,6 +31,11 @@ import * as sqliteScopeAuditModule from "./sqlite-scope-audit-lib.mjs";
 import * as chatAuthModule from "../app/lib/chatAuth.ts";
 import * as chatSessionModule from "../app/api/_lib/chatSession.ts";
 import * as indexerNormalizationModule from "./indexerNormalization.mjs";
+
+// Hosted Windows workers can briefly stall while creating/removing detached
+// fixture worktrees. Keep a bounded timeout, with headroom above normal runs.
+const CAMPAIGN_FIXTURE_TIMEOUT_MS = 60_000;
+
 import {
   createLaunchGatePolicyMaps,
   findLiveCanaryLogPaths,
@@ -518,7 +523,7 @@ function runCampaignFixturePowerShell(scriptPath, campaignId, { failEventWrite =
     cwd: fixtureRoot,
     env: environment,
     encoding: "utf8",
-    timeout: 30_000,
+    timeout: CAMPAIGN_FIXTURE_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
     windowsHide: true,
   });
