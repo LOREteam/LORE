@@ -50,6 +50,27 @@ function pathInsideOrSame(child, parent) {
   return rel === "" || (Boolean(rel) && !rel.startsWith("..") && !isAbsolute(rel));
 }
 
+function isAnyPlatformAbsolute(value) {
+  const raw = String(value ?? "").trim();
+  return isAbsolute(raw) || /^[a-zA-Z]:[\\/]/.test(raw) || /^\\\\/.test(raw) || raw.startsWith("/");
+}
+
+function externalPathStatus(value) {
+  const raw = String(value ?? "").trim();
+  const foreignWindowsAbsolute = /^[a-zA-Z]:[\\/]/.test(raw) || /^\\\\/.test(raw);
+  // A redacted Windows production path remains external when Linux CI checks
+  // the draft; POSIX resolve() would otherwise reinterpret it under the repo.
+  const absolute = foreignWindowsAbsolute && process.platform !== "win32"
+    ? raw
+    : isAnyPlatformAbsolute(raw) ? resolve(raw) : resolve(process.cwd(), raw || ".");
+  return {
+    insideRepo: foreignWindowsAbsolute && process.platform !== "win32"
+      ? false
+      : pathInsideOrSame(absolute, process.cwd()),
+    isAbsolute: isAnyPlatformAbsolute(raw),
+  };
+}
+
 function requireConcreteValue(name, value) {
   if (!printPlanMode) requireCondition(hasConcreteValue(value), `--${name} is required when collecting launch host evidence`);
 }
@@ -67,8 +88,8 @@ function requireExistingArtifact(name, value) {
 
 function requireExternalDbPath(value) {
   if (printPlanMode) return;
-  const absolute = resolve(value);
-  requireCondition(isAbsolute(value) && !pathInsideOrSame(absolute, process.cwd()), "--db-path/LORE_DB_PATH must be an absolute path outside the repo checkout");
+  const status = externalPathStatus(value);
+  requireCondition(status.isAbsolute && !status.insideRepo, "--db-path/LORE_DB_PATH must be an absolute path outside the repo checkout");
 }
 
 function firstMatchingLine(text, pattern) {
