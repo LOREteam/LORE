@@ -59,6 +59,15 @@ function countAssertionFailures(text) {
   return count;
 }
 
+function summarizeFailureHint(text) {
+  const line = String(text ?? "")
+    .split(/\r?\n/)
+    .find((candidate) => /\b(?:AssertionError|Error|TypeError|SyntaxError)\b/.test(candidate));
+  if (!line) return null;
+  const compact = line.replace(/\s+/g, " ").trim();
+  return compact.length <= 280 ? compact : `${compact.slice(0, 263)}...<truncated>`;
+}
+
 export function parseExecutedBusinessLogicProof(text) {
   const matches = [...String(text ?? "").matchAll(/^Business logic proof: (\{[^\r\n]+\})$/gm)];
   if (matches.length !== 1) return null;
@@ -116,6 +125,7 @@ export function summarizeBusinessLogicResult(result, { durationMs = 0 } = {}) {
   const apiBoundaryProof = jsonNoStoreRoutes && sessionVaryCookie && boundedJsonRoutes && rateLimitNoStore && routeErrorRedaction && depositsRecoveryGlobalBound && authBoundaryProof && replicaRateLimitBoundaryProof;
   const localProof = apiBoundaryProof && browserBaselineCompactPerformance && walletTxStateMachineProof && walletClaimStateMachineProof;
   const pass = result?.status === 0 && businessLogic && localProof && assertionFailures === 0 && !timedOut && !outputTooLarge;
+  const failureHint = pass ? null : summarizeFailureHint(output);
 
   return {
     status: pass ? "pass" : "fail",
@@ -157,6 +167,7 @@ export function summarizeBusinessLogicResult(result, { durationMs = 0 } = {}) {
     timedOut,
     durationMs: nonNegativeSafeInteger(durationMs),
     childExitCode,
+    ...(failureHint ? { failureHint } : {}),
     ...(!localProof ? { issue: "local-proof-summary-missing" } : {}),
     ...(outputTooLarge ? { issue: "business-logic-output-too-large" } : {}),
     ...(
