@@ -8,6 +8,23 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
 
+- Exact detached SHA `c318f600cc51b05fe9916e16229b5476a5b0ee57` passed fresh
+  npm `11.5.1 ci` (`1315` packages), dependency policy, V9/V10 invariants,
+  full `check-local`, and all required local prelaunch rows. Its final P1
+  report entry revealed that the reporter invoked the verifier without the
+  required isolated profiling output argument; commit `92e703e96` passes
+  `--profiling-dist-dir .next-p1-profile` and keeps the check-list self-test
+  green. The P1 verifier now reaches its real fail-closed provenance gate; no
+  native-hidden profiling evidence is claimed. The Standard scan created for
+  `c318f600c` (`855dad81-e5f8-4790-9986-dc900feae619`) remains at required
+  preflight: configured Python hangs and both registered alternate launchers
+  are unavailable, so no scan review or report occurred. The protected SQLite
+  identity is unchanged. Next: bind `92e703e96` in a new exact three-path
+  documentation manifest after separate approval, then repeat detached fresh
+  install/local/prelaunch and recover the exact-SHA scan preflight. Hosted CI,
+  HTTPS, Redis/two-replica, mobile/Privy, P1 native-hidden, Preview, and live
+  evidence remain open; no wallet/RPC/signing/transaction is authorized.
+
 - Current immutable code SHA `c300f93ef6832784ad10d2b101149e06b5b15288`
   updates only the stale release-operations source guard exposed by the first
   fresh local attempt for `b1d58a69bc01c0f89fd69e1adda80e2b1d2afc33`: it now

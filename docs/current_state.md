@@ -9,6 +9,27 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Release-candidate snapshot
 
+- Exact detached SHA `c318f600cc51b05fe9916e16229b5476a5b0ee57` completed
+  fresh npm `11.5.1 ci` (`1315` packages), both dependency policies with zero
+  blocking, V9/V10 invariants, and the complete isolated `check-local` set:
+  lint, hermetic build, business logic, P1 hardening, storage/SQLite/monitoring,
+  production build, typecheck, and local HTTP/browser smoke. Its prelaunch
+  report also passed every required local row. The report exposed a local
+  argument defect in its optional P1 final-SHA verifier: it omitted the
+  verifier's mandatory isolated profiling dist directory. Commit
+  `92e703e96` supplies `.next-p1-profile` and updates the report's manifest
+  guard; its manifest self-test passes. The verifier now fails closed for the
+  real reason (no sealed clean profiling evidence), not an invalid command.
+  `c318f600c` is therefore local diagnostic evidence, not the final SHA. The
+  supported Standard scan `855dad81-e5f8-4790-9986-dc900feae619` was opened
+  specifically for `c318f600c`, but its required capability preflight is
+  blocked by the unavailable/hanging configured Python interpreter; no source
+  audit or report was started. The protected SQLite base remains
+  `data/lore-v10.sqlite` SHA-256
+  `4EA3ECB92D5EFD081030F1C10E84C444E75460E628BB216FD063E72941BF38F7`
+  with no WAL/SHM sidecars. A new manifest commit, detached reproduction, and
+  scan preflight recovery are required. External gates remain open.
+
 - Current immutable code SHA `c300f93ef6832784ad10d2b101149e06b5b15288`
   aligns the release-operations source guard with the already-committed V10
   fallback-resolver rotation. The preceding detached candidate

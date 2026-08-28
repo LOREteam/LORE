@@ -1,11 +1,12 @@
 # Current release-candidate permission manifest
 
 Snapshot date: 2026-08-28. Base immutable SHA:
-`c300f93ef6832784ad10d2b101149e06b5b15288` on `codex/repo-cleanup`.
+`92e703e960880a2ce3b58ddc127595abfd015a65` on `codex/repo-cleanup`.
 
 Status: this is a proposed exact local index. It records the
-completed bounded canary diagnosis, its already-committed runner fix, and the
-matching release-operations guard correction. It
+completed bounded canary diagnosis, its already-committed runner fix, matching
+release-operations guard correction, and the P1 verifier argument correction.
+It
 does not authorize staging or committing this manifest, push, deployment,
 hosting changes, Preview generation, signing, wallet funding, or any chain
 transaction.
@@ -13,7 +14,7 @@ transaction.
 ## Exact current scope
 
 The path set below is the exact proposed index relative to
-`c300f93ef6832784ad10d2b101149e06b5b15288`.
+`92e703e960880a2ce3b58ddc127595abfd015a65`.
 
 - Production paths: `0`.
 - Test and runner paths: `0`.
@@ -28,7 +29,7 @@ The path set below is the exact proposed index relative to
 - Canonical candidate file-content-set SHA-256 for the other `2` candidate
   files (this self-referential manifest excluded; ordinal-sorted
   `path + NUL + lowercase file-content SHA-256 + LF`):
-  `8702f61ab653c19333987d05ca1e7ca69fe48d2dcfc22a93c2bdca7c4fd73574`.
+  `df6e74887b8ceb9233067944140836cc520a651e1483e28ef58dd66b44e24521`.
 
 ```text
 docs/agent-progress.md
