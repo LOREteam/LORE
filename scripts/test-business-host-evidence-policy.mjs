@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import {
   MAX_HOST_EVIDENCE_BYTES,
   hostEvidenceRegularFileStat,
@@ -15,6 +16,7 @@ import {
 } from "./host-evidence-policy.mjs";
 
 export function runHostEvidencePolicyTests() {
+  const hostProofRoot = resolve("proof");
   const fileStats = { isFile: () => true, size: MAX_HOST_EVIDENCE_BYTES };
   const directoryStats = { isFile: () => false, size: 0 };
   assert.equal(hostEvidenceRegularFileStat("evidence.log", () => fileStats), fileStats);
@@ -24,7 +26,7 @@ export function runHostEvidencePolicyTests() {
   const readCalls = [];
   assert.equal(
     readHostEvidenceLog("health-log", "logs/health.log", {
-      cwd: "C:/proof",
+      cwd: hostProofRoot,
       statFile: () => fileStats,
       readText: (path, encoding) => {
         readCalls.push({ path, encoding });
@@ -34,7 +36,7 @@ export function runHostEvidencePolicyTests() {
     "health=ok",
   );
   assert.equal(readCalls.length, 1);
-  assert.equal(readCalls[0].path.replaceAll("\\", "/"), "C:/proof/logs/health.log");
+  assert.equal(readCalls[0].path.replaceAll("\\", "/"), resolve(hostProofRoot, "logs/health.log").replaceAll("\\", "/"));
   assert.equal(readCalls[0].encoding, "utf8");
   assert.equal(readHostEvidenceLog("load-log", "", { statFile: () => { throw new Error("must not stat"); } }), "");
   assert.throws(
@@ -73,19 +75,19 @@ export function runHostEvidencePolicyTests() {
     ["health-log", "logs/health.log"],
     ["load-log", "logs/load.log"],
   ];
-  assert.doesNotThrow(() => requireDistinctHostEvidenceArtifacts(distinctInputs, { cwd: "C:/proof" }));
+  assert.doesNotThrow(() => requireDistinctHostEvidenceArtifacts(distinctInputs, { cwd: hostProofRoot }));
   assert.throws(
     () => requireDistinctHostEvidenceArtifacts([
       ["process-evidence", "logs/../shared.log"],
       ["health-log", "shared.log"],
-    ], { cwd: "C:/proof" }),
+    ], { cwd: hostProofRoot }),
     /--process-evidence and --health-log must point to distinct host evidence files/,
   );
   assert.throws(
     () => requireDistinctHostEvidenceArtifacts([
       ["health-log", "HEALTH.LOG"],
       ["load-log", "health.log"],
-    ], { cwd: "C:/proof" }),
+    ], { cwd: hostProofRoot }),
     /distinct host evidence files/,
   );
   assert.doesNotThrow(() => requireDistinctHostEvidenceArtifacts([
