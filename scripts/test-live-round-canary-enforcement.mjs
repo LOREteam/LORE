@@ -118,6 +118,7 @@ test("offline V10 runtime enforcement inspection proves bounded behavior without
     "counters",
     "nonce",
     "deadline",
+    "resolverRotation",
     "failureAccounting",
     "operationalBoundary",
   ]);
@@ -170,6 +171,11 @@ test("offline V10 runtime enforcement inspection proves bounded behavior without
     atRejected: true,
     afterRejected: true,
     invalidRejected: true,
+  });
+  assert.deepEqual(summary.resolverRotation, {
+    epoch0: ["RESOLVER", "MANUAL", "AUTOMINER_A", "AUTOMINER_B"],
+    epoch1: ["RESOLVER", "AUTOMINER_A", "AUTOMINER_B", "MANUAL"],
+    epoch2: ["RESOLVER", "AUTOMINER_B", "MANUAL", "AUTOMINER_A"],
   });
   assert.deepEqual(summary.failureAccounting, {
     countedPrimaryCatchIncrement: 0,

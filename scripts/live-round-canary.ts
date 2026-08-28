@@ -594,6 +594,17 @@ function assertV10SafeWindowDeadline(
   }
 }
 
+function rotateResolverCandidates<T>(candidates: readonly T[], epoch: bigint): T[] {
+  if (candidates.length <= 2) return [...candidates];
+  const [preferred, ...fallbacks] = candidates;
+  const fallbackStart = Number(epoch % BigInt(fallbacks.length));
+  return [
+    preferred,
+    ...fallbacks.slice(fallbackStart),
+    ...fallbacks.slice(0, fallbackStart),
+  ];
+}
+
 class CountedRoundFailure extends Error {
   readonly errorKind: string;
 
@@ -686,6 +697,8 @@ function inspectV10RuntimeEnforcement() {
     /V10 matrix safe-window deadline reached/,
   );
 
+  const resolverCandidates = ["RESOLVER", "MANUAL", "AUTOMINER_A", "AUTOMINER_B"];
+
   console.log(JSON.stringify({
     status: "pass",
     mode: "runtime-enforcement-inspection",
@@ -713,6 +726,11 @@ function inspectV10RuntimeEnforcement() {
       atRejected: true,
       afterRejected: true,
       invalidRejected: true,
+    },
+    resolverRotation: {
+      epoch0: rotateResolverCandidates(resolverCandidates, 0n),
+      epoch1: rotateResolverCandidates(resolverCandidates, 1n),
+      epoch2: rotateResolverCandidates(resolverCandidates, 2n),
     },
     failureAccounting: {
       countedPrimaryCatchIncrement: shouldCountCaughtRoundFailure(
@@ -1444,7 +1462,8 @@ async function resolveIfNeeded(params: {
   if (lastAttemptAt != null && now - lastAttemptAt < RESOLVE_RETRY_COOLDOWN_MS) return;
   attemptedResolveEpochs.set(epochKey, now);
 
-  for (const [resolverIndex, resolver] of resolvers.entries()) {
+  const resolverCandidates = rotateResolverCandidates(resolvers, epoch);
+  for (const [resolverIndex, resolver] of resolverCandidates.entries()) {
     const startedAt = Date.now();
     let pendingHash: Hash | undefined;
     let terminalFailureRecorded = false;
