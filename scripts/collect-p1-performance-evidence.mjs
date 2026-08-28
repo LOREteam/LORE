@@ -2404,6 +2404,39 @@ async function collectRuntimeEvidence(options, routePaths) {
   }
 }
 
+function summarizeVisibility(visibility) {
+  if (visibility === null || typeof visibility !== "object") return visibility;
+  const { nativeAudit, ...summary } = visibility;
+  if (nativeAudit === null || typeof nativeAudit !== "object") return { ...summary, nativeAudit };
+  return {
+    ...summary,
+    nativeAudit: {
+      clock: nativeAudit.clock,
+      heartbeatIntervalMs: nativeAudit.heartbeatIntervalMs,
+      heartbeatCount: Array.isArray(nativeAudit.heartbeats) ? nativeAudit.heartbeats.length : 0,
+      transitionCount: Array.isArray(nativeAudit.transitions) ? nativeAudit.transitions.length : 0,
+      heartbeatsTruncated: nativeAudit.heartbeatsTruncated === true,
+      transitionsTruncated: nativeAudit.transitionsTruncated === true,
+      longTaskCount: Array.isArray(nativeAudit.longTasks) ? nativeAudit.longTasks.length : 0,
+      longTasksTruncated: nativeAudit.longTasksTruncated === true,
+      phases: nativeAudit.phases,
+      browser: nativeAudit.browser
+        ? {
+            product: nativeAudit.browser.product,
+            version: nativeAudit.browser.version,
+            commandLineObserved: nativeAudit.browser.commandLineObserved === true,
+            effectiveSwitchCount: Array.isArray(nativeAudit.browser.effectiveSwitchNames)
+              ? nativeAudit.browser.effectiveSwitchNames.length
+              : 0,
+            disabledFeatureCount: Array.isArray(nativeAudit.browser.disabledFeatures)
+              ? nativeAudit.browser.disabledFeatures.length
+              : 0,
+          }
+        : null,
+    },
+  };
+}
+
 function summaryView(report) {
   return {
     schemaVersion: report.schemaVersion,
@@ -2457,7 +2490,7 @@ function summaryView(report) {
               })),
               caveat: report.runtime.routeFirstLoad.caveat,
             },
-            visibility: report.runtime.visibility,
+            visibility: summarizeVisibility(report.runtime.visibility),
             polling: { phases: report.runtime.polling.phases, blockedExternalRequestCount: report.runtime.polling.blockedExternalRequestCount },
             memory: {
               sampleCount: report.runtime.memory.sampleCount,
@@ -2552,6 +2585,32 @@ async function runSelfTest() {
     effectiveSwitchNames: [],
     disabledFeatures: [],
   });
+  const compactVisibility = summarizeVisibility({
+    nativeHiddenObserved: false,
+    nativeAudit: {
+      clock: "performance.now",
+      heartbeatIntervalMs: 100,
+      heartbeats: [{ seq: 0 }, { seq: 1 }],
+      transitions: [{ seq: 0 }],
+      heartbeatsTruncated: false,
+      transitionsTruncated: true,
+      longTasks: [{ duration: 75 }],
+      longTasksTruncated: false,
+      phases: { "native-hidden": { requestedMs: 90_000 } },
+      browser: {
+        product: "Chrome/fixture",
+        version: "fixture",
+        commandLineObserved: true,
+        effectiveSwitchNames: ["--enable-automation"],
+        disabledFeatures: ["FixtureA", "FixtureB"],
+      },
+    },
+  });
+  assert.equal(compactVisibility.nativeAudit.heartbeatCount, 2);
+  assert.equal(compactVisibility.nativeAudit.transitionCount, 1);
+  assert.equal(compactVisibility.nativeAudit.longTaskCount, 1);
+  assert.equal(Object.hasOwn(compactVisibility.nativeAudit, "heartbeats"), false);
+  assert.equal(compactVisibility.nativeAudit.browser.effectiveSwitchCount, 1);
   const visibleNativeFixture = {
     nativeState: "visible",
     nativeHidden: false,
@@ -3590,7 +3649,7 @@ async function runSelfTest() {
   assert.equal(clusteredHeapApplicability.duration.memoryCoverage.finiteHeapWindowMs, 5 * 60_000);
   assert.equal(clusteredHeapApplicability.visibility.nativeBrowserBackground.timerCadenceMeasured, false);
   assert.equal(clusteredHeapApplicability.visibility.nativeBrowserBackground.measuredDurationMs, 0);
-  console.log(JSON.stringify({ status: "pass", cases: 158, schemaVersion: 4, maxDurationMs: MAX_DURATION_MS }));
+  console.log(JSON.stringify({ status: "pass", cases: 159, schemaVersion: 4, maxDurationMs: MAX_DURATION_MS }));
 }
 
 async function main() {

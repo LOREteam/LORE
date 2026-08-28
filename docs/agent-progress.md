@@ -982,10 +982,12 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   `artifacts/smoke-browser/sha7905-current-readonly.png`; it did not create a
   wallet, sign, approve, bet, claim, or send a transaction. It is not launch,
   hosted, or live-wallet proof.
-- P1.17 self-tests passed again on the current working tree: collector `158/158`
+- P1.17 self-tests passed again on the current working tree: collector `159/159`
   (schema `4`, maximum duration `7200000`) and verifier `119/119` (schema `4`).
   They do not replace the final immutable clean-SHA seal pair, headed
   native-hidden two-hour run, browser evidence, or strict verification.
+- `--summary-only` now collapses native-audit heartbeat, transition, and Long Task
+  rows to counts while the non-summary artifact retains the bounded raw evidence.
 
 ## Latest local corrective work
 
