@@ -76,25 +76,16 @@ export function isInsideWorkspaceRoot(root, target) {
   return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
-function sameWorkspaceCleanupPath(left, right) {
-  const normalizedLeft = resolve(left);
-  const normalizedRight = resolve(right);
-  return process.platform === "win32"
-    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
-    : normalizedLeft === normalizedRight;
-}
-
 async function resolveOrdinaryWorkspaceCleanupRoot(root) {
   const resolvedRoot = resolve(root);
   const info = await lstat(resolvedRoot);
   if (info.isSymbolicLink() || !info.isDirectory()) {
     throw new Error("workspace cleanup root must be an ordinary non-reparse directory");
   }
-  const canonicalRoot = resolve(await realpath(resolvedRoot));
-  if (!sameWorkspaceCleanupPath(resolvedRoot, canonicalRoot)) {
-    throw new Error("workspace cleanup root must not resolve through a symlink, junction, or reparse point");
-  }
-  return canonicalRoot;
+  // GitHub's Windows runners can mount an ordinary checkout below a junction.
+  // The root itself is still required to be ordinary, while every cleanup target
+  // is canonicalized and checked against this canonical root before deletion.
+  return resolve(await realpath(resolvedRoot));
 }
 
 async function inspectWorkspaceCleanupTarget(canonicalRoot, target) {

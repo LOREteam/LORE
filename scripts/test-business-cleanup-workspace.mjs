@@ -150,6 +150,9 @@ async function assertReparseContainmentBehavior(runCleanup) {
   const externalTmp = await mkdtemp(join(tmpdir(), "lore-cleanup-reparse-tmp-"));
   const rootLinkParent = await mkdtemp(join(tmpdir(), "lore-cleanup-reparse-root-link-"));
   const linkedRoot = join(rootLinkParent, "workspace");
+  const ordinaryWorkspace = join(rootLinkParent, "ordinary-workspace");
+  const linkedParent = join(rootLinkParent, "parent-link");
+  const ordinaryWorkspaceViaLinkedParent = join(linkedParent, "ordinary-workspace");
   const nextLink = join(root, ".next");
   const tmpLink = join(root, ".tmp");
   const now = 2_000_000_000_000;
@@ -160,6 +163,14 @@ async function assertReparseContainmentBehavior(runCleanup) {
   await symlink(externalNext, nextLink, directoryLinkType);
   await symlink(externalTmp, tmpLink, directoryLinkType);
   await symlink(root, linkedRoot, directoryLinkType);
+  await mkdir(ordinaryWorkspace);
+  const ordinaryWorkspaceCache = await createFixture(
+    ordinaryWorkspace,
+    "coverage/old.txt",
+    "ordinary-checkout-cache",
+    old,
+  );
+  await symlink(rootLinkParent, linkedParent, directoryLinkType);
   try {
     await assert.rejects(
       () => runCleanup({
@@ -173,6 +184,18 @@ async function assertReparseContainmentBehavior(runCleanup) {
       /workspace cleanup root must (?:be an ordinary non-reparse directory|not resolve through a symlink, junction, or reparse point)/,
       "reparse workspace root must fail closed",
     );
+
+    const mountedCheckout = await runCleanup({
+      root: ordinaryWorkspaceViaLinkedParent,
+      dryRun: true,
+      summaryOnly: true,
+      minAgeHours: 8,
+      minAgeMs: 8 * HOUR_MS,
+      now,
+    });
+    assert.equal(mountedCheckout.status, "ok");
+    assert.equal(mountedCheckout.matchedTargets, 1);
+    assert.equal(Boolean(await stat(ordinaryWorkspaceCache).catch(() => null)), true);
 
     const summary = await runCleanup({
       root,
