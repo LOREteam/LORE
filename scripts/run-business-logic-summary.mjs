@@ -60,11 +60,10 @@ function countAssertionFailures(text) {
 }
 
 function summarizeFailureHint(text) {
-  const line = String(text ?? "")
-    .split(/\r?\n/)
-    .find((candidate) => /\b(?:AssertionError|Error|TypeError|SyntaxError)\b/.test(candidate));
-  if (!line) return null;
-  const compact = line.replace(/\s+/g, " ").trim();
+  const lines = String(text ?? "").split(/\r?\n/);
+  const index = lines.findIndex((candidate) => /\b(?:AssertionError|Error|TypeError|SyntaxError)\b/.test(candidate));
+  if (index < 0) return null;
+  const compact = lines.slice(index, index + 8).join(" ").replace(/\s+/g, " ").trim();
   return compact.length <= 280 ? compact : `${compact.slice(0, 263)}...<truncated>`;
 }
 
