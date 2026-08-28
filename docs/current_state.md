@@ -588,6 +588,11 @@ replacement needs another separately reviewed plan and exact approval.
 ### P1
 
 - Continue P1.10 only at real public behavior seams.
+- The fresh schema-v2 audit at `dcafd2668e…` reports `5848/6374`
+  behavioral assertions (`91.75%`), `526` source operands, and `113` modules.
+  The `24` structural checks in `test-business-release-operations.mjs` remain:
+  its executable fixture is Windows-only after the structural checks, so there
+  is no equivalent Linux behavior seam yet.
 - Treat the current Preview/consent implementation packet as locally complete;
   do not promote it to an authorization or checked live campaign.
 - Collect and strictly verify the final two-hour P1.17 native-hidden evidence.
@@ -599,6 +604,14 @@ replacement needs another separately reviewed plan and exact approval.
 - Restart a new SHA-bound local campaign only after its starting commit is
   captured and sufficient free disk is available. Do not reuse the stopped
   campaign as final evidence.
+- The separately authorized project-native V10 testnet campaign stopped at
+  `589/1000` before submitting round `589`: `estimateGas` returned `gas
+  required exceeds allowance (723160)`. The log shows deterministic fallback
+  selection had assigned `586` resolve writes to `MANUAL`, while
+  `AUTOMINER_A` had `3` and `AUTOMINER_B` had none. Commit
+  `dcafd2668e2804261c948b57a4ad849fc6e88df6` rotates fallback candidates by
+  epoch and proves the rotation offline. This is a runner reliability fix,
+  not a completed testnet campaign or a contract conclusion.
 - Direct engine execution covers all three production Lua programs on pinned
   Valkey `8.1.9` / Linux AMD64. A separate local harness now covers the real
   rate-limit, keeper daily-budget, and atomic admin-session rotation application
@@ -619,6 +632,11 @@ replacement needs another separately reviewed plan and exact approval.
   configuration, and a fresh exact consent are still required. Any signing,
   approval, bet, claim, canary, soak, deployment, push, or hosted rollout needs
   its own fresh explicit authority and, for chain writes, bounded consent.
+- The earlier bounded no-Preview V10 authorization was consumed by the
+  stopped `589/1000` campaign. Do not resume or replace it, fund wallets, or
+  send any further testnet transaction without a new exact consent that binds
+  the candidate SHA, roles, native-gas source, transaction/epoch limits, and
+  stop conditions.
 - Production HTTPS still fails with `ERR_CERT_COMMON_NAME_INVALID`; deployed
   provider-managed Redis/Valkey and web-replica topology, the P1.17 headed
   two-hour/mobile/Privy run, and a shared transactional cross-host consent

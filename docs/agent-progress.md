@@ -996,6 +996,16 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Campaign status
 
+- The separately authorized second project-native V10 testnet campaign stopped
+  at `589/1000` before sending round `589`. Its failed local estimate reported
+  `gas required exceeds allowance (723160)` after `MANUAL` had paid `586`
+  fallback resolves plus `196` bets; `AUTOMINER_A` paid `3` resolves and
+  `196` bets, and `AUTOMINER_B` paid `196` bets. The campaign has no completed
+  postcheck and is not final evidence.
+- Commit `dcafd2668e2804261c948b57a4ad849fc6e88df6` rotates fallback resolver
+  candidates by epoch, with an offline V10 enforcement proof. Focused
+  enforcement `3/3`, TypeScript, and the Linea fee-policy suite pass. No
+  further testnet write, funding transaction, Preview, or deployment was made.
 - `local-20260821-final-r3` iterations 1–3 completed all seven isolated gates.
 - Iteration 4 stopped on the stale test expectation in
   `test-business-wallet-models.mjs`: old expected fake zero strings, actual
@@ -1010,7 +1020,11 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Open local work
 
-- P1.10 behavior extraction remains partial.
+- P1.10 behavior extraction remains partial. Fresh schema-v2 audit at
+  `dcafd2668e…`: `5848/6374` behavioral (`91.75%`), `526` source operands,
+  `113` modules. The `24` release-operations structural assertions remain
+  fail-closed because their fixture executes only on Windows; no equivalent
+  Linux public-behavior seam exists yet.
 - A disposable detached code mirror completed `check-local --summary-only`
   with exit `0` after fresh dependencies: lint, isolated business, P1,
   performance self-test, V10/SQLite, hermetic build, TypeScript, HTTP, and
@@ -1051,8 +1065,10 @@ in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   do not widen that staging boundary or authorize external actions.
 - P1.17 needs a final canonical/profile sealed pair and a real physical
   native-hidden two-hour loopback run.
-- A new local campaign and supported security scan are blocked by disk and/or
-  entitlement, not by a false green claim.
+- A new testnet campaign requires a fresh exact bounded consent; the stopped
+  campaign cannot be resumed or replaced under its consumed authorization.
+  The supported security scan remains blocked by its desktop/Python execution
+  environment, not by a false green claim.
 
 - P1.17's separate temporary Chromium witness remains a visible control. The
   measured top-level window is now explicitly minimized/restored through CDP,
