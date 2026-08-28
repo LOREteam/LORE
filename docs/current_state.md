@@ -100,7 +100,9 @@ are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
   and no WAL/SHM. The two high contract findings remain open by the explicit
   no-randomness-redesign boundary. Cross-host consent remains an unimplemented
   external architecture, while chat session revocation and Sybil-resistant
-  profile admission require separate product/runtime policy. The remediation
+  profile admission require separate product/runtime policy. Chat session cookies
+  are now `SameSite=Strict`, so a cross-site top-level navigation cannot renew a
+  session; this does not itself add session revocation. The remediation
   child is not sealed until a new docs commit receives detached fresh-`npm ci`,
   full local/prelaunch reproduction, and another supported exact-SHA scan.
 - Diagnostic immutable SHA

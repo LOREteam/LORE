@@ -1368,7 +1368,7 @@ export async function runChatAndClientSafetyTests() {
     const issuedCookie = jar.writes.at(-1);
     assert.equal(issuedCookie.name, "lore_chat_session");
     assert.equal(issuedCookie.options.httpOnly, true);
-    assert.equal(issuedCookie.options.sameSite, "lax");
+    assert.equal(issuedCookie.options.sameSite, "strict");
     assert.equal(issuedCookie.options.path, "/api/chat");
     assert.equal(issuedCookie.options.expires.getTime(), expiresAt);
     const decoded = decodeChatSessionToken(issuedCookie.value);
@@ -1409,6 +1409,7 @@ export async function runChatAndClientSafetyTests() {
     chatSession.clearChatSession(jar.response);
     const clearedCookie = jar.writes.at(-1);
     assert.equal(clearedCookie.value, "");
+    assert.equal(clearedCookie.options.sameSite, "strict");
     assert.equal(clearedCookie.options.expires.getTime(), 0);
     assert.equal(chatSession.readChatSession(jar.request), null);
   } finally {

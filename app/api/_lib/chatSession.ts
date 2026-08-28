@@ -124,7 +124,7 @@ export function issueChatSession(response: NextResponse, address: string, now = 
   });
   response.cookies.set(COOKIE_NAME, token, {
     httpOnly: true,
-    sameSite: "lax",
+    sameSite: "strict",
     secure: process.env.NODE_ENV === "production",
     path: "/api/chat",
     expires: new Date(expiresAt),
@@ -135,7 +135,7 @@ export function issueChatSession(response: NextResponse, address: string, now = 
 export function clearChatSession(response: NextResponse) {
   response.cookies.set(COOKIE_NAME, "", {
     httpOnly: true,
-    sameSite: "lax",
+    sameSite: "strict",
     secure: process.env.NODE_ENV === "production",
     path: "/api/chat",
     expires: new Date(0),
