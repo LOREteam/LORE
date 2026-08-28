@@ -3630,8 +3630,8 @@ export function runReleaseOperationsTests() {
   );
   assert.match(
     liveRoundCanarySource,
-    /for \(const \[resolverIndex, resolver\] of resolvers\.entries\(\)\)[\s\S]*insufficient-native-gas[\s\S]*mode: "resolver-candidate"[\s\S]*continue;[\s\S]*pendingHash[\s\S]*return;/,
-    "live canary may fall back before resolve dispatch but must not switch wallets after an uncertain send",
+    /const resolverCandidates = rotateResolverCandidates\(resolvers, epoch\);[\s\S]*for \(const \[resolverIndex, resolver\] of resolverCandidates\.entries\(\)\)[\s\S]*insufficient-native-gas[\s\S]*mode: "resolver-candidate"[\s\S]*continue;[\s\S]*pendingHash[\s\S]*return;/,
+    "live canary may rotate fallback resolvers before resolve dispatch but must not switch wallets after an uncertain send",
   );
   assert.match(
     liveRoundCanarySource,
