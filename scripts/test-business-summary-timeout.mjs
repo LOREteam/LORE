@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
 import { parseSummaryTimeoutEnv } from "./summary-timeout.mjs";
 import {
   EXPECTED_V10_DUPLICATE_BATCH_MODEL_DIGEST,
@@ -216,10 +217,11 @@ export function runSummaryTimeoutTests() {
   const businessSpawn = () => assert.fail("injected isolated runner must own child execution");
   const businessLines = [];
   const businessTimes = [1_000, 1_321];
+  const businessSummaryRoot = resolve("isolated-business-summary");
   let defaultBusinessTimeout = null;
   withTemporaryBusinessTimeout(undefined, () => {
     runBusinessLogicSummary({
-      cwd: "C:\\isolated-business-summary",
+      cwd: businessSummaryRoot,
       exists: () => true,
       runIsolatedChild: (options) => {
         defaultBusinessTimeout = options.timeout;
@@ -231,7 +233,7 @@ export function runSummaryTimeoutTests() {
   assert.equal(defaultBusinessTimeout, 600_000);
   withTemporaryBusinessTimeout("240000", () => {
     const outcome = runBusinessLogicSummary({
-      cwd: "C:\\isolated-business-summary",
+      cwd: businessSummaryRoot,
       env: { SAFE_ENV: "present" },
       execPath: "C:\\safe\\node.exe",
       exists: () => true,
@@ -248,10 +250,10 @@ export function runSummaryTimeoutTests() {
   });
   assert.equal(businessRunnerCall?.processExecPath, "C:\\safe\\node.exe");
   assert.deepEqual(businessRunnerCall?.args, [
-    "C:\\isolated-business-summary\\node_modules\\tsx\\dist\\cli.mjs",
+    resolve(businessSummaryRoot, "node_modules/tsx/dist/cli.mjs"),
     "scripts/test-business-logic.mjs",
   ]);
-  assert.equal(businessRunnerCall?.cwd, "C:\\isolated-business-summary");
+  assert.equal(businessRunnerCall?.cwd, businessSummaryRoot);
   assert.equal(businessRunnerCall?.encoding, "utf8");
   assert.equal(businessRunnerCall?.maxBuffer, 2 * 1024 * 1024);
   assert.equal(businessRunnerCall?.timeout, 240_000);
