@@ -209,6 +209,12 @@ export function runSummaryTimeoutTests() {
   });
   assert.equal(businessAssertionFlood.status, "fail");
   assert.equal(businessAssertionFlood.assertionFailures, 9_999);
+  const summaryHint = summarizeBusinessLogicResult({
+    status: 1,
+    stdout: "AssertionError: child suite failed\nSummary: 1 issue(s): proof-draft regression is not cross-platform.\n",
+    stderr: "",
+  });
+  assert.equal(summaryHint.failureHint, "Summary: 1 issue(s): proof-draft regression is not cross-platform.");
   assert.equal(summarizeBusinessLogicResult({ status: null, error: { code: "ENOBUFS" } }).issue, "business-logic-output-too-large");
   assert.equal(summarizeBusinessLogicResult({ status: null, error: { code: "EACCES" } }).issue, "business-logic-spawn-failed");
   assert.equal(summarizeBusinessLogicResult({ status: null, error: { code: "ETIMEDOUT" } }).timedOut, true);

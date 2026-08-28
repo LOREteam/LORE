@@ -136,7 +136,11 @@ export function captureV10PreviewRepositoryState({ root = process.cwd(), sourceE
     throw new Error("V10 Preview repository root must not resolve through a reparse point");
   }
   const reportedRoot = runGit(canonicalRoot, ["rev-parse", "--show-toplevel"], { sourceEnv }).output.trim();
-  if (!reportedRoot || !samePath(realpathSync(reportedRoot), canonicalRoot)) {
+  const reportedPrefix = runGit(canonicalRoot, ["rev-parse", "--show-prefix"], { sourceEnv }).output.trim();
+  // On hosted Windows, Git and Node can report equivalent checkout paths
+  // through different runner mount aliases. Ask trusted Git whether the given
+  // canonical directory is the worktree root instead of comparing those aliases.
+  if (!reportedRoot || reportedPrefix) {
     throw new Error("V10 Preview Git root does not match the working root");
   }
   const headBefore = runGit(canonicalRoot, ["rev-parse", "--verify", "HEAD^{commit}"], { sourceEnv }).output.trim().toLowerCase();
