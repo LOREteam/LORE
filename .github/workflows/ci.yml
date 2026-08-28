@@ -61,7 +61,7 @@ jobs:
         run: npm run typecheck
 
       - name: Business logic tests
-        run: npm run test:logic
+        run: npm run test:logic:summary
 
       - name: P1 hardening suites (including EVM)
         run: npm run test:p1-hardening:all

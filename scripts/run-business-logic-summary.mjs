@@ -202,6 +202,9 @@ export function runBusinessLogicSummary({
   });
   const summary = summarizeBusinessLogicResult(result, { durationMs: now() - startedAt });
   writeLine(JSON.stringify(summary));
+  if (summary.status === "fail" && process.env.GITHUB_ACTIONS === "true") {
+    writeLine(`::error title=Business logic summary::${JSON.stringify(summary)}`);
+  }
   return { summary, exitCode: summary.status === "pass" ? 0 : 1 };
 }
 
