@@ -1,12 +1,27 @@
 # Agent Progress
 
-Last updated: 2026-08-26.
+Last updated: 2026-08-28.
 
 Current truth is in [`current_state.md`](current_state.md). The active queue is
 [`remaining-worklist.md`](remaining-worklist.md); long-running testnet work is
 in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Continuation point
+
+- Current immutable code SHA `c300f93ef6832784ad10d2b101149e06b5b15288`
+  updates only the stale release-operations source guard exposed by the first
+  fresh local attempt for `b1d58a69bc01c0f89fd69e1adda80e2b1d2afc33`: it now
+  requires the committed epoch rotation of fallback resolver candidates rather
+  than the old fixed resolver list. Offline V10 enforcement is `3/3`, the
+  complete isolated business suite passes, TypeScript passes, and protected
+  `data/lore-v10.sqlite` remains SHA-256
+  `4EA3ECB92D5EFD081030F1C10E84C444E75460E628BB216FD063E72941BF38F7`
+  without WAL/SHM. Next: prepare an exact three-path manifest from this code
+  SHA, obtain separate approval for its documentation commit, then restart the
+  detached fresh-`npm ci` full local/prelaunch seal and supported exact-SHA
+  scan. Do not claim hosted CI, public HTTPS, Redis/two-replica, mobile/Privy,
+  Preview, or live/testnet evidence; no wallet, RPC, signing, Preview, or
+  transaction is authorized.
 
 - Exact sealed SHA `cbf93b230476b8c823daebbc8e8f4707a53903e5` passed the
   detached fresh-install local/prelaunch gates and supported Standard Security

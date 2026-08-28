@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-08-26.
+Last updated: 2026-08-28.
 
 This file is the current repository truth. Historical detail is retained under
 [`docs/archive/`](archive/). The active queue is
@@ -8,6 +8,23 @@ This file is the current repository truth. Historical detail is retained under
 are in [`testnet-hardening-plan.md`](testnet-hardening-plan.md).
 
 ## Release-candidate snapshot
+
+- Current immutable code SHA `c300f93ef6832784ad10d2b101149e06b5b15288`
+  aligns the release-operations source guard with the already-committed V10
+  fallback-resolver rotation. The preceding detached candidate
+  `b1d58a69bc01c0f89fd69e1adda80e2b1d2afc33` stopped honestly in the isolated
+  business row because that guard still required the obsolete unrotated
+  `resolvers.entries()` loop. The narrow guard correction has no production
+  behavior change: offline V10 enforcement passes `3/3`, the complete isolated
+  business suite passes, and TypeScript passes. The protected base remains
+  `data/lore-v10.sqlite` SHA-256
+  `4EA3ECB92D5EFD081030F1C10E84C444E75460E628BB216FD063E72941BF38F7`
+  with no WAL/SHM sidecars. This code SHA is not sealed: create and approve a
+  new exact manifest, then reproduce fresh `npm ci`, complete local/prelaunch,
+  V9/V10, HTTP/browser, and protected-DB gates in a detached checkout before
+  running a supported exact-SHA security scan. Hosted CI and all external
+  runtime, HTTPS, Redis/topology, mobile/Privy, and live-evidence gates remain
+  open. No wallet, RPC, signing, Preview, or chain action occurred.
 
 - Exact immutable SHA `cbf93b230476b8c823daebbc8e8f4707a53903e5`
   completed detached fresh `npm ci`, dependency, V9/V10, complete local and
