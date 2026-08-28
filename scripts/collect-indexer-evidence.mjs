@@ -215,11 +215,18 @@ function isAnyPlatformAbsolute(filePath) {
 
 function pathStatus(filePath) {
   const value = String(filePath ?? "").trim();
-  const absolute = isAnyPlatformAbsolute(value) ? resolve(value) : resolve(process.cwd(), value || ".");
+  const foreignWindowsAbsolute = /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value);
+  // Preserve a Windows runtime path when this redacted evidence is checked by
+  // Linux CI; POSIX resolve() would otherwise misclassify it as repo-local.
+  const absolute = foreignWindowsAbsolute && process.platform !== "win32"
+    ? value
+    : isAnyPlatformAbsolute(value) ? resolve(value) : resolve(process.cwd(), value || ".");
   const relativeToRepo = relative(process.cwd(), absolute);
   return {
     isAbsolute: isAnyPlatformAbsolute(value),
-    insideRepo: relativeToRepo === "" || (!relativeToRepo.startsWith("..") && !isAbsolute(relativeToRepo)),
+    insideRepo: foreignWindowsAbsolute && process.platform !== "win32"
+      ? false
+      : relativeToRepo === "" || (!relativeToRepo.startsWith("..") && !isAbsolute(relativeToRepo)),
   };
 }
 
@@ -352,4 +359,3 @@ if (hasFlag("print-plan")) {
   console.log(`Indexer evidence draft written: ${written}`);
   console.log("Review TODO/false fields before promoting to docs/indexer-proof.json and running npm.cmd run proof:indexer -- --strict.");
 }
-
