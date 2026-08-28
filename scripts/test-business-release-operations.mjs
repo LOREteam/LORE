@@ -1242,8 +1242,9 @@ export function assertLocalCampaignSourceProvenance() {
       if (snapshotParentStats) {
         assert.equal(snapshotParentStats.isDirectory(), true, "fixture snapshot parent cleanup requires an ordinary directory");
         assert.equal(snapshotParentStats.isSymbolicLink(), false, "fixture snapshot parent cleanup must reject a junction before non-recursive removal");
-        // Non-recursive removal cannot descend into a late substituted entry.
-        rmdirSync(fixtureSnapshotParent);
+        // The parent itself is verified as ordinary before bounded recursive
+        // cleanup; retries absorb delayed Windows worktree-handle release.
+        rmSync(fixtureSnapshotParent, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
         assert.equal(existsSync(fixtureSnapshotParent), false, "fixture snapshot parent cleanup must remove its isolated temporary directory");
       }
       rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });

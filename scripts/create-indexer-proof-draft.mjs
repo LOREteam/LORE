@@ -184,11 +184,19 @@ function isAnyPlatformAbsolute(filePath) {
 
 function pathStatus(filePath) {
   const value = String(filePath ?? "").trim();
-  const absolute = isAnyPlatformAbsolute(value) ? path.resolve(value) : path.resolve(process.cwd(), value || ".");
+  const foreignWindowsAbsolute = /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value);
+  // A redacted Windows runtime log may be validated on Linux CI. Do not feed
+  // that foreign absolute form through POSIX resolve(), which would falsely
+  // turn it into a path inside this checkout.
+  const absolute = foreignWindowsAbsolute && process.platform !== "win32"
+    ? value
+    : isAnyPlatformAbsolute(value) ? path.resolve(value) : path.resolve(process.cwd(), value || ".");
   const relativeToRepo = path.relative(process.cwd(), absolute);
   return {
     isAbsolute: isAnyPlatformAbsolute(value),
-    insideRepo: relativeToRepo === "" || (!relativeToRepo.startsWith("..") && !path.isAbsolute(relativeToRepo)),
+    insideRepo: foreignWindowsAbsolute && process.platform !== "win32"
+      ? false
+      : relativeToRepo === "" || (!relativeToRepo.startsWith("..") && !path.isAbsolute(relativeToRepo)),
   };
 }
 
