@@ -87,7 +87,7 @@ const checks = [
   {
     label: "P1 final-SHA performance evidence",
     script: "perf:p1:verify",
-    args: ["--against-current-build", "--summary-only"],
+    args: ["--against-current-build", "--profiling-dist-dir", ".next-p1-profile", "--summary-only"],
     requiredLocal: requireP1PerformanceRc,
   },
 ];
@@ -115,7 +115,7 @@ function prelaunchManifestIssues(checkList) {
   }
   if (checkList.some((check) =>
     Array.isArray(check.args) &&
-    !(check.script === "perf:p1:verify" && check.args.join("\0") === "--against-current-build\0--summary-only")
+    !(check.script === "perf:p1:verify" && check.args.join("\0") === "--against-current-build\0--profiling-dist-dir\0.next-p1-profile\0--summary-only")
   )) issues.push("unexpected-check-arguments");
 
   const orderedEntries = PRELAUNCH_EXTERNAL_SEQUENCE.map((script) => ({
